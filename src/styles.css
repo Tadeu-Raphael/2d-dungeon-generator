@@ -438,7 +438,10 @@ h1 {
 .dungeon-canvas { display: block; width: 100%; height: 100%; }
 .canvas-loading { position: absolute; inset: 0; display: grid; place-items: center; color: #7d8791; font-size: 12px; }
 .canvas-zoomed { cursor: grab; touch-action: none; }
-.canvas-room-hover { cursor: grab; touch-action: none; }
+.canvas-room-hover { cursor: pointer; touch-action: none; }
+.canvas-move-mode { touch-action: none; }
+.canvas-move-mode.canvas-room-hover { cursor: grab; }
+.canvas-move-mode.canvas-zoomed:not(.canvas-room-hover) { cursor: default; }
 .canvas-dragging { cursor: grabbing; }
 .map-controls {
   position: absolute;
@@ -450,8 +453,9 @@ h1 {
   gap: 8px;
   pointer-events: none;
 }
-.map-export, .map-zoom-controls { position: relative; display: flex; align-items: center; gap: 4px; }
+.map-export, .map-mode-controls, .map-zoom-controls { position: relative; display: flex; align-items: center; gap: 4px; }
 .map-layer-controls { display: flex; align-items: center; gap: 4px; pointer-events: auto; }
+.map-mode-controls { pointer-events: auto; }
 .map-zoom-controls { pointer-events: auto; }
 .map-control-button {
   min-width: 30px;
@@ -466,6 +470,7 @@ h1 {
   transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
 }
 .map-control-button:hover, .map-control-button[aria-expanded="true"] { border-color: #9c7d4d; color: #e8c88e; }
+.move-mode-toggle[aria-pressed="true"] { border-color: #9c7d4d; background: rgba(105, 78, 42, 0.3); color: #e8c88e; }
 .liquid-toggle { display: inline-flex; align-items: center; gap: 5px; }
 .liquid-toggle i { width: 7px; height: 7px; display: inline-block; border-radius: 1px; opacity: 0.45; }
 .liquid-toggle[aria-pressed="true"] i { opacity: 1; }

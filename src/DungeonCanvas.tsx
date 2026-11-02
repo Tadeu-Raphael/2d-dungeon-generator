@@ -61,6 +61,7 @@ interface DungeonCanvasProps {
   focusRequest: MapFocusRequest | null;
   onRoomMove: (roomNumber: number, x: number, y: number) => void;
   onRoomSelect: (roomNumber: number) => void;
+  onRoomMoveEnd: (roomNumber: number) => void;
   onClearSelection: () => void;
   showWater: boolean;
   showLava: boolean;
@@ -1181,6 +1182,7 @@ export default function DungeonCanvas({
   focusRequest,
   onRoomMove,
   onRoomSelect,
+  onRoomMoveEnd,
   onClearSelection,
   showWater,
   showLava,
@@ -1196,6 +1198,7 @@ export default function DungeonCanvas({
   );
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [moveMode, setMoveMode] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [hoveredMapTarget, setHoveredMapTarget] = useState<MapTarget | null>(null);
   const suppressClickRef = useRef(false);
@@ -1213,7 +1216,11 @@ export default function DungeonCanvas({
       setZoom(1);
       return;
     }
-    if (!focusRequest.shouldFocus) return;
+    if (!focusRequest.shouldFocus) {
+      setPan({ x: 0, y: 0 });
+      setZoom(1);
+      return;
+    }
     const room = dungeon.roomDetails.find((candidate) => candidate.number === focusRequest.roomNumber);
     if (!room) return;
     const tileSize = Math.min(
@@ -1473,7 +1480,7 @@ export default function DungeonCanvas({
       && position.y >= candidate.y
       && position.y < candidate.y + candidate.height
     ));
-    if (room && position) {
+    if (moveMode && room && position) {
       dragRef.current = {
         type: "room",
         pointerId: event.pointerId,
@@ -1489,6 +1496,7 @@ export default function DungeonCanvas({
       setHoveredMapTarget({ type: "room", roomNumber: room.number });
       return;
     }
+    if (moveMode) return;
     if (zoom <= 1) return;
     dragRef.current = {
       type: "pan",
@@ -1540,7 +1548,7 @@ export default function DungeonCanvas({
       : Math.hypot(event.clientX - drag.originX, event.clientY - drag.originY) > 5;
     dragRef.current = null;
     setDragging(false);
-    if (drag.type === "room" && drag.moved) onRoomSelect(drag.roomNumber);
+    if (drag.type === "room" && drag.moved) onRoomMoveEnd(drag.roomNumber);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -1551,6 +1559,7 @@ export default function DungeonCanvas({
       suppressClickRef.current = false;
       return;
     }
+    if (moveMode) return;
     if (event.target instanceof Element && event.target.closest(".map-controls")) return;
     const target = getTargetAtPointer(event.clientX, event.clientY);
     if (target?.type === "room") onRoomSelect(target.roomNumber);
@@ -1558,7 +1567,7 @@ export default function DungeonCanvas({
 
   return (
     <div
-      className={`canvas-host${zoom > 1 ? " canvas-zoomed" : ""}${dragging ? " canvas-dragging" : ""}${hoveredMapTarget && !dragging ? " canvas-room-hover" : ""}`}
+      className={`canvas-host${zoom > 1 ? " canvas-zoomed" : ""}${moveMode ? " canvas-move-mode" : ""}${dragging ? " canvas-dragging" : ""}${hoveredMapTarget && !dragging ? " canvas-room-hover" : ""}`}
       ref={hostRef}
       aria-label="Visualização da masmorra gerada"
       onPointerDown={handlePointerDown}
@@ -1590,6 +1599,18 @@ export default function DungeonCanvas({
             onClick={onToggleLava}
           >
             <i aria-hidden="true" /> Lava
+          </button>
+        </div>
+        <div className="map-mode-controls" role="group" aria-label="Modo de interação com salas">
+          <button
+            className="map-control-button move-mode-toggle"
+            type="button"
+            aria-label={`${moveMode ? "Desativar" : "Ativar"} modo mover salas`}
+            aria-pressed={moveMode}
+            title={moveMode ? "Desativar modo mover salas" : "Ativar modo mover salas"}
+            onClick={() => setMoveMode((active) => !active)}
+          >
+            Mover
           </button>
         </div>
         <div className="map-zoom-controls" role="group" aria-label="Zoom do mapa">

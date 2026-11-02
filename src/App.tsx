@@ -805,6 +805,7 @@ export default function App() {
   const [roomPositionEdit, setRoomPositionEdit] = useState<RoomPositionEdit | null>(null);
   const guideListRef = useRef<HTMLDivElement | null>(null);
   const roomDetailDialogRef = useRef<HTMLDialogElement | null>(null);
+  const preserveRoomFocusOnCloseRef = useRef(false);
   const [showWater, setShowWater] = useState(true);
   const [showLava, setShowLava] = useState(true);
   const [cavesEnabled, setCavesEnabled] = useState(false);
@@ -871,6 +872,7 @@ export default function App() {
   )];
   useEffect(() => {
     setRoomDetailNumber(null);
+    setFocusRequest(null);
   }, [generatedDungeon]);
   useEffect(() => {
     const dialog = roomDetailDialogRef.current;
@@ -943,6 +945,24 @@ export default function App() {
         ? { baseDungeon: generatedDungeon, positions, dungeon: movedDungeon }
         : current;
     });
+  };
+  const openRoomDetails = (roomNumber: number) => {
+    setRoomDetailSection("structure");
+    setRoomDetailNumber(roomNumber);
+    setFocusRequest((current) => ({
+      type: "room",
+      roomNumber,
+      requestId: (current?.requestId ?? 0) + 1,
+      shouldFocus: true,
+    }));
+  };
+  const selectMovedRoom = (roomNumber: number) => {
+    setFocusRequest((current) => ({
+      type: "room",
+      roomNumber,
+      requestId: (current?.requestId ?? 0) + 1,
+      shouldFocus: false,
+    }));
   };
   const commitSeedDraft = () => {
     const parsed = Number(seedDraft);
@@ -1874,14 +1894,8 @@ export default function App() {
               generationKey={generatedDungeon}
               focusRequest={focusRequest}
               onRoomMove={moveRoom}
-              onRoomSelect={(roomNumber) => {
-                setFocusRequest((current) => ({
-                  type: "room",
-                  roomNumber,
-                  requestId: (current?.requestId ?? 0) + 1,
-                  shouldFocus: false,
-                }));
-              }}
+              onRoomSelect={openRoomDetails}
+              onRoomMoveEnd={selectMovedRoom}
               onClearSelection={() => setFocusRequest(null)}
               showWater={showWater}
               showLava={showLava}
@@ -2045,7 +2059,7 @@ export default function App() {
                 const treasureDefinition = room.treasure
                   ? getTreasureDefinition(room.treasure.type)
                   : undefined;
-                const isSelected = roomDetailNumber === room.number;
+                const isSelected = focusRequest?.roomNumber === room.number;
                 return (
                   <button
                     className={`room-entry room-entry-button ${isSelected ? "selected" : ""}`}
@@ -2055,8 +2069,7 @@ export default function App() {
                     aria-label={`Ver detalhes da sala ${room.number}: ${room.roomType.title}, categoria ${roomCategory.label}`}
                     aria-pressed={isSelected}
                     onClick={() => {
-                      setRoomDetailSection("structure");
-                      setRoomDetailNumber(room.number);
+                      openRoomDetails(room.number);
                     }}
                   >
                     <span
@@ -2139,7 +2152,16 @@ export default function App() {
         className="room-detail-dialog"
         ref={roomDetailDialogRef}
         aria-labelledby="room-detail-title"
-        onClose={() => setRoomDetailNumber(null)}
+        onClose={() => {
+          setRoomDetailNumber(null);
+          if (preserveRoomFocusOnCloseRef.current) {
+            preserveRoomFocusOnCloseRef.current = false;
+          } else {
+            setFocusRequest((current) => current
+              ? { ...current, shouldFocus: false }
+              : null);
+          }
+        }}
         onClick={(event) => {
           if (event.target === event.currentTarget) roomDetailDialogRef.current?.close();
         }}
@@ -2296,6 +2318,7 @@ export default function App() {
                 className="room-detail-button room-detail-focus"
                 type="button"
                 onClick={() => {
+                  preserveRoomFocusOnCloseRef.current = true;
                   setFocusRequest((current) => ({
                     type: "room",
                     roomNumber: roomDetail.number,
