@@ -31,12 +31,9 @@ import { ROOM_TYPE_CATEGORIES } from "./roomTypes";
 import type { RoomTypeCategory } from "./roomTypes";
 
 export type MapFocusRequest =
-  | { type: "room"; roomNumber: number; requestId: number; shouldFocus: boolean }
-  | { type: "trap"; x: number; y: number; requestId: number; shouldFocus: boolean };
+  | { type: "room"; roomNumber: number; requestId: number; shouldFocus: boolean };
 
-type MapTarget =
-  | { type: "room"; roomNumber: number }
-  | { type: "trap"; x: number; y: number };
+type MapTarget = { type: "room"; roomNumber: number };
 
 type CanvasDrag =
   | {
@@ -64,7 +61,6 @@ interface DungeonCanvasProps {
   focusRequest: MapFocusRequest | null;
   onRoomMove: (roomNumber: number, x: number, y: number) => void;
   onRoomSelect: (roomNumber: number) => void;
-  onTrapSelect: (x: number, y: number) => void;
   onClearSelection: () => void;
   showWater: boolean;
   showLava: boolean;
@@ -81,10 +77,6 @@ const MAX_EXPORT_PIXELS = 16_000_000;
 const RASTER_SVG_TILE_THRESHOLD = 50_000;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 64;
-const TRAP_TYPE_BY_TILE = new Map(
-  TRAP_TYPES.map((type) => [TRAP_DEFINITIONS[type].tile, type] as const),
-);
-
 const TRAP_CATEGORY_COLORS: Record<TrapCategory, readonly [number, number, number]> = {
   mechanical: [190, 160, 105],
   environmental: [104, 170, 123],
@@ -1189,7 +1181,6 @@ export default function DungeonCanvas({
   focusRequest,
   onRoomMove,
   onRoomSelect,
-  onTrapSelect,
   onClearSelection,
   showWater,
   showLava,
@@ -1223,10 +1214,8 @@ export default function DungeonCanvas({
       return;
     }
     if (!focusRequest.shouldFocus) return;
-    const room = focusRequest.type === "room"
-      ? dungeon.roomDetails.find((candidate) => candidate.number === focusRequest.roomNumber)
-      : undefined;
-    if (focusRequest.type === "room" && !room) return;
+    const room = dungeon.roomDetails.find((candidate) => candidate.number === focusRequest.roomNumber);
+    if (!room) return;
     const tileSize = Math.min(
       17,
       (app.screen.width - 48) / dungeon.width,
@@ -1234,14 +1223,10 @@ export default function DungeonCanvas({
     );
     if (tileSize <= 0) return;
 
-    const targetX = room
-      ? room.x + room.width / 2
-      : focusRequest.type === "trap" ? focusRequest.x + 0.5 : 0;
-    const targetY = room
-      ? room.y + room.height / 2
-      : focusRequest.type === "trap" ? focusRequest.y + 0.5 : 0;
-    const targetWidth = room?.width ?? 1;
-    const targetHeight = room?.height ?? 1;
+    const targetX = room.x + room.width / 2;
+    const targetY = room.y + room.height / 2;
+    const targetWidth = room.width;
+    const targetHeight = room.height;
     const focusZoom = clampZoom(Math.min(
       8,
       app.screen.width / ((targetWidth + 2) * tileSize),
@@ -1469,7 +1454,6 @@ export default function DungeonCanvas({
     const tileY = Math.floor(position.y);
     const tile = dungeon.tiles[tileY]?.[tileX];
     if (tile === undefined) return null;
-    if (TRAP_TYPE_BY_TILE.has(tile)) return { type: "trap", x: tileX, y: tileY };
     const room = dungeon.roomDetails.find((candidate) => (
       tileX >= candidate.x
       && tileX < candidate.x + candidate.width
@@ -1570,12 +1554,11 @@ export default function DungeonCanvas({
     if (event.target instanceof Element && event.target.closest(".map-controls")) return;
     const target = getTargetAtPointer(event.clientX, event.clientY);
     if (target?.type === "room") onRoomSelect(target.roomNumber);
-    else if (target?.type === "trap") onTrapSelect(target.x, target.y);
   };
 
   return (
     <div
-      className={`canvas-host${zoom > 1 ? " canvas-zoomed" : ""}${dragging ? " canvas-dragging" : ""}${hoveredMapTarget?.type === "room" && !dragging ? " canvas-room-hover" : hoveredMapTarget ? " canvas-target-hover" : ""}`}
+      className={`canvas-host${zoom > 1 ? " canvas-zoomed" : ""}${dragging ? " canvas-dragging" : ""}${hoveredMapTarget && !dragging ? " canvas-room-hover" : ""}`}
       ref={hostRef}
       aria-label="Visualização da masmorra gerada"
       onPointerDown={handlePointerDown}

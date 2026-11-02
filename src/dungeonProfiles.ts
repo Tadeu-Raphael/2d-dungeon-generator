@@ -1,5 +1,6 @@
 import type { Algorithm, TrapCategoryWeights } from "./dungeon";
 import type { RoomTypeCategoryFrequencies } from "./roomTypes";
+import type { TreasureCategoryWeights } from "./treasures";
 
 export type DungeonConcept =
   | "military-fortress"
@@ -19,6 +20,7 @@ export interface DungeonConceptProfile {
   generationDescription: string;
   roomTypeCategoryFrequencies: RoomTypeCategoryFrequencies;
   trapCategoryWeights: TrapCategoryWeights;
+  treasureCategoryWeights: TreasureCategoryWeights;
 }
 
 export function getDungeonGenerationAlgorithm(
@@ -61,6 +63,10 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
       mechanical: 6, environmental: 3, magical: 1, capture: 3, deception: 1,
       motion: 7, biological: 1, combat: 7, complex: 2,
     },
+    treasureCategoryWeights: {
+      monetary: 17, equipment: 20, consumables: 8, magical: 3, relics: 10,
+      documents: 12, materials: 10, creatureTrophies: 12, cursed: 3, secret: 5,
+    },
   },
   "ancient-temple": {
     id: "ancient-temple",
@@ -84,6 +90,10 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     trapCategoryWeights: {
       mechanical: 2, environmental: 2, magical: 7, capture: 3, deception: 6,
       motion: 2, biological: 1, combat: 2, complex: 7,
+    },
+    treasureCategoryWeights: {
+      monetary: 10, equipment: 5, consumables: 8, magical: 13, relics: 18,
+      documents: 16, materials: 8, creatureTrophies: 7, cursed: 10, secret: 5,
     },
   },
   catacombs: {
@@ -109,6 +119,10 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
       mechanical: 2, environmental: 4, magical: 3, capture: 5, deception: 3,
       motion: 4, biological: 6, combat: 3, complex: 4,
     },
+    treasureCategoryWeights: {
+      monetary: 10, equipment: 4, consumables: 5, magical: 7, relics: 22,
+      documents: 18, materials: 7, creatureTrophies: 12, cursed: 10, secret: 5,
+    },
   },
   "abandoned-mine": {
     id: "abandoned-mine",
@@ -132,6 +146,10 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     trapCategoryWeights: {
       mechanical: 5, environmental: 7, magical: 1, capture: 3, deception: 1,
       motion: 6, biological: 4, combat: 2, complex: 3,
+    },
+    treasureCategoryWeights: {
+      monetary: 10, equipment: 7, consumables: 10, magical: 3, relics: 8,
+      documents: 8, materials: 35, creatureTrophies: 10, cursed: 4, secret: 5,
     },
   },
   "arcane-laboratory": {
@@ -157,6 +175,10 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
       mechanical: 2, environmental: 2, magical: 8, capture: 3, deception: 4,
       motion: 3, biological: 2, combat: 4, complex: 7,
     },
+    treasureCategoryWeights: {
+      monetary: 6, equipment: 6, consumables: 17, magical: 27, relics: 7,
+      documents: 13, materials: 12, creatureTrophies: 3, cursed: 4, secret: 5,
+    },
   },
   "natural-cavern": {
     id: "natural-cavern",
@@ -180,6 +202,10 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     trapCategoryWeights: {
       mechanical: 1, environmental: 6, magical: 2, capture: 3, deception: 2,
       motion: 4, biological: 9, combat: 4, complex: 2,
+    },
+    treasureCategoryWeights: {
+      monetary: 7, equipment: 4, consumables: 8, magical: 4, relics: 7,
+      documents: 4, materials: 39, creatureTrophies: 18, cursed: 4, secret: 5,
     },
   },
   prison: {
@@ -205,6 +231,10 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
       mechanical: 6, environmental: 1, magical: 2, capture: 9, deception: 4,
       motion: 8, biological: 1, combat: 5, complex: 4,
     },
+    treasureCategoryWeights: {
+      monetary: 8, equipment: 14, consumables: 9, magical: 4, relics: 8,
+      documents: 32, materials: 4, creatureTrophies: 8, cursed: 8, secret: 5,
+    },
   },
   "lost-civilization": {
     id: "lost-civilization",
@@ -228,6 +258,10 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     trapCategoryWeights: {
       mechanical: 3, environmental: 4, magical: 5, capture: 3, deception: 5,
       motion: 3, biological: 3, combat: 4, complex: 7,
+    },
+    treasureCategoryWeights: {
+      monetary: 8, equipment: 6, consumables: 5, magical: 13, relics: 23,
+      documents: 18, materials: 12, creatureTrophies: 5, cursed: 5, secret: 5,
     },
   },
 };

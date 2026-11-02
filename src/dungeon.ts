@@ -1,5 +1,22 @@
 import { getRoomTypeDefinitions } from "./roomTypes";
 import type { RoomTypeCategoryFrequencies, RoomTypeDefinition } from "./roomTypes";
+import {
+  DEFAULT_TREASURE_CATEGORY_WEIGHTS,
+  DEFAULT_TREASURE_RARITY_WEIGHTS,
+  getRoomTreasureChance,
+  TREASURE_CATALOG,
+  TREASURE_CATEGORY_ORDER,
+  TREASURE_RARITY_ORDER,
+} from "./treasures";
+import type {
+  DungeonTreasure,
+  TreasureCategory,
+  TreasureCategoryWeights,
+  TreasureDefinition,
+  TreasureRarity,
+  TreasureRarityWeights,
+  TreasureType,
+} from "./treasures";
 
 export type Algorithm =
   | "bsp"
@@ -557,6 +574,11 @@ export interface Dungeon {
   tiles: Tile[][];
   rooms: number;
   roomDetails: DungeonRoom[];
+  traps: DungeonTrap[];
+  treasureCategoryWeights: TreasureCategoryWeights;
+  treasureRarityWeights: TreasureRarityWeights;
+  treasureChancePercent: number;
+  treasureConsumablesEnabled: boolean;
   floorCount: number;
   seed: number;
   algorithm: Algorithm;
@@ -564,6 +586,12 @@ export interface Dungeon {
   trapCategoryWeights: TrapCategoryWeights;
   roomTrapChancePercent: number;
   corridorTrapChancePercent: number;
+}
+
+export interface DungeonTrap {
+  type: TrapType;
+  x: number;
+  y: number;
 }
 
 export interface RoomPosition {
@@ -592,6 +620,12 @@ export interface DungeonParameters {
   trapCategoryWeights: TrapCategoryWeights;
   roomTrapChancePercent: number;
   corridorTrapChancePercent: number;
+  treasureCategoryDistributionEnabled: boolean;
+  treasureCategoryWeights: TreasureCategoryWeights;
+  treasureRarityDistributionEnabled: boolean;
+  treasureRarityWeights: TreasureRarityWeights;
+  treasureChancePercent: number;
+  treasureConsumablesEnabled: boolean;
 }
 
 export interface RoomShapeFrequencies {
@@ -722,6 +756,7 @@ export interface DungeonRoom extends Rect {
   liquidFeature?: LiquidFeature;
   liquidType?: LiquidType;
   trap?: TrapType;
+  treasure?: DungeonTreasure;
 }
 
 interface GeneratedRoom extends Rect {
@@ -730,6 +765,7 @@ interface GeneratedRoom extends Rect {
   liquidFeature?: LiquidFeature;
   liquidType?: LiquidType;
   trap?: TrapType;
+  treasure?: DungeonTreasure;
 }
 
 export const DEFAULT_DUNGEON_PARAMETERS: DungeonParameters = {
@@ -746,6 +782,10 @@ export const DEFAULT_DUNGEON_PARAMETERS: DungeonParameters = {
   roomSizeDistributionEnabled: false,
   roomTypeDistributionEnabled: false,
   trapCategoryDistributionEnabled: false,
+  treasureCategoryDistributionEnabled: false,
+  treasureRarityDistributionEnabled: false,
+  treasureChancePercent: 25,
+  treasureConsumablesEnabled: true,
   roomTypeCategoryFrequencies: {
     exploration: 10,
     combat: 9,
@@ -762,6 +802,8 @@ export const DEFAULT_DUNGEON_PARAMETERS: DungeonParameters = {
   trapCategoryWeights: DEFAULT_TRAP_CATEGORY_WEIGHTS,
   roomTrapChancePercent: 25,
   corridorTrapChancePercent: 5,
+  treasureCategoryWeights: DEFAULT_TREASURE_CATEGORY_WEIGHTS,
+  treasureRarityWeights: DEFAULT_TREASURE_RARITY_WEIGHTS,
   roomSizeFrequencies: {
     micro: 10,
     verySmall: 20,
@@ -1779,7 +1821,6 @@ function selectWeightedTrapType(
 }
 
 function placeTraps(
-  tiles: Tile[][],
   rooms: GeneratedRoom[],
   random: () => number,
   weights: TrapCategoryWeights,
@@ -1788,19 +1829,8 @@ function placeTraps(
   const roomTrapTypes = TRAP_TYPES.filter((type) => TRAP_DEFINITIONS[type].placement !== "corridor");
   for (const room of rooms) {
     if (random() >= chancePercent / 100) continue;
-    const centerX = Math.floor(room.x + room.width / 2);
-    const centerY = Math.floor(room.y + room.height / 2);
-    const candidates: Point[] = [];
-    for (let y = room.y; y < room.y + room.height; y += 1) {
-      for (let x = room.x; x < room.x + room.width; x += 1) {
-        if (tiles[y][x] === FLOOR && (x !== centerX || y !== centerY)) candidates.push([x, y]);
-      }
-    }
-    if (candidates.length === 0) continue;
     const trapType = selectWeightedTrapType(roomTrapTypes, weights, random);
     if (!trapType) continue;
-    const [x, y] = candidates[Math.floor(random() * candidates.length)];
-    tiles[y][x] = TRAP_DEFINITIONS[trapType].tile;
     room.trap = trapType;
   }
 }
@@ -1810,8 +1840,9 @@ function placeCorridorTraps(
   random: () => number,
   weights: TrapCategoryWeights,
   chancePercent: number,
-): void {
+): DungeonTrap[] {
   const corridorTrapTypes = TRAP_TYPES.filter((type) => TRAP_DEFINITIONS[type].placement !== "room");
+  const traps: DungeonTrap[] = [];
   const candidates: Point[] = [];
   for (let y = 0; y < tiles.length; y += 1) {
     for (let x = 0; x < tiles[y].length; x += 1) {
@@ -1824,21 +1855,179 @@ function placeCorridorTraps(
   }
 
   const trapLimit = Math.min(3, Math.max(1, Math.round(candidates.length / 80)));
-  let placed = 0;
   for (const [x, y] of candidates) {
-    if (placed >= trapLimit) break;
+    if (traps.length >= trapLimit) break;
     if (random() >= chancePercent / 100) continue;
-    const hasNearbyTrap = tiles.slice(Math.max(0, y - 1), y + 2).some((row) => (
-      row.slice(Math.max(0, x - 1), x + 2).some((tile) => (
-        TRAP_TYPES.some((type) => TRAP_DEFINITIONS[type].tile === tile)
-      ))
-    ));
+    const hasNearbyTrap = traps.some((trap) => Math.abs(trap.x - x) <= 1 && Math.abs(trap.y - y) <= 1);
     if (hasNearbyTrap) continue;
 
     const trapType = selectWeightedTrapType(corridorTrapTypes, weights, random);
     if (!trapType) continue;
-    tiles[y][x] = TRAP_DEFINITIONS[trapType].tile;
-    placed += 1;
+    traps.push({ type: trapType, x, y });
+  }
+  return traps;
+}
+
+function selectWeightedTreasureCategory(
+  weights: TreasureCategoryWeights,
+  consumablesEnabled: boolean,
+  random: () => number,
+): TreasureCategory | undefined {
+  const categories = TREASURE_CATEGORY_ORDER.filter((category) => (
+    (consumablesEnabled || category !== "consumables")
+    && Number.isFinite(weights[category])
+    && weights[category] > 0
+    && TREASURE_CATALOG[category].length > 0
+  ));
+  const totalWeight = categories.reduce((total, category) => total + weights[category], 0);
+  if (totalWeight === 0) return undefined;
+
+  let choice = random() * totalWeight;
+  for (const category of categories) {
+    choice -= weights[category];
+    if (choice < 0) return category;
+  }
+  return categories[categories.length - 1];
+}
+
+function selectWeightedTreasureRarity(
+  weights: TreasureRarityWeights,
+  random: () => number,
+): TreasureRarity | undefined {
+  const rarities = TREASURE_RARITY_ORDER.filter((rarity) => (
+    Number.isFinite(weights[rarity]) && weights[rarity] > 0
+  ));
+  const totalWeight = rarities.reduce((total, rarity) => total + weights[rarity], 0);
+  if (totalWeight === 0) return undefined;
+
+  let choice = random() * totalWeight;
+  for (const rarity of rarities) {
+    choice -= weights[rarity];
+    if (choice < 0) return rarity;
+  }
+  return rarities[rarities.length - 1];
+}
+
+function normalizeTreasureText(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function treasureMatchesRoom(definition: TreasureDefinition, room: DungeonRoom): boolean {
+  const roomContext = normalizeTreasureText(`${room.roomType.title} ${room.roomType.description}`);
+  const genericLocationWords = new Set(["sala", "salas", "camara", "camaras", "area", "areas", "local", "locais"]);
+  return definition.locations.split(/[,;.]/).some((location) => (
+    location
+      .split(/[^a-z0-9]+/)
+      .map((word) => word.trim())
+      .filter((word) => word.length >= 4 && !genericLocationWords.has(word))
+      .some((word) => {
+        const singular = word.endsWith("s") ? word.slice(0, -1) : word;
+        return roomContext.includes(word) || roomContext.includes(singular);
+      })
+  ));
+}
+
+function selectRandomValue<T>(values: readonly T[], random: () => number): T {
+  return values[Math.floor(random() * values.length)];
+}
+
+function createTreasureDetails(
+  definition: TreasureDefinition,
+  category: TreasureCategory,
+  random: () => number,
+): string[] {
+  const details: string[] = [];
+  const quantityDescriptions = ["pequena quantidade", "quantidade moderada", "reserva significativa", "grande reserva"];
+  const qualityDescriptions = ["qualidade comum", "bem preservado", "trabalho refinado", "estado deteriorado"];
+
+  if (category === "monetary") {
+    details.push(
+      `Quantidade: ${selectRandomValue(quantityDescriptions, random)}.`,
+      `Qualidade: ${selectRandomValue(qualityDescriptions, random)}.`,
+      `Valor contextual: pode ser maior para colecionadores ou estudiosos.`,
+    );
+  } else if (category === "equipment") {
+    const attributes = [
+      "Origem cultural: uma tradição local antiga.",
+      "Material: liga metálica de procedência incomum.",
+      "Qualidade artesanal: acabamento acima do padrão.",
+      "Conservação: marcas de uso, mas ainda funcional.",
+      "Inscrição: símbolo ou nome de um antigo proprietário.",
+      "Valor histórico: associado a uma facção desaparecida.",
+      "Propriedade especial: possível efeito sobrenatural, a critério da campanha.",
+    ];
+    const selected = new Set<string>();
+    while (selected.size < 3) selected.add(selectRandomValue(attributes, random));
+    details.push(...selected);
+  } else if (category === "consumables") {
+    details.push(
+      `Quantidade: ${Math.floor(random() * 4) + 1} unidade(s).`,
+      `Condição: ${selectRandomValue(qualityDescriptions, random)}.`,
+    );
+  } else if (category === "relics") {
+    const values = ["baixo", "moderado", "alto", "excepcional"];
+    details.push(
+      `Valor comercial: ${selectRandomValue(values, random)}.`,
+      `Valor histórico: ${selectRandomValue(values, random)}.`,
+      `Valor narrativo: ${selectRandomValue(values, random)}.`,
+    );
+  } else if (category === "documents") {
+    details.push("Pista potencial: pode conectar esta sala a outra área ou facção.");
+  } else if (category === "materials") {
+    details.push(
+      `Quantidade: ${selectRandomValue(quantityDescriptions, random)}.`,
+      `Qualidade: ${selectRandomValue(qualityDescriptions, random)}.`,
+    );
+  } else if (category === "creatureTrophies") {
+    details.push(`Comportamento do acumulador: ${selectRandomValue(["organizado por valor ou utilidade", "acumulado aleatoriamente, sem critério aparente"], random)}.`);
+  } else if (category === "cursed") {
+    details.push("O risco está vinculado ao próprio objeto e pode persistir depois de retirado; não é uma armadilha de piso.");
+  } else if (category === "secret" && definition.discoveryMethod) {
+    details.push(`Forma de descoberta: ${definition.discoveryMethod}`);
+    details.push(`Relevância: ${selectRandomValue(["objeto incomum", "pista importante", "recompensa valiosa"], random)}.`);
+  }
+
+  return details;
+}
+
+function placeRoomTreasures(
+  rooms: DungeonRoom[],
+  random: () => number,
+  categoryWeights: TreasureCategoryWeights,
+  rarityWeights: TreasureRarityWeights,
+  chancePercent: number,
+  consumablesEnabled: boolean,
+): void {
+  for (const room of rooms) {
+    const roomChance = getRoomTreasureChance(
+      room.roomType.category,
+      room.roomType.title,
+      chancePercent,
+    );
+    if (random() >= roomChance / 100) continue;
+
+    const category = selectWeightedTreasureCategory(categoryWeights, consumablesEnabled, random);
+    if (!category) continue;
+
+    const rarity = category === "magical"
+      ? selectWeightedTreasureRarity(rarityWeights, random)
+      : undefined;
+    if (category === "magical" && !rarity) continue;
+
+    const categoryDefinitions: readonly TreasureDefinition[] = category === "magical"
+      ? TREASURE_CATALOG.magical.filter((definition) => definition.rarity === rarity)
+      : TREASURE_CATALOG[category];
+    const contextualDefinitions = categoryDefinitions.filter((definition) => treasureMatchesRoom(definition, room));
+    const availableDefinitions = contextualDefinitions.length > 0 ? contextualDefinitions : categoryDefinitions;
+    if (availableDefinitions.length === 0) continue;
+
+    const definition = selectRandomValue(availableDefinitions, random);
+    room.treasure = {
+      type: definition.id as TreasureType,
+      category,
+      rarity,
+      details: createTreasureDetails(definition, category, random),
+    };
   }
 }
 
@@ -2415,13 +2604,12 @@ export function generateDungeon(
   );
   placeStairs(tiles, roomRects, random, parameters.entranceMode);
   placeTraps(
-    tiles,
     roomRects,
     random,
     parameters.trapCategoryWeights,
     parameters.roomTrapChancePercent,
   );
-  placeCorridorTraps(
+  const traps = placeCorridorTraps(
     tiles,
     random,
     parameters.trapCategoryWeights,
@@ -2440,22 +2628,32 @@ export function generateDungeon(
     seed,
     parameters.roomTypeDistributionEnabled ? parameters.roomTypeCategoryFrequencies : undefined,
   );
+  const roomDetails: DungeonRoom[] = roomOrder.map((roomIndex, index) => {
+    const room = roomRects[roomIndex];
+    return {
+      ...room,
+      number: index + 1,
+      centerX: room.x + room.width / 2,
+      centerY: room.y + room.height / 2,
+      shape: room.shape,
+      roomType: roomTypes[index],
+    };
+  });
+  placeRoomTreasures(
+    roomDetails,
+    random,
+    parameters.treasureCategoryWeights,
+    parameters.treasureRarityWeights,
+    parameters.treasureChancePercent,
+    parameters.treasureConsumablesEnabled,
+  );
   return {
     width: parameters.width,
     height: parameters.height,
     tiles,
     rooms: roomRects.length,
-    roomDetails: roomOrder.map((roomIndex, index) => {
-      const room = roomRects[roomIndex];
-      return {
-        ...room,
-        number: index + 1,
-        centerX: room.x + room.width / 2,
-        centerY: room.y + room.height / 2,
-        shape: room.shape,
-        roomType: roomTypes[index],
-      };
-    }),
+    roomDetails,
+    traps,
     floorCount,
     seed,
     algorithm,
@@ -2463,6 +2661,10 @@ export function generateDungeon(
     trapCategoryWeights: parameters.trapCategoryWeights,
     roomTrapChancePercent: parameters.roomTrapChancePercent,
     corridorTrapChancePercent: parameters.corridorTrapChancePercent,
+    treasureCategoryWeights: parameters.treasureCategoryWeights,
+    treasureRarityWeights: parameters.treasureRarityWeights,
+    treasureChancePercent: parameters.treasureChancePercent,
+    treasureConsumablesEnabled: parameters.treasureConsumablesEnabled,
   };
 }
 
@@ -2809,7 +3011,7 @@ export function repositionDungeonRooms(
       createRandom(dungeon.seed ^ 0xc2b2ae35),
     );
   }
-  placeCorridorTraps(
+  const traps = placeCorridorTraps(
     tiles,
     createRandom(dungeon.seed),
     dungeon.trapCategoryWeights,
@@ -2825,6 +3027,7 @@ export function repositionDungeonRooms(
   return {
     ...dungeon,
     tiles,
+    traps,
     roomDetails: rooms.map((room) => ({
       ...room,
       centerX: room.x + room.width / 2,
