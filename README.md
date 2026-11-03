@@ -1,60 +1,66 @@
 # Dungeon Foundry
 
-Protótipo web para geração procedural de masmorras com React, TypeScript, Vite e PixiJS.
+[![GitHub Stars](https://img.shields.io/github/stars/Tadeu-Raphael/2d-dungeon-generator?style=for-the-badge)](https://github.com/Tadeu-Raphael/2d-dungeon-generator)
+[![GitHub Forks](https://img.shields.io/github/forks/Tadeu-Raphael/2d-dungeon-generator?style=for-the-badge)](https://github.com/Tadeu-Raphael/2d-dungeon-generator)
+[![GitHub Issues](https://img.shields.io/github/issues/Tadeu-Raphael/2d-dungeon-generator?style=for-the-badge)](https://github.com/Tadeu-Raphael/2d-dungeon-generator/issues)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](#licença)
 
-## Executar
+Aplicação web interativa para gerar, explorar e exportar mapas 2D de masmorras para RPGs. Os mapas são renderizados em tiles com PixiJS e podem ser reproduzidos usando a mesma seed.
 
-```bash
-npm install
-npm run dev
-```
+## Recursos
 
-Para validar a compilação de produção:
+- **Oito conceitos de masmorra**, cada um com regras próprias para geração e distribuição de salas, armadilhas e tesouros.
+- **Geração procedural combinável** com BSP, Cellular Automata e Drunkard's Walk.
+- **Seed reproduzível** e dimensões configuráveis: de 20 a 160 tiles de largura e de 20 a 120 tiles de altura.
+- **Salas ajustáveis**: de 4 a 24 salas, 13 formatos, sete portes, proporções retangulares e frequências personalizáveis para 11 categorias e 168 funções.
+- **Cavernas naturais opcionais**, além do conceito Caverna natural, que gera cavernas sem salas estruturadas.
+- **Elementos de mapa** como portas, escadas, colunas, água e lava; as camadas de água e lava podem ser exibidas ou ocultadas.
+- **Guia de salas, armadilhas e tesouros** com detalhes, metadados e resumos por mapa. O catálogo inclui 138 armadilhas em nove categorias e tesouros em dez categorias.
+- **Reposicionamento de salas** por arraste, ajustado à grade, sem sobreposição ou saída dos limites; os corredores são recalculados e a conectividade é preservada.
+- **Exportação do mapa em SVG e PNG.**
 
-```bash
-npm run build
-```
+## Conceitos
 
-## Conceitos de masmorra
+| Conceito | Ênfase |
+|---|---|
+| Fortaleza militar | Guarnições, arsenais e defesa |
+| Templo antigo | Santuários, rituais e enigmas |
+| Catacumbas | Criptas e espaços funerários |
+| Mina abandonada | Galerias, depósitos e áreas instáveis |
+| Laboratório arcano | Pesquisa, contenção e experimentos |
+| Caverna natural | Formações naturais, água e vida subterrânea |
+| Prisão | Celas, vigilância e contenção |
+| Ruínas de uma civilização perdida | Monumentos e espaços esquecidos |
 
-- **Fortaleza militar:** favorece salas de combate, logística e funções especiais; usa salas BSP e corredores.
-- **Templo antigo:** favorece espaços religiosos, funerários e enigmas; combina salas com expansões de Cellular Automata.
-- **Catacumbas:** prioriza funções funerárias e religiosas; conecta salas com túneis de Drunkard's Walk.
-- **Mina abandonada:** favorece logística e espaços naturais; combina salas com túneis escavados.
-- **Laboratório arcano:** prioriza pesquisa e experimentação; combina salas, cavernas e trilhas.
-- **Caverna natural:** gera somente cavernas orgânicas, sem salas estruturadas.
-- **Prisão:** prioriza habitação, combate e desafios; usa salas e corredores.
-- **Ruínas de uma civilização perdida:** distribui funções entre espaços religiosos, funerários, naturais e de exploração; combina os três métodos.
+Cada perfil aplica pesos próprios às categorias de salas, armadilhas e tesouros. As cavernas também podem ser habilitadas em conceitos que geram salas.
 
-O perfil determina automaticamente os pesos das categorias funcionais das salas, as categorias de armadilhas e tesouros e os métodos de geração usados, individualmente ou em conjunto. Na aba **Geração**, selecione **Incluir cavernas** para adicionar áreas orgânicas; o interior da caverna tem cor própria e corredores permanecem separados por paredes. Cavernas podem conter poças e córregos de água ou lava, cachoeiras e cascatas de lava, fontes e nascentes, além de fendas vulcânicas; os controles Água e Lava também mostram ou ocultam esses elementos sem apagar o piso da caverna. As ligações entre salas e cavernas podem ser abertas, protegidas por uma parede frágil rachada ou atravessar um trecho de parede demolido, cada qual com representação própria na legenda. Paredes internas têm bordas destacadas para tornar a divisão dos espaços mais legível. Na aba **Tipos**, é possível substituir a distribuição do perfil por frequências personalizadas.
+## Como funciona a geração
 
-Os métodos internos são **BSP**, que divide o mapa em regiões equilibradas e conecta salas; **Cellular Automata**, que suaviza áreas abertas para criar cavernas; e **Drunkard's Walk**, que escava trilhas conectadas. A geração combinada preserva as salas e incorpora áreas conectadas abertas pelos métodos selecionados. O controle **Compactação dos corredores** aproxima as salas para reduzir os trajetos; o valor padrão é 65%. As salas retangulares usam uma distribuição ajustável de proporções, podendo chegar a 3:1 ou mais quando o espaço permitir.
+| Método | Uso |
+|---|---|
+| **BSP** | Divide o mapa em regiões para posicionar salas e conectá-las por corredores. |
+| **Cellular Automata** | Suaviza áreas abertas e cria cavernas orgânicas. |
+| **Drunkard's Walk** | Escava trilhas e túneis conectados. |
 
-Nos mapas com salas, a numeração começa na sala de entrada, prioriza a próxima sala mais próxima pelo trajeto caminhável e termina na sala de saída. Assim, os números acompanham o percurso da masmorra em vez da ordem interna de criação das salas.
+Os métodos podem ser combinados para criar mapas com salas, túneis e cavernas. A seed permite reproduzir o mapa; o botão **Reroll masmorra** gera outro usando uma nova seed.
 
-Nos mapas com salas, a grade usa 1 tile = 1 m × 1 m. Cada sala recebe uma categoria de porte com dimensões e área aproximadas: Micro (2–4 m; 4–16 m²), Muito pequena (3–6 m; 9–36 m²), Pequena (5–8 m; 25–64 m²), Média (8–12 m; 64–144 m²), Grande (12–18 m; 144–324 m²), Muito grande (18–30 m; 324–900 m²) e Colossal (30–50 m ou mais; 900–2.500 m² ou mais). A referência no painel mostra os usos típicos; o gerador escolhe o porte conforme a área da sala e os limites disponíveis no mapa.
+## Controles e interação
 
-## Formatos de salas
+As configurações estão organizadas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Elas permitem ajustar o conceito, as dimensões, as proporções e os formatos das salas, as categorias funcionais e as chances de geração.
 
-| Formato | Características | Aplicações |
-|---|---|---|
-| Retangular | Fácil de gerar e preencher | Quartos, depósitos, dormitórios |
-| Quadrado | Proporções equilibradas | Salas de guarda, câmaras rituais |
-| Circular | Centro bem definido | Templos, arenas, câmaras de chefes |
-| Elíptico | Circular, mas alongado | Salões, auditórios |
-| Octogonal | Geometria arquitetônica marcante | Santuários, salas de enigmas |
-| Em L | Dois espaços conectados | Alojamentos, oficinas |
-| Em T | Uma área principal com ramificação | Postos de controle, encruzilhadas |
-| Em cruz | Quatro eixos de circulação | Templos, câmaras de mecanismos |
-| Em anel | Espaço central cercado por circulação | Templos, prisões, arenas |
-| Irregular | Contorno não uniforme | Cavernas, ruínas |
-| Com colunas | Espaço dividido por obstáculos estruturais | Salões, templos |
-| Com alcovas | Nichos nas paredes | Bibliotecas, criptas, santuários |
-| Multinível | Plataformas em alturas diferentes | Arenas, poços, salas de máquinas |
+- Na aba **Acesso**, escolha uma escadaria superior, uma entrada externa ou uma conexão com o exterior. Portas são colocadas em soleiras reais, e escadas indicam a direção de subida ou descida.
+- Selecione uma sala no mapa para destacá-la no guia e abrir seus detalhes. O modal separa metadados de estrutura, uso e riscos, narrativa, armadilhas e tesouros.
+- Use **Mover** para reposicionar uma sala; use **Ajustar** para enquadrar o mapa e os controles de zoom para aproximar ou afastar.
+- Armadilhas e tesouros são apresentados no guia, não como ilustrações no mapa. Armadilhas em corredores recebem identificadores numéricos no mapa e nas exportações.
+- A exportação oferece os formatos **SVG** e **PNG**. O mapa exportado não inclui marcadores de tesouros nem ilustrações das armadilhas.
 
-## Identidade visual das salas
+Uma sala pode receber até três armadilhas e até três tesouros, conforme as chances configuradas. As armadilhas variam por categoria e local de ocorrência; tesouros podem incluir consumíveis e itens mágicos com raridades distintas. Encontros não são simulados: os metadados narrativos são sugestões para criação de histórias.
 
-Cada função de sala recebe uma cor por categoria, seguindo os grupos de salas descritos abaixo. A cor aparece no piso e no número da sala; o guia lateral também mostra a categoria por extenso e a legenda expansível lista as categorias presentes no mapa. Água e lava mantêm seus símbolos e cores próprios; armadilhas são registradas somente no guia lateral.
+## Formatos e identidade visual
+
+As salas podem ser retangulares, quadradas, circulares, elípticas, octogonais, em L, em T, em cruz, em anel, irregulares, com colunas, com alcovas ou multinível. Para salas retangulares, a distribuição de proporções configurável vai de 1:1 a 3:1 ou mais.
+
+O mapa e o guia usam cores para distinguir as categorias funcionais:
 
 | Categoria | Cor |
 |---|---|
@@ -70,65 +76,94 @@ Cada função de sala recebe uma cor por categoria, seguindo os grupos de salas 
 | Tesouro e recompensas | `#e5b755` |
 | Especiais e narrativas | `#d7839e` |
 
-O catálogo reúne 168 funções, incluindo os tipos do material enviado e os tipos já existentes no gerador. Por padrão, as categorias são intercaladas e a função específica varia conforme a seed; assim, os primeiros 12 números cobrem os 11 grupos, e a legenda mostra apenas os presentes no mapa atual.
-
-## Proporções das salas retangulares
-
-| Proporção | Característica | Exemplo |
-|---|---|---|
-| 1:1 | Quadrada | 8 × 8 m |
-| 1,25:1 | Ligeiramente alongada | 10 × 8 m |
-| 1,5:1 | Alongada | 12 × 8 m |
-| 2:1 | Muito alongada | 16 × 8 m |
-| 3:1 ou mais | Galeria ou corredor largo | 18 × 6 m |
-
-Na aba **Salas**, configure a distribuição percentual dessas proporções; a soma permanece em 100%. O padrão favorece salas quadradas e moderadamente alongadas. Para minas e instalações industriais, aumente as faixas 2:1 e 3:1 ou mais; se uma proporção não couber na região BSP, o gerador usa a mais próxima viável.
-
 ## Metadados das salas
 
-Abaixo dos cards de estatísticas do mapa, expanda **Metadados das salas**, abra uma sala e escolha uma das categorias de dados dentro dela. Cada sala tem suas próprias categorias **Estrutura**, **Uso e riscos** e **Narrativa**. No modal interno da sala, cada metadado começa recolhido; clique em sua propriedade para expandir o valor. Os limites de largura, altura, área e proporção representam as opções viáveis para a região daquela sala, considerando o porte e a proporção selecionados; as dimensões usam a escala de 1 tile = 1 m. Os atributos narrativos são sugestões para inspirar a criação da história, não fatos simulados pelo gerador.
+Os metadados aparecem no modal da sala, agrupados em **Estrutura**, **Uso e riscos** e **Narrativa**. As dimensões são expressas em metros, considerando a escala de 1 tile = 1 m.
 
-| Propriedade | Informação exibida |
+| Campo | Descrição |
 |---|---|
-| `id` | Identificador da sala, formado pela seed e seu número |
-| `type` | Tipo funcional sugerido para a sala |
-| `shape` | Formato geométrico gerado |
-| `minWidth` / `maxWidth` | Limites de largura em metros |
-| `minHeight` / `maxHeight` | Limites de altura em metros |
-| `areaRange` | Área mínima e máxima em m² |
-| `aspectRatioRange` | Limites da proporção entre os lados |
-| `rotationAllowed` | Indica se o formato permite rotação |
-| `wallThickness` / `wallType` | Parede padrão de 1 tile (visual) |
-| `ceilingHeight` | Não definida pelo gerador |
-| `floorType` | Piso padrão, incluindo água ou lava quando presentes |
-| `elevation` | Nível base ou plataforma elevada para salas multinível |
-| `irregularity` | Variação de contorno de até 20% para salas irregulares |
-| `purpose` / `importance` | Uso funcional e peso narrativo sugeridos |
-| `encounterChance` | Estimativa narrativa; encontros não são gerados |
-| `treasureChance` | Chance efetiva de geração do tesouro, ajustada pelo tipo da sala |
-| `trapChance` | Taxa-base de 25% para armadilhas em salas |
-| `secretChance` | Taxa de 20% por porta gerada; não representa uma chance calculada por sala |
-| `occupancy` | Faixa estimada de ocupantes com base na função e no espaço |
-| `coverDensity` | Cobertura medida pelos pilares efetivamente gerados |
-| `lootCapacity` | Espaços estimados para recompensas; não determina a quantidade sorteada |
-| `environmentalHazardChance` | Chance de armadilha ambiental no sorteio de armadilhas de sala |
-| `faction` | Grupo construtor ou ocupante sugerido |
-| `originalPurpose` / `currentState` | Função original sugerida e estado refletido pelos elementos gerados |
-| `age` | Faixa de idade sugerida para a estrutura |
-| `securityLevel` / `magicLevel` / `decayLevel` | Níveis narrativos sugeridos de proteção, magia e deterioração |
-| `themeTags` | Etiquetas temáticas, como `royal`, `undead` e `arcane` |
-| `specialFeatures` | Formato e características especiais presentes no mapa |
-| `narrativeHooks` | Pergunta ou gancho para desenvolver a história |
+| `id`, `type`, `shape` | Identificador, função sugerida e formato gerado |
+| `minWidth`, `maxWidth`, `minHeight`, `maxHeight` | Limites viáveis para as dimensões da sala |
+| `areaRange`, `aspectRatioRange`, `rotationAllowed` | Área, proporção e possibilidade de rotação |
+| `wallThickness`, `wallType`, `ceilingHeight` | Parede visual, tipo de parede e altura do teto (não definida pelo gerador) |
+| `floorType`, `elevation`, `irregularity` | Piso, nível e variação do contorno |
+| `purpose`, `importance`, `encounterChance` | Uso, importância e estimativa narrativa; encontros não são gerados |
+| `treasureChance`, `trapChance`, `secretChance` | Chances efetivas de tesouro, armadilhas e portas secretas |
+| `occupancy`, `coverDensity`, `lootCapacity` | Estimativas de ocupação, cobertura e capacidade de recompensas |
+| `environmentalHazardChance` | Chance de armadilha ambiental |
+| `faction`, `originalPurpose`, `currentState`, `age` | Sugestões de contexto e histórico da sala |
+| `securityLevel`, `magicLevel`, `decayLevel` | Níveis narrativos de proteção, magia e deterioração |
+| `themeTags`, `specialFeatures`, `narrativeHooks` | Etiquetas, características presentes e ganchos narrativos |
 
-Na aba **Salas**, configure os formatos e a quantidade de salas. Ative **Forçar porte das salas** para definir a distribuição percentual entre as sete categorias. As frequências somam 100%; quando uma sala do porte solicitado não couber na região disponível, o gerador tenta o porte viável mais próximo.
+Os campos narrativos são sugestões, não fatos simulados. `coverDensity` reflete os pilares gerados; `lootCapacity` é uma estimativa e não determina a quantidade de tesouros. `secretChance` se refere às portas geradas, não a uma chance calculada por sala.
 
-Na aba **Tipos**, consulte o catálogo de 168 funções e, opcionalmente, personalize as frequências das categorias funcionais. A primeira sala continua sendo a entrada; a distribuição vale para as demais e mantém as cores, o guia e as exportações sincronizados. Com a personalização desativada, cada perfil define os pesos das categorias.
+## Executar localmente
 
-O painel lateral reúne o guia de salas, armadilhas e tesouros gerados. O resumo exibe o total de salas, armadilhas e tesouros. Os itens do guia mostram número e título; o número usa a cor da categoria, e badges identificam salas com **Água**, **Tesouro** ou **Armadilha**. Quando uma sala contém vários itens, o badge informa a quantidade, como **2x Armadilhas** ou **3x Tesouros**; o modal lista cada item separadamente. Armadilhas em corredores recebem números sequenciais no mapa e na seção de circulação do guia para facilitar a identificação; as exportações mantêm esses marcadores numéricos sem desenhar o mecanismo da armadilha. Clique em uma sala no mapa para destacá-la no guia, aproximar a visualização e abrir seus detalhes em um modal. As outras informações da sala — formato, dimensões, categoria, armadilhas e tesouros — aparecem no modal. Os metadados ficam recolhidos por categoria até que um dos botões **Estrutura**, **Uso e riscos** ou **Narrativa** seja selecionado; clicar novamente no botão recolhe a categoria. Armadilhas e tesouros têm seções próprias e identificadas no modal. Fechar o modal retorna o zoom ao mapa completo. Armadilhas de corredores, cavernas e trilhas aparecem numa seção própria. Armadilhas e tesouros não são selecionáveis no mapa ou nas exportações; somente os identificadores numéricos de armadilhas em corredores são mostrados no mapa/exportação. O botão **Mover** no canvas ativa o modo de movimentação: arraste uma sala para reposicioná-la; o movimento é ajustado à grade e os corredores são recalculados enquanto ela se move. Salas não podem sair dos limites nem se sobrepor; ao gerar um novo mapa, as posições manuais são descartadas.
+**Requisitos:** Node.js 18 ou superior e npm.
 
-O catálogo conta com 138 armadilhas em nove categorias: mecânicas, ambientais, mágicas, captura e contenção, percepção e engano, sonoras e de movimento, biológicas, combate e complexas/encadeadas. As 102 opções adicionadas incluem os tipos listados neste catálogo; a categoria é sorteada com peso relativo ao conceito da masmorra e, dentro dela, o tipo é escolhido entre as opções compatíveis com o local. Fortaleza militar favorece mecanismos, movimento e combate; templos e laboratórios favorecem magia e mecanismos complexos; catacumbas e cavernas naturais favorecem perigos biológicos; prisões favorecem contenção e vigilância. Na aba **Armadilhas**, ajuste a chance-base por sala (25% por padrão) e por tile de corredor/caverna (5% por padrão, limitado a uma ou três colocações), além de substituir os pesos do conceito por frequências personalizadas. Uma sala aprovada pode receber até três armadilhas distintas; cada uma das duas colocações adicionais tem chance de 35%. Algumas armadilhas são restritas a salas ou a corredores e cavernas conforme seu funcionamento; todas são apresentadas somente no guia.
+```bash
+git clone https://github.com/Tadeu-Raphael/2d-dungeon-generator.git
+cd 2d-dungeon-generator
+npm ci
+npm run dev
+```
 
-Na aba **Tesouros**, ajuste a chance-base por sala, permita ou desative consumíveis e personalize os pesos das dez categorias. Cada conceito favorece categorias coerentes com seu tema; quando a categoria mágica é sorteada, a raridade é definida separadamente (padrão: comum 55%, incomum 25%, raro 13%, muito raro 5% e lendário 2%). Uma sala aprovada pode receber até três tesouros; cada uma das duas colocações adicionais tem chance de 35%. A geração escolhe tesouros compatíveis com o contexto da sala quando possível e inclui variações de quantidade, qualidade, atributos, valores independentes de relíquias e forma de descoberta para recompensas secretas. Itens amaldiçoados permanecem distintos das armadilhas. O catálogo da aba mostra descrições, locais típicos, raridade mágica e métodos de descoberta; recompensas só aparecem no guia e no modal, sem marcadores no mapa.
+O Vite informa o endereço local ao iniciar; por padrão, é `http://localhost:5173`.
 
-As configurações da coluna esquerda estão divididas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Na aba Geração, escolha um dos oito conceitos, informe a seed (de 0 a 4.294.967.295) para reproduzir um mapa e ajuste as dimensões, com largura de 20 a 160 e altura de 20 a 120 tiles. Todos os conceitos com salas permitem ativar cavernas naturais; **Caverna natural** gera apenas cavernas. Elas têm cor própria no mapa e legenda, distintas das salas. Na aba Salas, configure de 4 a 24 salas e a frequência dos 13 formatos; o total permanece em 100%. Salas quadradas e circulares podem receber, com baixa probabilidade, quatro pilares dispostos simetricamente; salas no formato **Com colunas** recebem colunas estruturais. Algumas salas também recebem fontes, córregos, poços ou lagoas de água ou lava. Use os botões Água e Lava no mapa para mostrar ou ocultar cada camada. Na aba **Armadilhas**, ajuste a chance por sala e por tile de circulação e, opcionalmente, personalize as frequências das categorias em vez de usar os pesos do conceito. O catálogo nessa aba lista todos os 138 tipos, suas descrições e os espaços em que podem aparecer. Na aba **Tesouros**, configure as recompensas geradas nas salas e consulte o catálogo completo. Na aba Tipos, consulte o catálogo de funções e personalize as frequências das categorias de salas, se desejar. Na aba Acesso, escolha um modo de entrada para a primeira sala: escadaria superior, entrada vinda do exterior ou conexão com o exterior. Nos dois últimos modos, um corredor conecta a sala à borda do mapa. Portas são colocadas apenas em soleiras reais, fora da sala, e bloqueiam a largura do corredor; portas não aparecem com apenas uma casa livre entre elas. Em corredores de dois tiles, ative a opção de portas duplas para usar duas folhas. Cerca de 20% das portas geradas são secretas. Escadas de subida e descida indicam a direção com setas e podem ser posicionadas tanto em salas quanto em corredores. Clique em uma sala no mapa para abri-la em detalhes e aproximar a visualização; use o botão **Mover** do canvas para habilitar o reposicionamento por arraste. Durante a movimentação, as portas da sala movida seguem a chance, o espaçamento e a opção de portas duplas da geração normal, enquanto as portas das salas não movidas são preservadas. O controle **Ajustar** retorna o mapa ao enquadramento completo. Use os controles sobre o mapa para aproximar ou afastar; o botão de exportação acima do guia de salas oferece os formatos SVG e PNG. Os ajustes regeneram o mapa imediatamente; **Reroll masmorra** cria outro mapa com uma nova seed. A seed e métricas básicas são exibidas junto ao mapa.
-Após mover salas, o gerador remove rotas de corredor redundantes, mantendo caminhos mínimos conectados a todas as salas, portas fixas, escadas e acessos externos.
+Para validar e gerar a versão de produção:
+
+```bash
+npm run build
+npm run preview
+```
+
+Os arquivos de produção são gerados em `dist/`.
+
+## Tecnologias
+
+- React
+- TypeScript
+- Vite
+- PixiJS
+
+## Estrutura do projeto
+
+| Caminho | Responsabilidade |
+|---|---|
+| `src/App.tsx` | Interface, configurações e guia |
+| `src/dungeon.ts` | Algoritmos, mapa e elementos gerados |
+| `src/dungeonProfiles.ts` | Conceitos e perfis de geração |
+| `src/roomTypes.ts` | Categorias e funções de salas |
+| `src/treasures.ts` | Categorias e catálogo de tesouros |
+| `src/DungeonCanvas.tsx` | Renderização do mapa e exportação |
+
+## Referências relacionadas
+
+Os projetos abaixo serviram como referências para comparar a apresentação de recursos, algoritmos, controles e instruções de execução. São projetos independentes, não dependências deste gerador:
+
+- [Edgar for Unity](https://github.com/OndrejNepozitek/Edgar-Unity) — gerador procedural configurável com documentação e exemplos.
+- [Dungeon Forge](https://github.com/majidmanzarpour/threejs-procedural-dungeon) — gerador web com seed reproduzível, controles interativos e descrição do pipeline.
+
+## Licença
+
+Este projeto está licenciado sob a **MIT License**.
+
+```text
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
