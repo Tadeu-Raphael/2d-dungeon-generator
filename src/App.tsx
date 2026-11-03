@@ -19,6 +19,7 @@ import {
   EXTERIOR_ENTRANCE_TILE,
   FLOOR_TILE,
   generateDungeon,
+  getNumberedCorridorTraps,
   LAVA_TILE,
   MAX_DUNGEON_HEIGHT,
   MAX_DUNGEON_ROOM_COUNT,
@@ -140,6 +141,7 @@ type RoomMetadataSection = "structure" | "operations" | "narrative";
 
 interface GeneratedTrap extends DungeonTrap {
   corridorRoomNumbers: number[];
+  corridorNumber?: number;
 }
 
 interface RoomPositionEdit {
@@ -467,6 +469,7 @@ function createNarrativeRoomFields(
   const isRitualRoom = roomTypeGroups.ritual.has(roomType);
   const ageOptions = ["40–100 anos", "100–300 anos", "300–700 anos", "Mais de 700 anos"];
   const suggestedAge = ageOptions[(seed + room.number * 17) % ageOptions.length];
+  const trapLabels = room.traps.map((trap) => TRAP_DEFINITIONS[trap].label);
   const faction = roomType === "Cripta"
     ? "Ordem funerária ou mortos-vivos (sugestão)"
     : roomType === "Salão do trono" || roomType === "Cofre" || roomType === "Tesouro"
@@ -480,8 +483,8 @@ function createNarrativeRoomFields(
             : isStorageRoom
               ? "Administradores da fortaleza (sugestão)"
               : "Construtores originais ou habitantes locais (sugestão)";
-  const currentState = room.trap
-    ? `Armadilha presente: ${TRAP_DEFINITIONS[room.trap].label}`
+  const currentState = trapLabels.length > 0
+    ? `Armadilhas presentes: ${trapLabels.join(", ")}`
     : room.liquidType
       ? `Ambiente alterado por ${room.liquidType === "water" ? "água" : "lava"}`
       : room.shape === "multiLevel"
@@ -489,7 +492,7 @@ function createNarrativeRoomFields(
         : "Estado de conservação não simulado";
   const securityLevel = roomType === "Cofre" || roomType === "Tesouro"
     ? "Muito alta (sugestão)"
-    : room.trap || isCombatRoom
+    : room.traps.length > 0 || isCombatRoom
       ? "Alta (sugestão)"
       : roomType === "Entrada" || roomType === "Vestíbulo"
         ? "Média (sugestão)"
@@ -499,7 +502,7 @@ function createNarrativeRoomFields(
     : room.shape === "multiLevel" || room.liquidType === "lava"
       ? "Média (sugestão)"
       : "Baixa (sugestão)";
-  const decayLevel = room.liquidType === "water" || room.trap === "caveIn"
+  const decayLevel = room.liquidType === "water" || room.traps.includes("caveIn")
     ? "Alta (sugestão)"
     : room.shape === "irregular" || (seed + room.number) % 2 === 0
       ? "Média (sugestão)"
@@ -513,7 +516,7 @@ function createNarrativeRoomFields(
   if (roomType === "Salão do trono" || roomType === "Cofre" || roomType === "Tesouro") themeTags.add("royal");
   if (room.shape === "irregular") themeTags.add("cavernous");
   if (room.shape === "multiLevel") themeTags.add("multilevel");
-  if (room.trap) themeTags.add("trapped");
+  if (room.traps.length > 0) themeTags.add("trapped");
   if (room.liquidType === "water") themeTags.add("flooded");
   if (room.liquidType === "lava") themeTags.add("volcanic");
   if (themeTags.size === 0) themeTags.add("abandoned");
@@ -527,10 +530,12 @@ function createNarrativeRoomFields(
     shape,
     pillarCount > 0 ? `${pillarCount} pilares gerados` : "",
     room.liquidFeature ? liquidFeatureLabels[room.liquidFeature] : "",
-    room.trap ? TRAP_DEFINITIONS[room.trap].label : "",
+    ...trapLabels,
   ].filter(Boolean).join("; ");
-  const narrativeHook = room.trap
-    ? `A armadilha "${TRAP_DEFINITIONS[room.trap].label}" protege algo ou tenta manter alguém preso?`
+  const narrativeHook = trapLabels.length > 0
+    ? trapLabels.length === 1
+      ? `A armadilha "${trapLabels[0]}" protege algo ou tenta manter alguém preso?`
+      : `Como as armadilhas (${trapLabels.join(", ")}) protegem este lugar e como podem ser superadas?`
     : room.liquidType
       ? `Quem alterou o ambiente com ${room.liquidType === "water" ? "água" : "lava"} e o que isso está escondendo?`
       : isCombatRoom
@@ -688,13 +693,13 @@ function createRoomMetadataFields(
     },
     {
       property: "trapChance",
-      purpose: "Probabilidade de conter armadilhas",
-      value: `${formatPercent(dungeon.roomTrapChancePercent)} (taxa-base por sala)`,
+      purpose: "Chance-base do primeiro item; adicionais podem aparecer",
+      value: `${formatPercent(dungeon.roomTrapChancePercent)} (mais até duas armadilhas a 35% cada)`,
     },
     {
       property: "treasureChance",
-      purpose: "Probabilidade efetiva de gerar um tesouro nesta sala",
-      value: `${formatPercent(treasureChance)} (sorteada durante a geração)`,
+      purpose: "Chance-base do primeiro item; adicionais podem aparecer",
+      value: `${formatPercent(treasureChance)} (mais até dois tesouros a 35% cada)`,
     },
     {
       property: "secretChance",
@@ -800,7 +805,7 @@ export default function App() {
   const [heightDraft, setHeightDraft] = useState(String(DEFAULT_DUNGEON_PARAMETERS.height));
   const [focusRequest, setFocusRequest] = useState<MapFocusRequest | null>(null);
   const [roomDetailNumber, setRoomDetailNumber] = useState<number | null>(null);
-  const [roomDetailSection, setRoomDetailSection] = useState<RoomMetadataSection>("structure");
+  const [roomDetailSection, setRoomDetailSection] = useState<RoomMetadataSection | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("generation");
   const [roomPositionEdit, setRoomPositionEdit] = useState<RoomPositionEdit | null>(null);
   const guideListRef = useRef<HTMLDivElement | null>(null);
@@ -839,9 +844,6 @@ export default function App() {
   const roomDetail = roomDetailNumber === null
     ? undefined
     : dungeon.roomDetails.find((room) => room.number === roomDetailNumber);
-  const roomDetailTreasureDefinition = roomDetail?.treasure
-    ? getTreasureDefinition(roomDetail.treasure.type)
-    : undefined;
   const roomDetailCategory = roomDetail
     ? ROOM_TYPE_CATEGORIES[roomDetail.roomType.category]
     : undefined;
@@ -857,16 +859,24 @@ export default function App() {
       : [],
     [dungeon, roomDetail, seed],
   );
-  const roomDetailMetadataProperties = roomMetadataSections.find(
-    (section) => section.key === roomDetailSection,
-  )?.properties;
-  const generatedTraps = useMemo(() => dungeon.traps.map((trap): GeneratedTrap => ({
-    ...trap,
-    corridorRoomNumbers: hasBspRooms
-      ? getCorridorRoomNumbers(dungeon, trap.x, trap.y)
-      : [],
-  })), [dungeon, hasBspRooms]);
-  const roomTrapCount = dungeon.roomDetails.filter((room) => room.trap !== undefined).length;
+  const roomDetailMetadataProperties = roomDetailSection
+    ? roomMetadataSections.find((section) => section.key === roomDetailSection)?.properties
+    : undefined;
+  const generatedTraps = useMemo(() => {
+    const corridorNumbers = new Map(
+      getNumberedCorridorTraps(dungeon)
+        .map((trap) => [trap.y * dungeon.width + trap.x, trap.number] as const),
+    );
+    return dungeon.traps.map((trap): GeneratedTrap => ({
+      ...trap,
+      corridorNumber: corridorNumbers.get(trap.y * dungeon.width + trap.x),
+      corridorRoomNumbers: hasBspRooms
+        ? getCorridorRoomNumbers(dungeon, trap.x, trap.y)
+        : [],
+    }));
+  }, [dungeon, hasBspRooms]);
+  const roomTrapCount = dungeon.roomDetails.reduce((count, room) => count + room.traps.length, 0);
+  const roomTreasureCount = dungeon.roomDetails.reduce((count, room) => count + room.treasures.length, 0);
   const usedRoomCategories = [...new Set(
     dungeon.roomDetails.map((room) => room.roomType.category),
   )];
@@ -947,7 +957,7 @@ export default function App() {
     });
   };
   const openRoomDetails = (roomNumber: number) => {
-    setRoomDetailSection("structure");
+    setRoomDetailSection(null);
     setRoomDetailNumber(roomNumber);
     setFocusRequest((current) => ({
       type: "room",
@@ -2038,7 +2048,7 @@ export default function App() {
                 <span className="room-index-kicker">GUIA DE SALAS</span>
                 <strong>Salas e armadilhas</strong>
                 <small className="room-index-summary">
-                  {dungeon.roomDetails.length} salas · {roomTrapCount + generatedTraps.length} armadilhas
+                  {dungeon.roomDetails.length} salas · {roomTrapCount + generatedTraps.length} armadilhas · {roomTreasureCount} tesouros
                 </small>
               </div>
               <span className="room-total">
@@ -2054,19 +2064,15 @@ export default function App() {
                 </div>
               )}
               {dungeon.roomDetails.map((room) => {
-                const roomCategory = ROOM_TYPE_CATEGORIES[room.roomType.category];
-                const shapeDefinition = ROOM_SHAPE_DEFINITIONS.find((shape) => shape.key === room.shape);
-                const treasureDefinition = room.treasure
-                  ? getTreasureDefinition(room.treasure.type)
-                  : undefined;
                 const isSelected = focusRequest?.roomNumber === room.number;
+                const roomCategory = ROOM_TYPE_CATEGORIES[room.roomType.category];
                 return (
                   <button
                     className={`room-entry room-entry-button ${isSelected ? "selected" : ""}`}
                     key={room.number}
                     type="button"
                     data-room-number={room.number}
-                    aria-label={`Ver detalhes da sala ${room.number}: ${room.roomType.title}, categoria ${roomCategory.label}`}
+                    aria-label={`Abrir detalhes da sala ${room.number}: ${room.roomType.title}${room.treasures.length === 1 ? ", com tesouro" : room.treasures.length > 1 ? `, com ${room.treasures.length} tesouros` : ""}${room.traps.length === 1 ? ", com armadilha" : room.traps.length > 1 ? `, com ${room.traps.length} armadilhas` : ""}${room.liquidType === "water" ? ", com água" : ""}`}
                     aria-pressed={isSelected}
                     onClick={() => {
                       openRoomDetails(room.number);
@@ -2074,44 +2080,41 @@ export default function App() {
                   >
                     <span
                       className="room-badge"
-                      style={{ backgroundColor: roomCategory.color, borderColor: roomCategory.color, color: "#10141b" }}
-                      title={roomCategory.label}
+                      style={{
+                        borderColor: roomCategory.color,
+                        backgroundColor: `${roomCategory.color}22`,
+                        color: roomCategory.color,
+                      }}
                     >
                       {room.number.toString().padStart(2, "0")}
                     </span>
                     <span className="room-copy">
                       <span className="room-copy-heading">
                         <strong>{room.roomType.title}</strong>
-                        <small
-                          className="room-category-tag"
-                          style={{ borderColor: roomCategory.color, color: roomCategory.color }}
-                        >
-                          {roomCategory.shortLabel}
-                        </small>
-                        {room.liquidFeature && room.liquidType && (
-                          <small className={`liquid-feature-tag ${room.liquidType}-feature-tag`}>
-                            {liquidFeatureLabels[room.liquidType][room.liquidFeature]}
-                          </small>
+                        {room.liquidType === "water" && (
+                          <span className="room-guide-feature-badge water-room-badge" aria-hidden="true" title="Água">
+                            Água
+                          </span>
                         )}
-                        {room.trap && (
-                          <small className="trap-feature-tag" title={TRAP_DEFINITIONS[room.trap].description}>
-                            {TRAP_DEFINITIONS[room.trap].label}
-                          </small>
-                        )}
-                        {room.treasure && (
-                          <small
-                            className="treasure-feature-tag"
-                            title={treasureDefinition?.description}
+                        {room.treasures.length > 0 && (
+                          <span
+                            className="room-guide-feature-badge treasure-room-badge"
+                            aria-hidden="true"
+                            title={room.treasures.length > 1 ? `${room.treasures.length}x Tesouros` : "Tesouro"}
                           >
-                            {treasureDefinition?.label ?? "Tesouro"}
-                          </small>
+                            {room.treasures.length > 1 ? `${room.treasures.length}x Tesouros` : "Tesouro"}
+                          </span>
+                        )}
+                        {room.traps.length > 0 && (
+                          <span
+                            className="room-guide-feature-badge trap-room-badge"
+                            aria-hidden="true"
+                            title={room.traps.length > 1 ? `${room.traps.length}x Armadilhas` : "Armadilha"}
+                          >
+                            {room.traps.length > 1 ? `${room.traps.length}x Armadilhas` : "Armadilha"}
+                          </span>
                         )}
                       </span>
-                      <small className="room-entry-summary">
-                        {shapeDefinition?.label ?? roomShapeLabels[room.shape]} · {room.width} × {room.height} m
-                        {room.trap ? " · Com armadilha" : ""}
-                        {room.treasure ? " · Com tesouro" : ""}
-                      </small>
                     </span>
                   </button>
                 );
@@ -2130,7 +2133,13 @@ export default function App() {
                         : algorithm === "cellular" ? "Caverna" : "Trilha";
                     return (
                       <article className="room-entry trap-guide-entry" key={`${trap.x}-${trap.y}`}>
-                        <span className="room-badge trap-guide-badge" aria-hidden="true">!</span>
+                        <span
+                          className={`room-badge trap-guide-badge ${trap.corridorNumber ? "numbered-corridor-trap-badge" : ""}`}
+                          aria-hidden="true"
+                          title={trap.corridorNumber ? `Armadilha ${trap.corridorNumber.toString().padStart(2, "0")}` : undefined}
+                        >
+                          {trap.corridorNumber?.toString().padStart(2, "0") ?? "!"}
+                        </span>
                         <span className="room-copy">
                           <span className="room-copy-heading">
                             <strong>{definition.label}</strong>
@@ -2223,8 +2232,12 @@ export default function App() {
                 )}
                 {roomDetailShape && (
                   <div className="room-detail-shape">
-                    <strong>{roomDetailShape.characteristics}</strong>
-                    <small>Aplicações: {roomDetailShape.applications}</small>
+                    <span className="room-detail-shape-heading">CARACTERÍSTICAS DO FORMATO</span>
+                    <p>{roomDetailShape.characteristics}</p>
+                    <div className="room-detail-shape-applications">
+                      <span>APLICAÇÕES</span>
+                      <p>{roomDetailShape.applications}</p>
+                    </div>
                   </div>
                 )}
                 {roomDetail.liquidType && roomDetail.liquidFeature && (
@@ -2233,32 +2246,87 @@ export default function App() {
                     <small>Elemento ambiental incluído nesta sala.</small>
                   </div>
                 )}
-                {roomDetail.trap && (
-                  <div className="room-detail-feature trap-detail-feature">
-                    <strong>
-                      {TRAP_DEFINITIONS[roomDetail.trap].label}
-                      <span>{TRAP_CATEGORY_LABELS[TRAP_DEFINITIONS[roomDetail.trap].category]}</span>
-                    </strong>
-                    <small>{TRAP_DEFINITIONS[roomDetail.trap].description}</small>
-                  </div>
+                {roomDetail.traps.length > 0 && (
+                  <section className="room-detail-feature trap-detail-feature" aria-label="Armadilhas da sala">
+                    <h3 className="room-detail-feature-heading">
+                      {roomDetail.traps.length === 1 ? "Armadilha" : `Armadilhas · ${roomDetail.traps.length}`}
+                    </h3>
+                    <div className="room-detail-feature-list">
+                      {roomDetail.traps.map((trap, index) => {
+                        const definition = TRAP_DEFINITIONS[trap];
+                        return (
+                          <div className="room-detail-feature-item" key={`${trap}-${index}`}>
+                            <div className="room-detail-feature-content">
+                              <strong className="room-detail-feature-name">{definition.label}</strong>
+                              <dl className="room-detail-feature-facts">
+                                <div>
+                                  <dt>Categoria</dt>
+                                  <dd>{TRAP_CATEGORY_LABELS[definition.category]}</dd>
+                                </div>
+                              </dl>
+                              <div className="room-detail-feature-description">
+                                <strong>Funcionamento</strong>
+                                <p>{definition.description}</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
                 )}
-                {roomDetail.treasure && (
-                  <div className="room-detail-feature treasure-detail-feature">
-                    <strong>
-                      {roomDetailTreasureDefinition?.label ?? "Tesouro"}
-                      <span>{TREASURE_CATEGORY_LABELS[roomDetail.treasure.category]}</span>
-                      {roomDetail.treasure.rarity && (
-                        <span>{TREASURE_RARITY_LABELS[roomDetail.treasure.rarity]}</span>
-                      )}
-                    </strong>
-                    <small>{roomDetailTreasureDefinition?.description}</small>
-                    {roomDetailTreasureDefinition && (
-                      <small>Locais comuns: {roomDetailTreasureDefinition.locations}</small>
-                    )}
-                    {roomDetail.treasure.details.map((detail) => (
-                      <small key={detail}>{detail}</small>
-                    ))}
-                  </div>
+                {roomDetail.treasures.length > 0 && (
+                  <section className="room-detail-feature treasure-detail-feature" aria-label="Tesouros da sala">
+                    <h3 className="room-detail-feature-heading">
+                      {roomDetail.treasures.length === 1 ? "Tesouro" : `Tesouros · ${roomDetail.treasures.length}`}
+                    </h3>
+                    <div className="room-detail-feature-list">
+                      {roomDetail.treasures.map((treasure, index) => {
+                        const definition = getTreasureDefinition(treasure.type);
+                        return (
+                          <div className="room-detail-feature-item" key={`${treasure.type}-${index}`}>
+                            <div className="room-detail-feature-content">
+                              <strong className="room-detail-feature-name">{definition?.label ?? "Tesouro"}</strong>
+                              <dl className="room-detail-feature-facts">
+                                <div>
+                                  <dt>Categoria</dt>
+                                  <dd>{TREASURE_CATEGORY_LABELS[treasure.category]}</dd>
+                                </div>
+                                {treasure.rarity && (
+                                  <div>
+                                    <dt>Raridade</dt>
+                                    <dd>{TREASURE_RARITY_LABELS[treasure.rarity]}</dd>
+                                  </div>
+                                )}
+                              </dl>
+                              {definition?.description && (
+                                <div className="room-detail-feature-description">
+                                  <strong>Descrição</strong>
+                                  <p>{definition.description}</p>
+                                </div>
+                              )}
+                              {definition && (
+                                <div className="room-detail-feature-description">
+                                  <strong>Locais comuns</strong>
+                                  <p>{definition.locations}</p>
+                                </div>
+                              )}
+                              {treasure.details.length > 0 && (
+                                <div className="room-detail-feature-description">
+                                  <strong>Detalhes adicionais</strong>
+                                  <ul>
+                                    {treasure.details.map((detail) => (
+                                      <li key={detail}>{detail}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
                 )}
               </section>
               <section className="room-detail-metadata" aria-label="Informações complementares">
@@ -2266,17 +2334,16 @@ export default function App() {
                   <h3>Contexto e detalhes</h3>
                   <small>Informações narrativas são sugestões para desenvolver a masmorra.</small>
                 </div>
-                <nav className="room-metadata-nav" role="tablist" aria-label="Categorias de detalhes da sala">
+                <nav className="room-metadata-nav" aria-label="Categorias de detalhes da sala">
                   {roomMetadataSections.map((section) => (
                     <button
-                      id={`room-detail-tab-${section.key}`}
+                      id={`room-detail-toggle-${section.key}`}
                       className={roomDetailSection === section.key ? "active" : ""}
                       type="button"
-                      role="tab"
-                      aria-selected={roomDetailSection === section.key}
-                      aria-controls={`room-detail-panel-${section.key}`}
+                      aria-expanded={roomDetailSection === section.key}
+                      aria-controls="room-detail-panel"
                       key={section.key}
-                      onClick={() => setRoomDetailSection(section.key)}
+                      onClick={() => setRoomDetailSection((current) => current === section.key ? null : section.key)}
                     >
                       {section.label}
                       <small>{section.properties.length}</small>
@@ -2285,24 +2352,23 @@ export default function App() {
                 </nav>
                 <div
                   className="room-detail-metadata-panel"
-                  id={`room-detail-panel-${roomDetailSection}`}
-                  role="tabpanel"
-                  aria-labelledby={`room-detail-tab-${roomDetailSection}`}
-                  tabIndex={0}
+                  id="room-detail-panel"
+                  aria-labelledby={roomDetailSection ? `room-detail-toggle-${roomDetailSection}` : undefined}
+                  hidden={!roomDetailSection}
                 >
-                  <dl>
+                  <div className="room-detail-metadata-list">
                     {roomDetailMetadata
                       .filter((field) => roomDetailMetadataProperties?.includes(field.property))
                       .map((field) => (
-                        <div className="room-metadata-row" key={field.property}>
-                          <dt>
+                        <div className="room-detail-metadata-item" key={field.property}>
+                          <div className="room-detail-metadata-label">
                             <code>{field.property}</code>
                             <small>{field.purpose}</small>
-                          </dt>
-                          <dd>{field.value}</dd>
+                          </div>
+                          <p>{field.value}</p>
                         </div>
                       ))}
-                  </dl>
+                  </div>
                 </div>
               </section>
             </div>

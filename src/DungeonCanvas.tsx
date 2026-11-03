@@ -24,9 +24,9 @@ import {
   TRAP_DEFINITIONS,
   TRAP_TYPES,
   WATER_TILE,
+  getNumberedCorridorTraps,
 } from "./dungeon";
-import type { Dungeon } from "./dungeon";
-import type { Tile, TrapCategory, TrapType } from "./dungeon";
+import type { Dungeon, NumberedCorridorTrap, Tile, TrapCategory, TrapType } from "./dungeon";
 import { ROOM_TYPE_CATEGORIES } from "./roomTypes";
 import type { RoomTypeCategory } from "./roomTypes";
 
@@ -915,6 +915,20 @@ function createCaveLiquidSvgFeature(tile: Tile, tileX: number, tileY: number, ti
   return `<g transform="translate(${tileX} ${tileY}) scale(${tileSize})" stroke-linecap="round" stroke-linejoin="round"><rect x=".08" y=".08" width=".84" height=".84" fill="${fill}" stroke="${border}" stroke-width=".05"/>${mark}</g>`;
 }
 
+function createCorridorTrapNumberSvgLabel(
+  trap: NumberedCorridorTrap,
+  tileSize: number,
+): string {
+  const centerX = (trap.x + 0.5) * tileSize;
+  const centerY = (trap.y + 0.5) * tileSize;
+  const badgeWidth = Math.max(14, Math.min(20, tileSize * 0.9));
+  const badgeHeight = Math.max(12, Math.min(16, tileSize * 0.85));
+  return [
+    `<rect x="${centerX - badgeWidth / 2}" y="${centerY - badgeHeight / 2}" width="${badgeWidth}" height="${badgeHeight}" rx="${badgeHeight * 0.25}" fill="#8e4032" stroke="#f0a36f" stroke-width="${Math.max(1, tileSize * 0.06)}"/>`,
+    `<text x="${centerX}" y="${centerY}" fill="#fff1df" font-family="DM Mono, monospace" font-size="${Math.min(9, Math.max(7, tileSize * 0.5))}" font-weight="600" text-anchor="middle" dominant-baseline="central">${trap.number.toString().padStart(2, "0")}</text>`,
+  ].join("");
+}
+
 function createDungeonSvg(dungeon: Dungeon): string {
   const tileSize = getExportTileSize(dungeon);
   const inset = Math.max(1, tileSize * 0.09);
@@ -937,7 +951,10 @@ function createDungeonSvg(dungeon: Dungeon): string {
         ].join("");
       }).join("")
       : "";
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><title>Mapa de masmorra</title><image width="${width}" height="${height}" href="${tileImage}" image-rendering="pixelated"/>${roomLabels}</svg>`;
+    const corridorTrapLabels = tileSize >= 8
+      ? getNumberedCorridorTraps(dungeon).map((trap) => createCorridorTrapNumberSvgLabel(trap, tileSize)).join("")
+      : "";
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><title>Mapa de masmorra</title><image width="${width}" height="${height}" href="${tileImage}" image-rendering="pixelated"/>${roomLabels}${corridorTrapLabels}</svg>`;
   }
 
   const elements = [`<rect width="${width}" height="${height}" fill="#0b1017"/>`];
@@ -1089,6 +1106,9 @@ function createDungeonSvg(dungeon: Dungeon): string {
     elements.push(
       `<text x="${centerX}" y="${centerY}" fill="#10141b" font-family="DM Mono, monospace" font-size="8" text-anchor="middle" dominant-baseline="central">${room.number.toString().padStart(2, "0")}</text>`,
     );
+  }
+  for (const trap of getNumberedCorridorTraps(dungeon)) {
+    elements.push(createCorridorTrapNumberSvgLabel(trap, tileSize));
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><title>Mapa de masmorra</title>${elements.join("")}</svg>`;
@@ -1397,6 +1417,33 @@ export default function DungeonCanvas({
             fontSize: Math.min(9, Math.max(7, displayedTileSize * 0.5)),
             fontWeight: "500",
             fill: "#10141b",
+            align: "center",
+          },
+        });
+        label.anchor.set(0.5);
+        label.position.set(centerX, centerY);
+        roomLabels.addChild(badge, label);
+      }
+      for (const trap of getNumberedCorridorTraps(dungeon)) {
+        const displayedTileSize = tileSize * zoom;
+        const centerX = map.x + (trap.x + 0.5) * displayedTileSize;
+        const centerY = map.y + (trap.y + 0.5) * displayedTileSize;
+        const badgeWidth = Math.max(14, Math.min(20, displayedTileSize * 0.9));
+        const badgeHeight = Math.max(12, Math.min(16, displayedTileSize * 0.85));
+        const badge = new Graphics()
+          .roundRect(-badgeWidth / 2, -badgeHeight / 2, badgeWidth, badgeHeight, badgeHeight * 0.25)
+          .fill("#8e4032")
+          .stroke({ color: "#f0a36f", width: Math.max(1, displayedTileSize * 0.06) });
+        badge.position.set(centerX, centerY);
+
+        const label = new Text({
+          text: trap.number.toString().padStart(2, "0"),
+          resolution: Math.max(2, window.devicePixelRatio || 1),
+          style: {
+            fontFamily: "DM Mono",
+            fontSize: Math.min(9, Math.max(7, displayedTileSize * 0.5)),
+            fontWeight: "600",
+            fill: "#fff1df",
             align: "center",
           },
         });

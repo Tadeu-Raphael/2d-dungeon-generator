@@ -583,6 +583,7 @@ export interface Dungeon {
   seed: number;
   algorithm: Algorithm;
   corridorWidth: number;
+  doubleDoorsEnabled: boolean;
   trapCategoryWeights: TrapCategoryWeights;
   roomTrapChancePercent: number;
   corridorTrapChancePercent: number;
@@ -755,8 +756,8 @@ export interface DungeonRoom extends Rect {
   roomType: RoomTypeDefinition;
   liquidFeature?: LiquidFeature;
   liquidType?: LiquidType;
-  trap?: TrapType;
-  treasure?: DungeonTreasure;
+  traps: TrapType[];
+  treasures: DungeonTreasure[];
 }
 
 interface GeneratedRoom extends Rect {
@@ -764,8 +765,8 @@ interface GeneratedRoom extends Rect {
   generationBounds: RoomGenerationBounds;
   liquidFeature?: LiquidFeature;
   liquidType?: LiquidType;
-  trap?: TrapType;
-  treasure?: DungeonTreasure;
+  traps?: TrapType[];
+  treasures?: DungeonTreasure[];
 }
 
 export const DEFAULT_DUNGEON_PARAMETERS: DungeonParameters = {
@@ -840,6 +841,17 @@ const WALL: Tile = 0;
 const FLOOR: Tile = FLOOR_TILE;
 export const CORRIDOR_TILE: Tile = 2;
 const CORRIDOR = CORRIDOR_TILE;
+export interface NumberedCorridorTrap extends DungeonTrap {
+  number: number;
+}
+
+export function getNumberedCorridorTraps(dungeon: Dungeon): NumberedCorridorTrap[] {
+  return dungeon.traps
+    .filter((trap) => dungeon.tiles[trap.y]?.[trap.x] === CORRIDOR_TILE)
+    .sort((left, right) => left.y - right.y || left.x - right.x)
+    .map((trap, index) => ({ ...trap, number: index + 1 }));
+}
+
 const DOOR = DOOR_TILE;
 const STAIRS_UP = STAIRS_UP_TILE;
 const STAIRS_DOWN = STAIRS_DOWN_TILE;
@@ -917,6 +929,7 @@ function carveRoom(
   const radiusX = (shape === "round" ? Math.min(room.width, room.height) : room.width) / 2;
   const radiusY = (shape === "round" ? Math.min(room.width, room.height) : room.height) / 2;
   const orientation = Math.floor(variation / (Math.PI / 2)) % 4;
+  let carvedTileCount = 0;
 
   for (let y = room.y; y < room.y + room.height; y += 1) {
     for (let x = room.x; x < room.x + room.width; x += 1) {
@@ -973,9 +986,11 @@ function carveRoom(
       }
       if (isFloor) {
         tiles[y][x] = tile;
+        carvedTileCount += 1;
       }
     }
   }
+  if (carvedTileCount === 0) carveRect(tiles, room, tile);
 }
 
 function createWeightedTargets<T extends string>(
@@ -1448,6 +1463,19 @@ function generateBsp(
 
 type Point = [number, number];
 
+const DOORWAY_ROOM_SURFACE_TILES = new Set<Tile>([
+  FLOOR_TILE,
+  STAIRS_UP_TILE,
+  STAIRS_DOWN_TILE,
+  ELEVATED_FLOOR_TILE,
+  ROOM_STAIRS_TILE,
+  WATER_TILE,
+  LAVA_TILE,
+  ...TRAP_TYPES
+    .filter((type) => TRAP_DEFINITIONS[type].placement !== "corridor")
+    .map((type) => TRAP_DEFINITIONS[type].tile),
+]);
+
 function findDoorwayCandidates(tiles: Tile[][], room: Rect, doorwayWidth: number): Point[][] {
   const candidates = new Map<string, Point[]>();
   const minY = Math.max(1, room.y - 1);
@@ -1483,12 +1511,12 @@ function findDoorwayCandidates(tiles: Tile[][], room: Rect, doorwayWidth: number
               && roomX < room.x + room.width
               && roomY >= room.y
               && roomY < room.y + room.height
-              && tiles[roomY][roomX] === FLOOR;
+              && DOORWAY_ROOM_SURFACE_TILES.has(tiles[roomY][roomX]);
             return isOutsideRoom && touchesRoom && tiles[corridorY]?.[corridorX] === CORRIDOR;
           });
           if (!completesEntrance) continue;
 
-          const hasSideCorridor = group.some(([groupX, groupY]) => (
+          const hasSideOpening = group.some(([groupX, groupY]) => (
             [[1, 0], [-1, 0], [0, 1], [0, -1]] as const
           ).some(([deltaX, deltaY]) => {
             if (
@@ -1497,9 +1525,11 @@ function findDoorwayCandidates(tiles: Tile[][], room: Rect, doorwayWidth: number
             ) return false;
             const nextX = groupX + deltaX;
             const nextY = groupY + deltaY;
-            return !groupSet.has(`${nextX},${nextY}`) && tiles[nextY]?.[nextX] === CORRIDOR;
+            if (groupSet.has(`${nextX},${nextY}`)) return false;
+            const sideTile = tiles[nextY]?.[nextX] ?? WALL;
+            return sideTile !== WALL && sideTile !== CAVE_CONNECTION_WALL_TILE;
           }));
-          if (hasSideCorridor) continue;
+          if (hasSideOpening) continue;
 
           const key = group.map(([groupX, groupY]) => `${groupX},${groupY}`).sort().join("|");
           candidates.set(key, group);
@@ -1512,9 +1542,12 @@ function findDoorwayCandidates(tiles: Tile[][], room: Rect, doorwayWidth: number
 
 function hasNearbyDoor(tiles: Tile[][], group: Point[]): boolean {
   return group.some(([x, y]) => {
-    for (let deltaY = -1; deltaY <= 1; deltaY += 1) {
-      for (let deltaX = -1; deltaX <= 1; deltaX += 1) {
-        if (deltaX === 0 && deltaY === 0) continue;
+    for (let deltaY = -2; deltaY <= 2; deltaY += 1) {
+      for (let deltaX = -2; deltaX <= 2; deltaX += 1) {
+        if (
+          deltaX === 0 && deltaY === 0
+          || Math.abs(deltaX) + Math.abs(deltaY) > 2
+        ) continue;
         const neighbor = tiles[y + deltaY]?.[x + deltaX];
         if (neighbor === DOOR || neighbor === SECRET_DOOR_TILE) return true;
       }
@@ -1529,6 +1562,7 @@ function placeDoors(
   random: () => number,
   corridorWidth: number,
   doubleDoorsEnabled: boolean,
+  forceDoorRoomIndexes: ReadonlySet<number> = new Set(),
 ): void {
   const doorwayWidth = corridorWidth === 2 && !doubleDoorsEnabled
     ? 0
@@ -1536,13 +1570,89 @@ function placeDoors(
   if (doorwayWidth === 0) return;
 
   for (let index = 1; index < rooms.length; index += 1) {
-    if (random() >= 0.8) continue;
+    if (random() >= 0.8 && !forceDoorRoomIndexes.has(index)) continue;
     const candidates = findDoorwayCandidates(tiles, rooms[index], doorwayWidth)
       .filter((group) => !hasNearbyDoor(tiles, group));
     if (candidates.length === 0) continue;
     const group = candidates[Math.floor(random() * candidates.length)];
     const doorTile = random() < 0.2 ? SECRET_DOOR_TILE : DOOR;
     for (const [x, y] of group) tiles[y][x] = doorTile;
+  }
+}
+
+function removeInvalidDoors(
+  tiles: Tile[][],
+  rooms: GeneratedRoom[],
+  corridorWidth: number,
+  doubleDoorsEnabled: boolean,
+): void {
+  const doorwayWidth = corridorWidth === 2 && !doubleDoorsEnabled
+    ? 0
+    : corridorWidth;
+  const originalTiles = new Map<number, Tile>();
+  const doorGroups: Point[][] = [];
+  const visited = new Set<number>();
+
+  for (let y = 0; y < tiles.length; y += 1) {
+    for (let x = 0; x < tiles[y].length; x += 1) {
+      const tile = tiles[y][x];
+      if (tile === DOOR_TILE || tile === SECRET_DOOR_TILE) {
+        const position = y * tiles[y].length + x;
+        originalTiles.set(position, tile);
+        tiles[y][x] = CORRIDOR_TILE;
+      }
+    }
+  }
+
+  for (const [position, tile] of originalTiles) {
+    if (visited.has(position)) continue;
+    const group: Point[] = [];
+    const queue = [position];
+    visited.add(position);
+    for (let index = 0; index < queue.length; index += 1) {
+      const current = queue[index];
+      const x = current % tiles[0].length;
+      const y = Math.floor(current / tiles[0].length);
+      group.push([x, y]);
+      for (const [nextX, nextY] of [
+        [x + 1, y],
+        [x - 1, y],
+        [x, y + 1],
+        [x, y - 1],
+      ] as const) {
+        const nextPosition = nextY * tiles[0].length + nextX;
+        if (
+          nextX < 0
+          || nextY < 0
+          || nextX >= tiles[0].length
+          || nextY >= tiles.length
+          || visited.has(nextPosition)
+          || originalTiles.get(nextPosition) !== tile
+        ) continue;
+        visited.add(nextPosition);
+        queue.push(nextPosition);
+      }
+    }
+    doorGroups.push(group);
+  }
+
+  const validDoorwayKeys = new Set<string>();
+  if (doorwayWidth > 0) {
+    for (const room of rooms) {
+      for (const group of findDoorwayCandidates(tiles, room, doorwayWidth)) {
+        validDoorwayKeys.add(group.map(([x, y]) => `${x},${y}`).sort().join("|"));
+      }
+    }
+  }
+
+  for (const group of doorGroups) {
+    const key = group.map(([x, y]) => `${x},${y}`).sort().join("|");
+    const isCompleteDoorway = group.length === doorwayWidth && validDoorwayKeys.has(key);
+    for (const [x, y] of group) {
+      const position = y * tiles[0].length + x;
+      const originalTile = originalTiles.get(position);
+      tiles[y][x] = isCompleteDoorway && originalTile !== undefined ? originalTile : WALL;
+    }
   }
 }
 
@@ -1820,6 +1930,10 @@ function selectWeightedTrapType(
   return finalTypes[Math.floor(random() * finalTypes.length)];
 }
 
+const MAX_ROOM_TRAPS = 3;
+const MAX_ROOM_TREASURES = 3;
+const ADDITIONAL_ROOM_ITEM_CHANCE = 0.35;
+
 function placeTraps(
   rooms: GeneratedRoom[],
   random: () => number,
@@ -1828,10 +1942,17 @@ function placeTraps(
 ): void {
   const roomTrapTypes = TRAP_TYPES.filter((type) => TRAP_DEFINITIONS[type].placement !== "corridor");
   for (const room of rooms) {
-    if (random() >= chancePercent / 100) continue;
-    const trapType = selectWeightedTrapType(roomTrapTypes, weights, random);
-    if (!trapType) continue;
-    room.trap = trapType;
+    const traps: TrapType[] = [];
+    if (random() < chancePercent / 100) {
+      for (let index = 0; index < MAX_ROOM_TRAPS; index += 1) {
+        if (index > 0 && random() >= ADDITIONAL_ROOM_ITEM_CHANCE) break;
+        const availableTypes = roomTrapTypes.filter((type) => !traps.includes(type));
+        const trapType = selectWeightedTrapType(availableTypes, weights, random);
+        if (!trapType) break;
+        traps.push(trapType);
+      }
+    }
+    room.traps = traps;
   }
 }
 
@@ -2004,30 +2125,35 @@ function placeRoomTreasures(
       room.roomType.title,
       chancePercent,
     );
-    if (random() >= roomChance / 100) continue;
+    const treasures: DungeonTreasure[] = [];
+    if (random() < roomChance / 100) {
+      for (let index = 0; index < MAX_ROOM_TREASURES; index += 1) {
+        if (index > 0 && random() >= ADDITIONAL_ROOM_ITEM_CHANCE) break;
+        const category = selectWeightedTreasureCategory(categoryWeights, consumablesEnabled, random);
+        if (!category) break;
 
-    const category = selectWeightedTreasureCategory(categoryWeights, consumablesEnabled, random);
-    if (!category) continue;
+        const rarity = category === "magical"
+          ? selectWeightedTreasureRarity(rarityWeights, random)
+          : undefined;
+        if (category === "magical" && !rarity) break;
 
-    const rarity = category === "magical"
-      ? selectWeightedTreasureRarity(rarityWeights, random)
-      : undefined;
-    if (category === "magical" && !rarity) continue;
+        const categoryDefinitions: readonly TreasureDefinition[] = category === "magical"
+          ? TREASURE_CATALOG.magical.filter((definition) => definition.rarity === rarity)
+          : TREASURE_CATALOG[category];
+        const contextualDefinitions = categoryDefinitions.filter((definition) => treasureMatchesRoom(definition, room));
+        const availableDefinitions = contextualDefinitions.length > 0 ? contextualDefinitions : categoryDefinitions;
+        if (availableDefinitions.length === 0) break;
 
-    const categoryDefinitions: readonly TreasureDefinition[] = category === "magical"
-      ? TREASURE_CATALOG.magical.filter((definition) => definition.rarity === rarity)
-      : TREASURE_CATALOG[category];
-    const contextualDefinitions = categoryDefinitions.filter((definition) => treasureMatchesRoom(definition, room));
-    const availableDefinitions = contextualDefinitions.length > 0 ? contextualDefinitions : categoryDefinitions;
-    if (availableDefinitions.length === 0) continue;
-
-    const definition = selectRandomValue(availableDefinitions, random);
-    room.treasure = {
-      type: definition.id as TreasureType,
-      category,
-      rarity,
-      details: createTreasureDetails(definition, category, random),
-    };
+        const definition = selectRandomValue(availableDefinitions, random);
+        treasures.push({
+          type: definition.id as TreasureType,
+          category,
+          rarity,
+          details: createTreasureDetails(definition, category, random),
+        });
+      }
+    }
+    room.treasures = treasures;
   }
 }
 
@@ -2051,11 +2177,56 @@ function findRoomStairPosition(
   return edgeCandidates[Math.floor(random() * edgeCandidates.length)];
 }
 
-function findFarthestOpenPoint(tiles: Tile[][], origin: Point | undefined, random: () => number): Point | undefined {
+function isStraightCorridorTile(tiles: Tile[][], x: number, y: number, corridorWidth: number): boolean {
+  if (tiles[y]?.[x] !== CORRIDOR) return false;
+  const width = Math.max(1, Math.min(3, Math.floor(corridorWidth)));
+  const offsets = Array.from(
+    { length: width },
+    (_, index) => index - Math.floor((width - 1) / 2),
+  );
+  const hasStraightRun = (horizontal: boolean): boolean => {
+    const position = horizontal ? y : x;
+    for (const offset of offsets) {
+      const center = position - offset;
+      const lanePositions = offsets.map((laneOffset) => center + laneOffset);
+      if (!lanePositions.includes(position)) continue;
+      const hasForwardAndBackwardNeighbors = lanePositions.every((lanePosition) => (
+        horizontal
+          ? tiles[lanePosition]?.[x - 1] === CORRIDOR && tiles[lanePosition]?.[x + 1] === CORRIDOR
+          : tiles[y - 1]?.[lanePosition] === CORRIDOR && tiles[y + 1]?.[lanePosition] === CORRIDOR
+      ));
+      if (!hasForwardAndBackwardNeighbors) continue;
+
+      const minimumLane = Math.min(...lanePositions);
+      const maximumLane = Math.max(...lanePositions);
+      const hasCrossing = horizontal
+        ? Array.from({ length: 3 }, (_, index) => x + index - 1).some((laneX) => (
+          tiles[minimumLane - 1]?.[laneX] === CORRIDOR
+          || tiles[maximumLane + 1]?.[laneX] === CORRIDOR
+        ))
+        : Array.from({ length: 3 }, (_, index) => y + index - 1).some((laneY) => (
+          tiles[laneY]?.[minimumLane - 1] === CORRIDOR
+          || tiles[laneY]?.[maximumLane + 1] === CORRIDOR
+        ));
+      if (!hasCrossing) return true;
+    }
+    return false;
+  };
+  return hasStraightRun(true) || hasStraightRun(false);
+}
+
+function findFarthestOpenPoint(
+  tiles: Tile[][],
+  origin: Point | undefined,
+  random: () => number,
+  corridorWidth: number,
+): Point | undefined {
   const candidates: Point[] = [];
   for (let y = 0; y < tiles.length; y += 1) {
     for (let x = 0; x < tiles[y].length; x += 1) {
-      if (tiles[y][x] === FLOOR || tiles[y][x] === CORRIDOR) candidates.push([x, y]);
+      if (tiles[y][x] === FLOOR || isStraightCorridorTile(tiles, x, y, corridorWidth)) {
+        candidates.push([x, y]);
+      }
     }
   }
   if (candidates.length === 0) return undefined;
@@ -2075,6 +2246,46 @@ function findFarthestOpenPoint(tiles: Tile[][], origin: Point | undefined, rando
   }
   if (farthestCandidates.length === 0) return undefined;
   return farthestCandidates[Math.floor(random() * farthestCandidates.length)];
+}
+
+function findCorridorStairPosition(
+  tiles: Tile[][],
+  excluded: Point | undefined,
+  random: () => number,
+  corridorWidth: number,
+): Point | undefined {
+  const candidates: Point[] = [];
+  for (let y = 0; y < tiles.length; y += 1) {
+    for (let x = 0; x < tiles[y].length; x += 1) {
+      if (
+        isStraightCorridorTile(tiles, x, y, corridorWidth)
+        && (excluded === undefined || x !== excluded[0] || y !== excluded[1])
+      ) {
+        candidates.push([x, y]);
+      }
+    }
+  }
+  if (candidates.length === 0) return undefined;
+  return candidates[Math.floor(random() * candidates.length)];
+}
+
+function findStairPosition(
+  tiles: Tile[][],
+  room: GeneratedRoom | undefined,
+  excluded: Point | undefined,
+  random: () => number,
+  corridorWidth: number,
+): Point | undefined {
+  if (random() < 0.35) {
+    const corridorPosition = findCorridorStairPosition(tiles, excluded, random, corridorWidth);
+    if (corridorPosition) return corridorPosition;
+  }
+
+  const roomPosition = room ? findRoomStairPosition(tiles, room, random) : undefined;
+  if (roomPosition && (excluded === undefined || roomPosition[0] !== excluded[0] || roomPosition[1] !== excluded[1])) {
+    return roomPosition;
+  }
+  return findFarthestOpenPoint(tiles, excluded, random, corridorWidth);
 }
 
 function carveExteriorAccess(tiles: Tile[][], room: GeneratedRoom, accessTile: Tile): void {
@@ -2114,13 +2325,18 @@ function placeStairs(
   rooms: GeneratedRoom[],
   random: () => number,
   entranceMode: EntranceMode,
+  corridorWidth: number,
 ): void {
-  let upstairs = rooms.length > 0
+  let upstairs = entranceMode === "upper-stairs" && rooms[0]
     ? findRoomStairPosition(tiles, rooms[0], random)
-    : findFarthestOpenPoint(tiles, undefined, random);
-  let downstairs = rooms.length > 1
-    ? findRoomStairPosition(tiles, rooms[rooms.length - 1], random)
-    : findFarthestOpenPoint(tiles, upstairs, random);
+    : findStairPosition(tiles, rooms[0], undefined, random, corridorWidth);
+  let downstairs = findStairPosition(
+    tiles,
+    rooms.length > 1 ? rooms[rooms.length - 1] : undefined,
+    upstairs,
+    random,
+    corridorWidth,
+  );
 
   const usesExteriorAccess = rooms.length > 0 && entranceMode !== "upper-stairs";
   if (usesExteriorAccess) {
@@ -2129,12 +2345,12 @@ function placeStairs(
       : EXTERIOR_CONNECTION_TILE;
     carveExteriorAccess(tiles, rooms[0], accessTile);
   } else {
-    if (!upstairs) upstairs = findFarthestOpenPoint(tiles, undefined, random);
+    if (!upstairs) upstairs = findFarthestOpenPoint(tiles, undefined, random, corridorWidth);
     if (upstairs) tiles[upstairs[1]][upstairs[0]] = STAIRS_UP;
   }
-  if (!downstairs) downstairs = findFarthestOpenPoint(tiles, upstairs, random);
+  if (!downstairs) downstairs = findFarthestOpenPoint(tiles, upstairs, random, corridorWidth);
   if (upstairs && downstairs && upstairs[0] === downstairs[0] && upstairs[1] === downstairs[1]) {
-    downstairs = findFarthestOpenPoint(tiles, upstairs, random);
+    downstairs = findFarthestOpenPoint(tiles, upstairs, random, corridorWidth);
   }
 
   if (downstairs) tiles[downstairs[1]][downstairs[0]] = STAIRS_DOWN;
@@ -2602,7 +2818,7 @@ export function generateDungeon(
     parameters.corridorWidth,
     parameters.doubleDoorsEnabled,
   );
-  placeStairs(tiles, roomRects, random, parameters.entranceMode);
+  placeStairs(tiles, roomRects, random, parameters.entranceMode, parameters.corridorWidth);
   placeTraps(
     roomRects,
     random,
@@ -2637,6 +2853,8 @@ export function generateDungeon(
       centerY: room.y + room.height / 2,
       shape: room.shape,
       roomType: roomTypes[index],
+      traps: room.traps ?? [],
+      treasures: [],
     };
   });
   placeRoomTreasures(
@@ -2658,6 +2876,7 @@ export function generateDungeon(
     seed,
     algorithm,
     corridorWidth: parameters.corridorWidth,
+    doubleDoorsEnabled: parameters.doubleDoorsEnabled,
     trapCategoryWeights: parameters.trapCategoryWeights,
     roomTrapChancePercent: parameters.roomTrapChancePercent,
     corridorTrapChancePercent: parameters.corridorTrapChancePercent,
@@ -2678,6 +2897,13 @@ export function repositionDungeonRooms(
     const position = positions[room.number];
     return position ? { ...room, x: position.x, y: position.y } : room;
   });
+  const movedRoomNumbers = new Set<number>();
+  for (const [index, room] of rooms.entries()) {
+    const originalRoom = dungeon.roomDetails[index];
+    if (room.x !== originalRoom.x || room.y !== originalRoom.y) {
+      movedRoomNumbers.add(room.number);
+    }
+  }
   for (const [index, room] of rooms.entries()) {
     if (
       !Number.isInteger(room.x)
@@ -2697,6 +2923,7 @@ export function repositionDungeonRooms(
       if (overlapsWithClearance) return null;
     }
   }
+  if (movedRoomNumbers.size === 0) return dungeon;
 
   const roomSurfaceTiles = new Set<Tile>([
     FLOOR_TILE,
@@ -2716,16 +2943,36 @@ export function repositionDungeonRooms(
       .filter((type) => TRAP_DEFINITIONS[type].placement === "corridor")
       .map((type) => TRAP_DEFINITIONS[type].tile),
   );
-  const roomTemplates = dungeon.roomDetails.map((room) => (
-    Array.from({ length: room.height }, (_, offsetY) => (
+  const roomTemplates = dungeon.roomDetails.map((room) => {
+    const template = Array.from({ length: room.height }, (_, offsetY) => (
       Array.from({ length: room.width }, (_, offsetX) => {
         const tile = dungeon.tiles[room.y + offsetY]?.[room.x + offsetX] ?? WALL;
         return roomSurfaceTiles.has(tile) ? tile : WALL;
       })
-    ))
-  ));
+    ));
+    if (!template.some((row) => row.some((tile) => roomSurfaceTiles.has(tile)))) {
+      for (const row of template) row.fill(FLOOR_TILE);
+    }
+    return template;
+  });
   const tiles = dungeon.tiles.map((row) => [...row]);
   let exteriorAccessTile: Tile | undefined;
+  const doorBelongsToRoom = (room: DungeonRoom, x: number, y: number): boolean => (
+    (
+      (x === room.x - 1 || x === room.x + room.width)
+      && y >= room.y
+      && y < room.y + room.height
+    )
+    || (
+      (y === room.y - 1 || y === room.y + room.height)
+      && x >= room.x
+      && x < room.x + room.width
+    )
+  );
+  const roomsWithDoorsBeforeMove = new Set<number>();
+  const stationaryDoorConnections: Array<{ doorPosition: number; doorTile: Tile; corridorPosition: number }> = [];
+  const corridorStairs: Tile[] = [];
+  const protectedDoorSidePositions = new Set<number>();
   for (let y = 0; y < dungeon.height; y += 1) {
     for (let x = 0; x < dungeon.width; x += 1) {
       const tile = tiles[y][x];
@@ -2736,6 +2983,48 @@ export function repositionDungeonRooms(
       if (tile === EXTERIOR_ENTRANCE_TILE || tile === EXTERIOR_CONNECTION_TILE) {
         exteriorAccessTile = tile;
       }
+      if (tile === DOOR_TILE || tile === SECRET_DOOR_TILE) {
+        const ownerRoom = dungeon.roomDetails.find((room) => doorBelongsToRoom(room, x, y));
+        if (ownerRoom && ownerRoom.number > 1) roomsWithDoorsBeforeMove.add(ownerRoom.number);
+        if (ownerRoom && !movedRoomNumbers.has(ownerRoom.number)) {
+          const corridorX = x === ownerRoom.x - 1
+            ? x - 1
+            : x === ownerRoom.x + ownerRoom.width
+              ? x + 1
+              : x;
+          const corridorY = y === ownerRoom.y - 1
+            ? y - 1
+            : y === ownerRoom.y + ownerRoom.height
+              ? y + 1
+              : y;
+          if (tiles[corridorY]?.[corridorX] === CORRIDOR_TILE) {
+            stationaryDoorConnections.push({
+              doorPosition: y * dungeon.width + x,
+              doorTile: tile,
+              corridorPosition: corridorY * dungeon.width + corridorX,
+            });
+          }
+          const verticalDoorway = x === ownerRoom.x - 1 || x === ownerRoom.x + ownerRoom.width;
+          const sideOffsets: Point[] = verticalDoorway
+            ? [[0, -1], [0, 1]]
+            : [[-1, 0], [1, 0]];
+          for (const [offsetX, offsetY] of sideOffsets) {
+            const sideX = x + offsetX;
+            const sideY = y + offsetY;
+            const sideTile = dungeon.tiles[sideY]?.[sideX];
+            if (
+              sideTile === WALL
+              || sideTile === CAVE_CONNECTION_WALL_TILE
+            ) {
+              protectedDoorSidePositions.add(sideY * dungeon.width + sideX);
+            }
+          }
+        }
+        if (!ownerRoom || movedRoomNumbers.has(ownerRoom.number)) {
+          tiles[y][x] = WALL;
+        }
+        continue;
+      }
       if (corridorTrapTiles.has(tile)) {
         const isCaveFloor = dungeon.algorithm === "cellular"
           || tiles.slice(Math.max(0, y - 1), y + 2).some((row) => (
@@ -2744,11 +3033,22 @@ export function repositionDungeonRooms(
         tiles[y][x] = isCaveFloor ? CAVE_TILE : WALL;
         continue;
       }
+      if (tile === STAIRS_UP_TILE || tile === STAIRS_DOWN_TILE) {
+        const belongsToRoom = dungeon.roomDetails.some((room) => (
+          x >= room.x
+          && x < room.x + room.width
+          && y >= room.y
+          && y < room.y + room.height
+        ));
+        if (!belongsToRoom) {
+          corridorStairs.push(tile);
+          tiles[y][x] = WALL;
+        }
+        continue;
+      }
+      if (tile === CORRIDOR_TILE) continue;
       if (
-        tile === CORRIDOR_TILE
-        || tile === CAVE_CONNECTION_WALL_TILE
-        || tile === DOOR_TILE
-        || tile === SECRET_DOOR_TILE
+        tile === CAVE_CONNECTION_WALL_TILE
         || tile === EXTERIOR_ENTRANCE_TILE
         || tile === EXTERIOR_CONNECTION_TILE
       ) {
@@ -2781,7 +3081,6 @@ export function repositionDungeonRooms(
       }
     }
   }
-
   const getRoomExits = (roomIndex: number): Array<{ position: number; roomPositions: number[] }> => {
     const room = rooms[roomIndex];
     const exits = new Map<number, Set<number>>();
@@ -2817,6 +3116,7 @@ export function repositionDungeonRooms(
               || tiles[nextY][nextX] === FLOOR_TILE
               || tiles[nextY][nextX] === CORRIDOR_TILE
               || tiles[nextY][nextX] === DOOR_TILE
+              || tiles[nextY][nextX] === SECRET_DOOR_TILE
             );
           if (!isRoomBoundary && !isOpenRoute) continue;
           const roomPositions = exits.get(nextPosition) ?? new Set<number>();
@@ -2921,7 +3221,10 @@ export function repositionDungeonRooms(
       for (const [nextX, nextY] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]] as const) {
         if (nextX < 1 || nextY < 1 || nextX >= dungeon.width - 1 || nextY >= dungeon.height - 1) continue;
         const nextPosition = nextY * dungeon.width + nextX;
-        if (previous[nextPosition] !== -1) continue;
+        if (
+          previous[nextPosition] !== -1
+          || protectedDoorSidePositions.has(nextPosition)
+        ) continue;
         if (roomAt[nextPosition] !== -1 && !targetExitPositions.has(nextPosition)) continue;
         const tile = tiles[nextY][nextX];
         if (
@@ -2929,6 +3232,7 @@ export function repositionDungeonRooms(
           && tile !== FLOOR_TILE
           && tile !== CORRIDOR_TILE
           && tile !== DOOR_TILE
+          && tile !== SECRET_DOOR_TILE
         ) continue;
         previous[nextPosition] = position;
         queue[tail] = nextPosition;
@@ -2956,50 +3260,180 @@ export function repositionDungeonRooms(
         const corridorX = x + (horizontal ? 0 : shift);
         const corridorY = y + (horizontal ? shift : 0);
         const corridorPosition = corridorY * dungeon.width + corridorX;
+        if (protectedDoorSidePositions.has(corridorPosition)) continue;
         if (roomAt[corridorPosition] !== -1 && !(isEndpoint && offset === 0)) continue;
         if (tiles[corridorY]?.[corridorX] === WALL) tiles[corridorY][corridorX] = CORRIDOR_TILE;
       }
     }
-    for (const endpoint of [path[0], path[path.length - 1]]) {
-      const x = endpoint % dungeon.width;
-      const y = Math.floor(endpoint / dungeon.width);
-      if (tiles[y][x] === CORRIDOR_TILE) tiles[y][x] = DOOR_TILE;
-    }
     return true;
   };
 
-  let reachable = getReachableCells();
-  while (true) {
-    const connectedRooms = rooms
-      .map((room, index) => (isRoomReachable(room, reachable) ? index : -1))
-      .filter((index) => index >= 0);
-    const pendingRooms = rooms
-      .map((_, index) => index)
-      .filter((index) => !connectedRooms.includes(index));
-    if (pendingRooms.length === 0) break;
+  const connectUnreachableRooms = (): boolean => {
+    let reachable = getReachableCells();
+    while (true) {
+      const connectedRooms = rooms
+        .map((room, index) => (isRoomReachable(room, reachable) ? index : -1))
+        .filter((index) => index >= 0);
+      const pendingRooms = rooms
+        .map((_, index) => index)
+        .filter((index) => !connectedRooms.includes(index));
+      if (pendingRooms.length === 0) return true;
 
-    let shortestDistance = Number.POSITIVE_INFINITY;
-    let sourceRoom = -1;
-    let targetRoom = -1;
-    for (const connectedRoom of connectedRooms) {
-      const first = rooms[connectedRoom];
-      const firstX = first.x + first.width / 2;
-      const firstY = first.y + first.height / 2;
-      for (const candidate of pendingRooms) {
-        const second = rooms[candidate];
-        const distance = Math.abs(firstX - second.x - second.width / 2)
-          + Math.abs(firstY - second.y - second.height / 2);
-        if (distance < shortestDistance) {
-          shortestDistance = distance;
-          sourceRoom = connectedRoom;
-          targetRoom = candidate;
+      let shortestDistance = Number.POSITIVE_INFINITY;
+      let sourceRoom = -1;
+      let targetRoom = -1;
+      for (const connectedRoom of connectedRooms) {
+        const first = rooms[connectedRoom];
+        const firstX = first.x + first.width / 2;
+        const firstY = first.y + first.height / 2;
+        for (const candidate of pendingRooms) {
+          const second = rooms[candidate];
+          const distance = Math.abs(firstX - second.x - second.width / 2)
+            + Math.abs(firstY - second.y - second.height / 2);
+          if (distance < shortestDistance) {
+            shortestDistance = distance;
+            sourceRoom = connectedRoom;
+            targetRoom = candidate;
+          }
+        }
+      }
+      if (sourceRoom < 0 || targetRoom < 0 || !routeRooms(sourceRoom, targetRoom, reachable)) return false;
+      reachable = getReachableCells();
+      if (!isRoomReachable(rooms[targetRoom], reachable)) return false;
+    }
+  };
+  const pruneRedundantCorridors = (): number[] => {
+    const cellCount = dungeon.width * dungeon.height;
+    const previous = new Int32Array(cellCount).fill(-1);
+    const queue = new Int32Array(cellCount);
+    let tail = 0;
+    const firstRoom = rooms[0];
+    for (let y = firstRoom.y; y < firstRoom.y + firstRoom.height; y += 1) {
+      for (let x = firstRoom.x; x < firstRoom.x + firstRoom.width; x += 1) {
+        const position = y * dungeon.width + x;
+        const tile = tiles[y][x];
+        if (
+          previous[position] !== -1
+          || tile === WALL
+          || tile === CAVE_CONNECTION_WALL_TILE
+          || tile === CAVE_TILE
+          || isCaveLiquidTile(tile)
+          || tile === PILLAR_TILE
+        ) continue;
+        previous[position] = position;
+        queue[tail] = position;
+        tail += 1;
+      }
+    }
+
+    for (let head = 0; head < tail; head += 1) {
+      const position = queue[head];
+      const x = position % dungeon.width;
+      const y = Math.floor(position / dungeon.width);
+      for (const [nextX, nextY] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]] as const) {
+        if (nextX < 0 || nextY < 0 || nextX >= dungeon.width || nextY >= dungeon.height) continue;
+        const nextPosition = nextY * dungeon.width + nextX;
+        const tile = tiles[nextY][nextX];
+        if (
+          previous[nextPosition] !== -1
+          || tile === WALL
+          || tile === CAVE_CONNECTION_WALL_TILE
+          || tile === CAVE_TILE
+          || isCaveLiquidTile(tile)
+          || tile === PILLAR_TILE
+        ) continue;
+        previous[nextPosition] = position;
+        queue[tail] = nextPosition;
+        tail += 1;
+      }
+    }
+
+    const retainedCorridors = new Uint8Array(cellCount);
+    const retainPath = (position: number): void => {
+      if (position < 0 || position >= cellCount || previous[position] < 0) return;
+      for (let current = position; ; current = previous[current]) {
+        const currentX = current % dungeon.width;
+        const currentY = Math.floor(current / dungeon.width);
+        if (tiles[currentY][currentX] === CORRIDOR_TILE) {
+          retainedCorridors[current] = 1;
+          const parent = previous[current];
+          const parentY = Math.floor(parent / dungeon.width);
+          const horizontal = parent === current || parentY === currentY;
+          const corridorWidth = Math.max(1, Math.min(3, dungeon.corridorWidth));
+          for (let offset = 0; offset < corridorWidth; offset += 1) {
+            const shift = offset - Math.floor((corridorWidth - 1) / 2);
+            const corridorX = currentX + (horizontal ? 0 : shift);
+            const corridorY = currentY + (horizontal ? shift : 0);
+            const corridorPosition = corridorY * dungeon.width + corridorX;
+            if (tiles[corridorY]?.[corridorX] === CORRIDOR_TILE) {
+              retainedCorridors[corridorPosition] = 1;
+            }
+          }
+        }
+        if (previous[current] === current) break;
+      }
+    };
+
+    for (const room of rooms) {
+      let roomPosition = -1;
+      for (let y = room.y; y < room.y + room.height && roomPosition < 0; y += 1) {
+        for (let x = room.x; x < room.x + room.width; x += 1) {
+          const position = y * dungeon.width + x;
+          if (previous[position] >= 0 && tiles[y][x] !== PILLAR_TILE) {
+            roomPosition = position;
+            break;
+          }
+        }
+      }
+      if (roomPosition >= 0) retainPath(roomPosition);
+    }
+
+    for (let y = 0; y < dungeon.height; y += 1) {
+      for (let x = 0; x < dungeon.width; x += 1) {
+        const position = y * dungeon.width + x;
+        const tile = tiles[y][x];
+        if (tile === DOOR_TILE || tile === SECRET_DOOR_TILE) {
+          const ownerRoom = rooms.find((room) => doorBelongsToRoom(room, x, y));
+          if (ownerRoom) {
+            const outsideX = x === ownerRoom.x - 1
+              ? x - 1
+              : x === ownerRoom.x + ownerRoom.width
+                ? x + 1
+                : x;
+            const outsideY = y === ownerRoom.y - 1
+              ? y - 1
+              : y === ownerRoom.y + ownerRoom.height
+                ? y + 1
+                : y;
+            retainPath(outsideY * dungeon.width + outsideX);
+          }
+        }
+        if (
+          (tile === STAIRS_UP_TILE || tile === STAIRS_DOWN_TILE)
+          && roomAt[position] === -1
+        ) {
+          retainPath(position);
+        }
+        if (tile === EXTERIOR_ENTRANCE_TILE || tile === EXTERIOR_CONNECTION_TILE) {
+          retainPath(position);
         }
       }
     }
-    if (sourceRoom < 0 || targetRoom < 0 || !routeRooms(sourceRoom, targetRoom, reachable)) return null;
-    reachable = getReachableCells();
-    if (!isRoomReachable(rooms[targetRoom], reachable)) return null;
-  }
+
+    const removedCorridors: number[] = [];
+    for (let position = 0; position < cellCount; position += 1) {
+      if (!retainedCorridors[position]) {
+        const x = position % dungeon.width;
+        const y = Math.floor(position / dungeon.width);
+        if (tiles[y][x] === CORRIDOR_TILE) {
+          tiles[y][x] = WALL;
+          removedCorridors.push(position);
+        }
+      }
+    }
+    return removedCorridors;
+  };
+  if (!connectUnreachableRooms()) return null;
 
   if (exteriorAccessTile !== undefined && rooms[0]) {
     carveExteriorAccess(tiles, rooms[0], exteriorAccessTile);
@@ -3010,6 +3444,97 @@ export function repositionDungeonRooms(
       rooms,
       createRandom(dungeon.seed ^ 0xc2b2ae35),
     );
+  }
+  for (const position of protectedDoorSidePositions) {
+    const x = position % dungeon.width;
+    const y = Math.floor(position / dungeon.width);
+    tiles[y][x] = WALL;
+  }
+  removeInvalidDoors(
+    tiles,
+    rooms,
+    dungeon.corridorWidth,
+    dungeon.doubleDoorsEnabled,
+  );
+  const doorRoomsAfterCleanup = new Set<number>();
+  for (let y = 0; y < dungeon.height; y += 1) {
+    for (let x = 0; x < dungeon.width; x += 1) {
+      if (tiles[y][x] !== DOOR_TILE && tiles[y][x] !== SECRET_DOOR_TILE) continue;
+      const ownerRoom = rooms.find((room) => doorBelongsToRoom(room, x, y));
+      if (ownerRoom) doorRoomsAfterCleanup.add(ownerRoom.number);
+    }
+  }
+  const roomsNeedingDoors = rooms.filter((room) => (
+    room.number > 1
+    && (
+      movedRoomNumbers.has(room.number)
+      || (
+        roomsWithDoorsBeforeMove.has(room.number)
+        && !doorRoomsAfterCleanup.has(room.number)
+      )
+    )
+  ));
+  if (roomsNeedingDoors.length > 0) {
+    const stationaryDoorRoomIndexes = new Set(
+      roomsNeedingDoors
+        .flatMap((room, index) => (
+          !movedRoomNumbers.has(room.number)
+          && roomsWithDoorsBeforeMove.has(room.number)
+            ? [index + 1]
+            : []
+        )),
+    );
+    placeDoors(
+      tiles,
+      [rooms[0], ...roomsNeedingDoors],
+      createRandom(dungeon.seed ^ 0x85ebca6b),
+      dungeon.corridorWidth,
+      dungeon.doubleDoorsEnabled,
+      stationaryDoorRoomIndexes,
+    );
+  }
+  const stairRandom = createRandom(dungeon.seed ^ 0x27d4eb2f);
+  for (const stairTile of corridorStairs) {
+    const position = findCorridorStairPosition(
+      tiles,
+      undefined,
+      stairRandom,
+      dungeon.corridorWidth,
+    );
+    if (!position) break;
+    tiles[position[1]][position[0]] = stairTile;
+  }
+  const removedCorridors = pruneRedundantCorridors();
+  let reachableCorridorCells = getReachableCells();
+  const lostStationaryDoor = stationaryDoorConnections.some(({ doorPosition, doorTile, corridorPosition }) => (
+    tiles[Math.floor(doorPosition / dungeon.width)][doorPosition % dungeon.width] !== doorTile
+    || tiles[Math.floor(corridorPosition / dungeon.width)][corridorPosition % dungeon.width] !== CORRIDOR_TILE
+  ));
+  if (
+    lostStationaryDoor
+    || rooms.some((room) => !isRoomReachable(room, reachableCorridorCells))
+  ) {
+    for (const position of removedCorridors) {
+      const x = position % dungeon.width;
+      const y = Math.floor(position / dungeon.width);
+      tiles[y][x] = CORRIDOR_TILE;
+    }
+    for (const { doorPosition, doorTile, corridorPosition } of stationaryDoorConnections) {
+      tiles[Math.floor(doorPosition / dungeon.width)][doorPosition % dungeon.width] = doorTile;
+      tiles[Math.floor(corridorPosition / dungeon.width)][corridorPosition % dungeon.width] = CORRIDOR_TILE;
+    }
+    reachableCorridorCells = getReachableCells();
+  }
+  if (rooms.some((room) => !isRoomReachable(room, reachableCorridorCells))) return null;
+  for (let y = 0; y < dungeon.height; y += 1) {
+    for (let x = 0; x < dungeon.width; x += 1) {
+      if (
+        tiles[y][x] === CORRIDOR_TILE
+        && !reachableCorridorCells[y * dungeon.width + x]
+      ) {
+        tiles[y][x] = WALL;
+      }
+    }
   }
   const traps = placeCorridorTraps(
     tiles,

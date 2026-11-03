@@ -318,6 +318,7 @@ h1 {
   color: inherit;
   font: inherit;
   text-align: left;
+  align-items: center;
   cursor: pointer;
   transition: border-color 120ms ease, background 120ms ease;
 }
@@ -337,59 +338,13 @@ h1 {
 }
 .room-copy { min-width: 0; display: grid; gap: 3px; }
 .room-copy-heading { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.room-entry-button .room-copy { align-self: center; }
 .room-copy-heading strong { color: #e1dfd8; font: 500 11px "Space Grotesk", sans-serif; }
 .room-copy small { color: #838d98; font-size: 9px; line-height: 1.4; }
-.room-copy .room-entry-summary { color: #8d96a0; font: 8px "DM Mono", monospace; }
-.room-copy .room-category-tag { padding: 2px 4px; border: 1px solid; border-radius: 2px; font: 6px "DM Mono", monospace; letter-spacing: 0.3px; line-height: 1.2; white-space: nowrap; }
-.room-copy .room-shape-tag {
-  padding: 2px 4px;
-  border: 1px solid #554832;
-  border-radius: 2px;
-  color: #c6a66f;
-  font: 7px "DM Mono", monospace;
-  letter-spacing: 0.2px;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-.room-copy .room-size-tag {
-  padding: 2px 4px;
-  border: 1px solid #395c65;
-  border-radius: 2px;
-  color: #91cbd0;
-  font: 6px "DM Mono", monospace;
-  letter-spacing: 0.4px;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-.room-copy .room-measurements { color: #d7b77f; font: 8px "DM Mono", monospace; }
-.room-copy .liquid-feature-tag {
-  padding: 2px 4px;
-  border-radius: 2px;
-  font: 6px "DM Mono", monospace;
-  letter-spacing: 0.4px;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-.room-copy .water-feature-tag { border: 1px solid #276582; color: #8ed3ec; }
-.room-copy .lava-feature-tag { border: 1px solid #874426; color: #ff9a59; }
-.room-copy .trap-feature-tag {
-  padding: 2px 4px;
-  border: 1px solid #754536;
-  border-radius: 2px;
-  color: #e7a17b;
-  font: 6px "DM Mono", monospace;
-  letter-spacing: 0.3px;
-  line-height: 1.2;
-}
-.room-copy .treasure-feature-tag {
-  padding: 2px 4px;
-  border: 1px solid #806533;
-  border-radius: 2px;
-  color: #e2bd73;
-  font: 6px "DM Mono", monospace;
-  letter-spacing: 0.3px;
-  line-height: 1.2;
-}
+.room-guide-feature-badge { padding: 2px 5px; border: 1px solid; border-radius: 2px; font: 7px "DM Mono", monospace; letter-spacing: 0.25px; line-height: 1.3; text-transform: uppercase; }
+.treasure-room-badge { border-color: rgba(201, 169, 87, 0.45); background: rgba(99, 73, 29, 0.2); color: #e2bd73; }
+.trap-room-badge { border-color: rgba(191, 111, 79, 0.48); background: rgba(93, 46, 31, 0.22); color: #e7a17b; }
+.water-room-badge { border-color: rgba(120, 199, 226, 0.48); background: rgba(40, 127, 166, 0.2); color: #a9e3f2; }
 .room-copy .trap-feature-description {
   padding-left: 5px;
   border-left: 1px solid #754536;
@@ -399,6 +354,7 @@ h1 {
 .trap-guide-section-title { margin: 0; color: #d7b77f; font: 8px "DM Mono", monospace; letter-spacing: 0.7px; text-transform: uppercase; }
 .trap-guide-entry { grid-template-columns: 27px minmax(0, 1fr); }
 .trap-guide-badge { border-color: #754536; background: rgba(154, 78, 48, 0.12); color: #e7a17b; }
+.numbered-corridor-trap-badge { border-color: #f0a36f; background: rgba(142, 64, 50, 0.26); color: #fff1df; font-size: 8px; }
 .trap-guide-entry .trap-feature-tag { font: 7px "DM Mono", monospace; }
 .room-empty {
   flex: 1;
@@ -647,30 +603,66 @@ h1 {
 .room-detail-facts strong { color: #d7d9d8; font-size: 10px; font-weight: 500; }
 .room-detail-facts small { color: #808a96; font-size: 8px; line-height: 1.4; }
 .room-detail-entrance { margin: 0; color: #9aa2ac; font-size: 9px; }
-.room-detail-shape { display: grid; gap: 4px; }
-.room-detail-shape strong { color: #d6c5a5; font-size: 9px; font-weight: 500; }
-.room-detail-shape small { color: #8d96a0; font-size: 8px; line-height: 1.5; }
-.room-detail-feature { padding: 9px 11px; border: 1px solid #395c65; border-radius: 3px; background: rgba(25, 56, 65, 0.18); display: grid; gap: 5px; }
+.room-detail-shape { padding: 10px 12px; border: 1px solid #343b44; border-left: 2px solid #927346; border-radius: 3px; background: rgba(25, 30, 38, 0.42); display: grid; gap: 6px; }
+.room-detail-shape-heading,
+.room-detail-shape-applications > span { color: #9d8256; font: 7px "DM Mono", monospace; letter-spacing: 0.6px; }
+.room-detail-shape > p,
+.room-detail-shape-applications > p { margin: 0; color: #d6d1c5; font-size: 9px; line-height: 1.45; }
+.room-detail-shape-applications { padding-top: 6px; border-top: 1px solid #343b44; display: grid; gap: 4px; }
+.room-detail-shape-applications > p { color: #8d96a0; font-size: 8px; }
+.room-detail-feature { padding: 9px 11px; border: 1px solid #395c65; border-radius: 3px; background: rgba(25, 56, 65, 0.18); display: grid; gap: 7px; }
 .room-detail-feature strong { color: #a7dce8; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 9px; font-weight: 500; }
 .room-detail-feature small { color: #9baab0; font-size: 8px; line-height: 1.5; }
+.room-detail-feature-heading { margin: 0; color: #a7dce8; font: 8px "DM Mono", monospace; letter-spacing: 0.7px; text-transform: uppercase; }
+.room-detail-feature-content { display: grid; gap: 9px; }
+.room-detail-feature-list { display: grid; gap: 0; }
+.room-detail-feature-item + .room-detail-feature-item { margin-top: 11px; padding-top: 11px; border-top: 1px solid rgba(115, 145, 153, 0.2); }
+.room-detail-feature-name { color: #d7d9d8; font-size: 11px; font-weight: 500; }
+.room-detail-feature-facts { margin: 0; padding: 7px 0; border-top: 1px solid rgba(115, 145, 153, 0.2); border-bottom: 1px solid rgba(115, 145, 153, 0.2); display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.room-detail-feature-facts > div { display: flex; align-items: baseline; gap: 5px; }
+.room-detail-feature-facts dt,
+.room-detail-feature-description > strong { color: #8999a0; font: 7px "DM Mono", monospace; letter-spacing: 0.4px; text-transform: uppercase; }
+.room-detail-feature-facts dd { margin: 0; color: #d0d5d4; font-size: 8px; line-height: 1.4; }
+.room-detail-feature-description { display: grid; gap: 4px; }
+.room-detail-feature-description p,
+.room-detail-feature-description ul { margin: 0; color: #9baab0; font-size: 8px; line-height: 1.5; overflow-wrap: anywhere; }
+.room-detail-feature-description ul { padding-left: 15px; }
 .room-detail-feature.lava-feature-tag { border-color: #874426; background: rgba(88, 42, 24, 0.2); }
 .room-detail-feature.lava-feature-tag strong { color: #ff9a59; }
 .room-detail-feature.lava-feature-tag small { color: #c19a82; }
 .room-detail-feature.trap-detail-feature { border-color: #754536; background: rgba(93, 46, 31, 0.17); }
-.room-detail-feature.trap-detail-feature strong { color: #e7a17b; }
-.room-detail-feature.trap-detail-feature strong span { color: #b89a8a; font: 7px "DM Mono", monospace; }
-.room-detail-feature.trap-detail-feature small { color: #b89a8a; }
+.room-detail-feature.trap-detail-feature .room-detail-feature-heading,
+.room-detail-feature.trap-detail-feature .room-detail-feature-name { color: #e7a17b; }
+.room-detail-feature.trap-detail-feature .room-detail-feature-item + .room-detail-feature-item { border-color: rgba(191, 111, 79, 0.24); }
+.room-detail-feature.trap-detail-feature .room-detail-feature-facts { border-color: rgba(191, 111, 79, 0.24); }
+.room-detail-feature.trap-detail-feature .room-detail-feature-facts dt,
+.room-detail-feature.trap-detail-feature .room-detail-feature-description > strong { color: #c19480; }
+.room-detail-feature.trap-detail-feature .room-detail-feature-facts dd,
+.room-detail-feature.trap-detail-feature .room-detail-feature-description p { color: #b89a8a; }
 .room-detail-feature.treasure-detail-feature { border-color: #806533; background: rgba(99, 73, 29, 0.17); }
-.room-detail-feature.treasure-detail-feature strong { color: #e2bd73; }
-.room-detail-feature.treasure-detail-feature strong span { color: #c9a957; font: 7px "DM Mono", monospace; }
-.room-detail-feature.treasure-detail-feature small { color: #b8a77f; }
+.room-detail-feature.treasure-detail-feature .room-detail-feature-heading,
+.room-detail-feature.treasure-detail-feature .room-detail-feature-name { color: #e2bd73; }
+.room-detail-feature.treasure-detail-feature .room-detail-feature-item + .room-detail-feature-item { border-color: rgba(201, 169, 87, 0.24); }
+.room-detail-feature.treasure-detail-feature .room-detail-feature-facts { border-color: rgba(201, 169, 87, 0.24); }
+.room-detail-feature.treasure-detail-feature .room-detail-feature-facts dt,
+.room-detail-feature.treasure-detail-feature .room-detail-feature-description > strong { color: #c9a957; }
+.room-detail-feature.treasure-detail-feature .room-detail-feature-facts dd,
+.room-detail-feature.treasure-detail-feature .room-detail-feature-description p,
+.room-detail-feature.treasure-detail-feature .room-detail-feature-description ul { color: #b8a77f; }
 .room-detail-metadata { margin-top: 20px; border-top: 1px solid #303844; }
 .room-detail-section-heading { padding: 14px 0 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .room-detail-section-heading h3 { margin: 0; color: #e2e0d9; font: 500 12px "Space Grotesk", sans-serif; }
 .room-detail-section-heading small { color: #78818d; font-size: 8px; }
 .room-detail-metadata .room-metadata-nav { padding: 0 0 9px; }
 .room-detail-metadata-panel { padding: 0 10px; border: 1px solid #29313b; border-radius: 3px; background: rgba(16, 21, 28, 0.56); }
-.room-detail-metadata-panel dl { margin: 0; }
+.room-detail-metadata-panel[hidden] { display: none; }
+.room-detail-metadata-list { margin: 0; }
+.room-detail-metadata-item { padding: 9px 0; border-top: 1px solid #29313b; display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); align-items: start; gap: 8px; }
+.room-detail-metadata-item:first-child { border-top: 0; }
+.room-detail-metadata-label { min-width: 0; display: grid; align-content: start; gap: 4px; }
+.room-detail-metadata-item code { color: #c8b083; font: 8px "DM Mono", monospace; overflow-wrap: anywhere; }
+.room-detail-metadata-label small { color: #78818d; font-size: 7px; line-height: 1.35; }
+.room-detail-metadata-item p { margin: 0; color: #c5c8ca; font-size: 8px; line-height: 1.5; overflow-wrap: anywhere; }
 .room-detail-footer { padding: 11px 20px; border-top: 1px solid #303844; display: flex; justify-content: flex-end; gap: 8px; }
 .room-detail-button { min-height: 34px; padding: 0 12px; border: 1px solid #3b4652; border-radius: 3px; background: #171f29; color: #b7c0ca; cursor: pointer; font: 8px "DM Mono", monospace; }
 .room-detail-button:hover { border-color: #927346; color: #f0d4a3; }

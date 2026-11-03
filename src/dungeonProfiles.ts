@@ -27,16 +27,8 @@ export function getDungeonGenerationAlgorithm(
   profileAlgorithm: Algorithm,
   cavesEnabled: boolean,
 ): Algorithm {
-  if (cavesEnabled) {
-    if (profileAlgorithm === "bsp") return "bsp-cellular";
-    if (profileAlgorithm === "bsp-drunkard" || profileAlgorithm === "hybrid") return "hybrid";
-    if (profileAlgorithm === "drunkard") return "hybrid";
-    return profileAlgorithm;
-  }
-
-  if (profileAlgorithm === "bsp-cellular") return "bsp";
-  if (profileAlgorithm === "hybrid") return "bsp-drunkard";
-  return profileAlgorithm;
+  if (profileAlgorithm === "cellular") return profileAlgorithm;
+  return cavesEnabled ? "bsp-cellular" : "bsp";
 }
 
 export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
@@ -45,7 +37,7 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     name: "Fortaleza militar",
     description: "Guarnições, arsenais e postos de defesa.",
     algorithm: "bsp",
-    generationDescription: "Salas e corredores defensivos",
+    generationDescription: "Salas e corredores defensivos; cavernas opcionais",
     roomTypeCategoryFrequencies: {
       exploration: 8,
       combat: 27,
@@ -101,7 +93,7 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     name: "Catacumbas",
     description: "Criptas, ossuários e câmaras funerárias.",
     algorithm: "bsp-drunkard",
-    generationDescription: "Salas conectadas por túneis",
+    generationDescription: "Salas conectadas por túneis; cavernas opcionais",
     roomTypeCategoryFrequencies: {
       exploration: 10,
       combat: 8,
@@ -129,7 +121,7 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     name: "Mina abandonada",
     description: "Galerias, depósitos e áreas instáveis.",
     algorithm: "bsp-drunkard",
-    generationDescription: "Salas ligadas por túneis escavados",
+    generationDescription: "Salas ligadas por túneis escavados; cavernas opcionais",
     roomTypeCategoryFrequencies: {
       exploration: 14,
       combat: 9,
@@ -213,7 +205,7 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     name: "Prisão",
     description: "Celas, interrogatórios e vigilância.",
     algorithm: "bsp",
-    generationDescription: "Setores de celas e corredores vigiados",
+    generationDescription: "Setores de celas e corredores vigiados; cavernas opcionais",
     roomTypeCategoryFrequencies: {
       exploration: 10,
       combat: 16,
@@ -241,7 +233,7 @@ export const DUNGEON_CONCEPTS: Record<DungeonConcept, DungeonConceptProfile> = {
     name: "Ruínas de uma civilização perdida",
     description: "Vestígios, monumentos e espaços esquecidos.",
     algorithm: "hybrid",
-    generationDescription: "Salas em meio a áreas em ruínas",
+    generationDescription: "Salas em meio a áreas em ruínas; cavernas opcionais",
     roomTypeCategoryFrequencies: {
       exploration: 10,
       combat: 8,
