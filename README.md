@@ -51,15 +51,32 @@ A geração existente é a **V1**. `generateDungeon` permanece como entrada lega
 
 A V1 continua usando o fluxo aleatório original. `createGenerationRandomStreams` oferece fluxos independentes para topologia, posicionamento, corredores, conteúdo e decoração para versões futuras, sem alterar a sequência aleatória da V1.
 
-Na interface V1, o perfil **Caverna natural** usa Cellular Automata; os demais perfis usam BSP e o controle **Incluir cavernas** alterna entre BSP e BSP + Cellular Automata. Embora os perfis também declarem `bsp-drunkard` e `hybrid`, esse encaminhamento não chega à interface atualmente; `generateDungeon` ainda oferece esses algoritmos para chamadas diretas. O histórico simplificou o despacho, mas não registra uma justificativa, e o gerador não tem uma limitação técnica que impeça essas combinações. Para preservar mapas V1, o despacho atual é mantido; recomenda-se revisar o encaminhamento dos perfis como uma mudança explícita da futura V2.
+Na interface V1, o perfil **Caverna natural** usa Cellular Automata; os demais perfis usam BSP e o controle **Incluir cavernas** alterna entre BSP e BSP + Cellular Automata. Embora os perfis também declarem `bsp-drunkard` e `hybrid`, esse encaminhamento não chega à interface atualmente; `generateDungeon` ainda oferece esses algoritmos para chamadas diretas. O histórico simplificou o despacho, mas não registra uma justificativa, e o gerador não tem uma limitação técnica que impeça essas combinações. Para preservar mapas V1, `getDungeonGenerationAlgorithm` não foi alterado. As afinidades topológicas adicionadas na Fase 3 atuam separadamente e não mudam esse despacho; o encaminhamento dos algoritmos dos perfis continua sendo uma decisão pendente para uma versão futura explícita.
 
 ### Modelo lógico GenerationPlan
 
 `GenerationPlan` é uma camada adicional e independente da renderização; nesta fase, ela não substitui nem altera os algoritmos V1. `RoomNode.roomRole` descreve a função estrutural da sala (como entrada ou objetivo), enquanto `roomType` continua usando as categorias temáticas existentes (como religiosa ou arcana). Cada sala fornece um `footprint` de tiles locais explícitos, e cada conexão geométrica fornece seu próprio caminho absoluto; a camada não calcula posicionamento nem roteamento. Caminhos duplicados são rejeitados, mas conexões paralelas intencionais podem declarar `metadata.allowParallel: true`.
 
-O plano também registra setores, interseções, transições, recursos, versão e metadados completos da geração. `validateGenerationPlan` verifica IDs e referências, dimensões, setores, sobreposições de footprints e geometrias obrigatórias. Essa validação é estrutural: ela não promete acessibilidade nem altera o BFS existente usado ao reposicionar salas.
+O plano também registra setores, interseções, transições, recursos, versão e metadados completos da geração. `validateGenerationPlan` verifica IDs e referências, dimensões, setores, sobreposições de footprints e geometrias obrigatórias. Essa validação estrutural é distinta da análise de conectividade do grafo; ela não altera o BFS existente usado ao reposicionar salas.
 
 `generationPlanToDungeon` rasteriza os footprints e caminhos informados no contrato atual `Dungeon.tiles`, além de preencher `roomDetails`, armadilhas e tiles existentes de portas, escadas e outros elementos. PixiJS, Three.js e as exportações SVG continuam consumindo somente `Dungeon`. O modelo retém flags como conexão secreta, bloqueada, opcional e trancada; o formato `Dungeon` atual não possui campos para todos esses estados. A conversão mantém essas informações no `GenerationPlan`, sem inferir uma regra de navegação. O reposicionamento legado trabalha com limites retangulares de salas, portanto não preserva necessariamente todos os detalhes de footprints irregulares após arrastar uma sala.
+
+### Topologia e progressão
+
+`generateDungeonTopology` adiciona a camada lógica de exploração ao `GenerationPlan`: escolhe entre `linear`, `branching`, `circuit`, `centralized`, `sectorized` e `hybrid`; atribui `RoomRole` sem mudar o conteúdo temático; e armazena `mainPathRoomIds`, ramificações, ciclos intencionais e setores. Cada conexão mantém seus endpoints e condições (`isLocked`, `isSecret`, `isBlocked`, `isOptional` e `metadata.accessRequirements`). `cycleCount` e `additionalConnectionCount` controlam ciclos adicionais; `branchCount`, `deadEndProbability`, `optionalPathCount` e `sectorCount` orientam a árvore e sua divisão.
+
+As oito entradas de `DUNGEON_CONCEPTS` declaram afinidades próprias — por exemplo, a fortaleza e a prisão favorecem setores, catacumbas favorecem progressão linear com passagem secreta, e a caverna favorece ramificações. Elas são preferências para a nova etapa, não regras rígidas nem alterações dos algoritmos/categorias V1. `cycleCount` e `additionalConnectionCount` definem um mínimo de conexões cíclicas; `deadEndProbability` controla a chance de uma ramificação terminar ou se reconectar, podendo acrescentar circuitos. A geração usa exclusivamente o subfluxo determinístico `topology` da seed registrada; o resultado registra `topology.version: "topology-v1"`, separado da versão do gerador legado. Mudanças no conteúdo temático não consomem esse fluxo.
+
+Exemplo de uso sobre um plano que já contém as salas definidas por outra etapa:
+
+```ts
+const topology = generateDungeonTopology(roomPlan, { profile: "catacombs" });
+const validation = validateDungeonTopology(topology);
+```
+
+Esta função não escolhe nem move salas e não roteia corredores: conserva dimensões, posições e footprints recebidos, deixa `ConnectionEdge.path` vazio e marca `geometryStatus: "unrouted"`. `generationPlanToDungeon` recusa explicitamente esse estágio; uma fase posterior deverá fornecer a geometria antes da rasterização. Assim, os padrões representam grafos de exploração, não ainda plantas físicas prontas para renderizar.
+
+`analyzeTopologyConnectivity` retorna resultados separados: **físico**, que considera as relações entre salas inclusive passagens bloqueadas, e **acesso do jogador**, que exclui bloqueios, portas trancadas sem `lockId` desbloqueado, segredos não descobertos e requisitos não satisfeitos. `validateDungeonTopology` verifica entrada/objetivo, sequência e arestas do caminho principal, acessibilidade das salas obrigatórias/importantes, conexão das ramificações e se as conexões marcadas como ciclos realmente aumentam o ciclo do grafo. `getDungeonTopologyStatistics` resume salas, arestas, becos sem saída, ciclos, setores e conexões especiais.
 
 ## Controles e interação
 
@@ -160,6 +177,8 @@ Os arquivos de produção são gerados em `dist/`.
 | `src/generationPlanValidation.ts` | Validação estrutural do GenerationPlan |
 | `src/generationPlanToDungeon.ts` | Conversão de GenerationPlan para Dungeon |
 | `src/generationPlan.test.ts` | Testes do modelo, validador e conversor |
+| `src/generationTopology.ts` | Geração e análise determinística de grafos de topologia |
+| `src/generationTopology.test.ts` | Testes de estilos, progressão, perfis, ciclos e acessibilidade |
 | `src/roomTypes.ts` | Categorias e funções de salas |
 | `src/treasures.ts` | Categorias e catálogo de tesouros |
 | `src/DungeonCanvas.tsx` | Renderização do mapa e exportação |

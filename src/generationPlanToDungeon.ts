@@ -203,6 +203,9 @@ function cloneParameters(parameters: DungeonParameters): DungeonParameters {
 }
 
 export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
+  if (plan.topology?.geometryStatus === "unrouted") {
+    throw new Error("A topology-only GenerationPlan must be physically routed before conversion to Dungeon.");
+  }
   const validation = validateGenerationPlan(plan);
   if (!validation.valid) {
     throw new GenerationPlanValidationError(validation.issues);

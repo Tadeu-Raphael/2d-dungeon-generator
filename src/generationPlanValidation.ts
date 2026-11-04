@@ -53,9 +53,10 @@ export interface GenerationPlanValidationResult {
   issues: GenerationPlanValidationIssue[];
 }
 
-const REQUIRED_ROOM_ROLES = new Set(["entrance", "main", "objective", "boss"]);
+const REQUIRED_ROOM_ROLES = new Set(["entrance", "main", "objective", "boss", "connector"]);
 const CONNECTION_TYPES_REQUIRING_PATH = new Set([
   "corridor",
+  "open-passage",
   "door",
   "secret-door",
   "blocked-passage",
@@ -405,7 +406,12 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
     }
 
     const path = Array.isArray(edge.path) ? edge.path : [];
-    if (CONNECTION_TYPES_REQUIRING_PATH.has(edge.connectionType) && path.length === 0) {
+    const topologyHasUnroutedGeometry = plan.topology?.geometryStatus === "unrouted";
+    if (
+      !topologyHasUnroutedGeometry
+      && CONNECTION_TYPES_REQUIRING_PATH.has(edge.connectionType)
+      && path.length === 0
+    ) {
       addIssue(
         "connection-path-required",
         `${edgePath}.path`,
@@ -484,9 +490,13 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
   }
 
   for (const room of plan.rooms) {
+    const isSoleEntryObjective = plan.rooms.length === 1
+      && room.id === plan.entryRoomId
+      && room.id === (plan.objectiveRoomId ?? plan.exitRoomId);
     if (
       (room.isRequired || REQUIRED_ROOM_ROLES.has(room.roomRole))
       && !incidentRoomIds.has(room.id)
+      && !isSoleEntryObjective
     ) {
       addIssue(
         "required-room-unconnected",

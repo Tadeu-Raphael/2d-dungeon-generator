@@ -24,6 +24,45 @@ export type RoomRole =
   | "secret"
   | "optional";
 
+export type TopologyStyle =
+  | "linear"
+  | "branching"
+  | "circuit"
+  | "centralized"
+  | "sectorized"
+  | "hybrid";
+
+export interface TopologyParameters {
+  branchCount: number;
+  additionalConnectionCount: number;
+  deadEndProbability: number;
+  cycleCount: number;
+  optionalPathCount: number;
+  sectorCount: number;
+  lockedConnectionCount: number;
+  secretConnectionCount: number;
+  blockedConnectionCount: number;
+}
+
+export interface TopologyBranch {
+  id: string;
+  anchorRoomId: string;
+  roomIds: readonly string[];
+  connectionIds: readonly string[];
+  isOptional: boolean;
+  isDeadEnd: boolean;
+}
+
+export interface GenerationTopologyMetadata {
+  version: "topology-v1";
+  style: TopologyStyle;
+  profile?: string;
+  geometryStatus: "unrouted" | "routed";
+  branchPaths: readonly TopologyBranch[];
+  cycleConnectionIds: readonly string[];
+  parameters: TopologyParameters;
+}
+
 export type ConnectionType =
   | "corridor"
   | "open-passage"
@@ -67,6 +106,8 @@ export interface RoomNode {
 
 export interface ConnectionEdgeMetadata extends Readonly<Record<string, unknown>> {
   allowParallel?: boolean;
+  accessRequirements?: readonly string[];
+  lockId?: string;
 }
 
 export interface ConnectionEdge {
@@ -147,6 +188,8 @@ export interface GenerationPlan {
   entryRoomId?: string;
   exitRoomId?: string;
   objectiveRoomId?: string;
+  mainPathRoomIds?: readonly string[];
+  topology?: GenerationTopologyMetadata;
   intersections: readonly PlanIntersection[];
   transitions: readonly PlanTransition[];
   features: readonly PlanFeature[];
@@ -156,6 +199,7 @@ export interface GenerationPlan {
 export type GenerationEntityKind =
   | "room"
   | "connection"
+  | "branch"
   | "sector"
   | "intersection"
   | "transition"
