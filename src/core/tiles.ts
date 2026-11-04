@@ -1,0 +1,25 @@
+import type { Tile } from "./types";
+
+export const WALL_TILE: Tile = 0;
+export const FLOOR_TILE: Tile = 1;
+export const CORRIDOR_TILE: Tile = 2;
+export const DOOR_TILE: Tile = 3;
+export const STAIRS_UP_TILE: Tile = 4;
+export const STAIRS_DOWN_TILE: Tile = 5;
+export const SECRET_DOOR_TILE: Tile = 6;
+export const EXTERIOR_ENTRANCE_TILE: Tile = 7;
+export const EXTERIOR_CONNECTION_TILE: Tile = 8;
+export const PILLAR_TILE: Tile = 9;
+export const WATER_TILE: Tile = 10;
+export const LAVA_TILE: Tile = 11;
+export const ELEVATED_FLOOR_TILE: Tile = 48;
+export const ROOM_STAIRS_TILE: Tile = 49;
+export const CAVE_TILE: Tile = 50;
+export const CAVE_CONNECTION_WALL_TILE: Tile = 51;
+export const CAVE_BREACH_TILE: Tile = 52;
+export const CAVE_WATER_TILE: Tile = 53;
+export const CAVE_LAVA_TILE: Tile = 54;
+export const CAVE_WATERFALL_TILE: Tile = 55;
+export const CAVE_LAVA_FALL_TILE: Tile = 56;
+export const CAVE_SPRING_TILE: Tile = 57;
+export const CAVE_LAVA_VENT_TILE: Tile = 58;

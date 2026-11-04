@@ -1,4 +1,4 @@
-import { getRoomTypeDefinitions } from "./roomTypes";
+﻿import { getRoomTypeDefinitions } from "./roomTypes";
 import type { RoomTypeCategoryFrequencies, RoomTypeDefinition } from "./roomTypes";
 import {
   DEFAULT_TREASURE_CATEGORY_WEIGHTS,
@@ -18,6 +18,118 @@ import type {
   TreasureType,
 } from "./treasures";
 
+import type {
+  Tile,
+  Rect,
+  RoomGenerationBounds,
+} from "./core/types";
+import {
+  WALL_TILE,
+  FLOOR_TILE,
+  CORRIDOR_TILE,
+  DOOR_TILE,
+  STAIRS_UP_TILE,
+  STAIRS_DOWN_TILE,
+  SECRET_DOOR_TILE,
+  EXTERIOR_ENTRANCE_TILE,
+  EXTERIOR_CONNECTION_TILE,
+  PILLAR_TILE,
+  WATER_TILE,
+  LAVA_TILE,
+  ELEVATED_FLOOR_TILE,
+  ROOM_STAIRS_TILE,
+  CAVE_TILE,
+  CAVE_CONNECTION_WALL_TILE,
+  CAVE_BREACH_TILE,
+  CAVE_WATER_TILE,
+  CAVE_LAVA_TILE,
+  CAVE_WATERFALL_TILE,
+  CAVE_LAVA_FALL_TILE,
+  CAVE_SPRING_TILE,
+  CAVE_LAVA_VENT_TILE,
+} from "./core/tiles";
+import { createRandom } from "./core/random";
+
+export type {
+  Tile,
+  GenerationRandomStreamName,
+  GenerationRandomStreams,
+  Rect,
+  NumericRange,
+  RoomGenerationBounds,
+  RoomDimensionChoice,
+} from "./core/types";
+
+export {
+  DEFAULT_TREASURE_CATEGORY_WEIGHTS,
+  DEFAULT_TREASURE_RARITY_WEIGHTS,
+  getRoomTreasureChance,
+  TREASURE_CATALOG,
+  TREASURE_CATEGORY_ORDER,
+  TREASURE_RARITY_ORDER,
+} from "./treasures";
+
+export type {
+  DungeonTreasure,
+  TreasureCategory,
+  TreasureCategoryWeights,
+  TreasureDefinition,
+  TreasureRarity,
+  TreasureRarityWeights,
+  TreasureType,
+} from "./treasures";
+
+export type {
+  RoomTypeCategory,
+  RoomTypeCategoryFrequencies,
+  RoomTypeDefinition,
+} from "./roomTypes";
+
+export {
+  WALL_TILE,
+  FLOOR_TILE,
+  CORRIDOR_TILE,
+  DOOR_TILE,
+  STAIRS_UP_TILE,
+  STAIRS_DOWN_TILE,
+  SECRET_DOOR_TILE,
+  EXTERIOR_ENTRANCE_TILE,
+  EXTERIOR_CONNECTION_TILE,
+  PILLAR_TILE,
+  WATER_TILE,
+  LAVA_TILE,
+  ELEVATED_FLOOR_TILE,
+  ROOM_STAIRS_TILE,
+  CAVE_TILE,
+  CAVE_CONNECTION_WALL_TILE,
+  CAVE_BREACH_TILE,
+  CAVE_WATER_TILE,
+  CAVE_LAVA_TILE,
+  CAVE_WATERFALL_TILE,
+  CAVE_LAVA_FALL_TILE,
+  CAVE_SPRING_TILE,
+  CAVE_LAVA_VENT_TILE,
+};
+
+export {
+  createRandom,
+  deriveRandomStreamSeed,
+  createGenerationRandomStreams,
+} from "./core/random";
+
+import { bsGenerateBsp as generateBsp } from "./core/generation/bsp";
+import { bsRoomCenter as roomCenter } from "./core/generation/bsp";
+import { bsCreateGrid as createGrid } from "./core/generation/bsp";
+import { generateHybrid, placeCaveConnectionWalls } from "./core/generation/hybrid";
+
+export {
+  bsGenerateBsp as generateBsp,
+} from "./core/generation/bsp";
+
+export {
+  generateHybrid,
+} from "./core/generation/hybrid";
+
 export type Algorithm =
   | "bsp"
   | "cellular"
@@ -30,26 +142,7 @@ export const DUNGEON_GENERATOR_VERSION_V2 = "v2" as const;
 export type DungeonGeneratorVersion =
   | typeof DUNGEON_GENERATOR_VERSION_V1
   | typeof DUNGEON_GENERATOR_VERSION_V2;
-export type GenerationRandomStreamName =
-  | "topology"
-  | "placement"
-  | "corridors"
-  | "content"
-  | "decoration";
-export type GenerationRandomStreams = {
-  [Name in GenerationRandomStreamName]: () => number;
-};
-export type Tile =
-  | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
-  | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29
-  | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 45 | 46 | 47 | 48 | 49 | 50 | 51 | 52 | 53 | 54 | 55 | 56 | 57 | 58
-  | 59 | 60 | 61 | 62 | 63 | 64 | 65 | 66 | 67 | 68 | 69 | 70 | 71 | 72 | 73 | 74 | 75 | 76 | 77 | 78
-  | 79 | 80 | 81 | 82 | 83 | 84 | 85 | 86 | 87 | 88 | 89 | 90
-  | 91 | 92 | 93 | 94 | 95 | 96 | 97 | 98 | 99 | 100 | 101 | 102 | 103 | 104 | 105
-  | 106 | 107 | 108 | 109 | 110 | 111 | 112 | 113 | 114 | 115 | 116 | 117
-  | 118 | 119 | 120 | 121 | 122 | 123 | 124 | 125 | 126 | 127 | 128 | 129
-  | 130 | 131 | 132 | 133 | 134 | 135 | 136 | 137 | 138 | 139 | 140 | 141 | 142 | 143 | 144
-  | 145 | 146 | 147 | 148 | 149 | 150 | 151 | 152 | 153 | 154 | 155 | 156 | 157 | 158 | 159 | 160;
+
 export type RoomShape =
   | "rectangular"
   | "square"
@@ -107,13 +200,13 @@ export const DEFAULT_TRAP_CATEGORY_WEIGHTS: TrapCategoryWeights = {
   complex: 1,
 };
 export const TRAP_CATEGORY_LABELS: Record<TrapCategory, string> = {
-  mechanical: "Mecânicas",
+  mechanical: "MecÃ¢nicas",
   environmental: "Ambientais",
-  magical: "Mágicas",
-  capture: "Captura e contenção",
-  deception: "Percepção e engano",
+  magical: "MÃ¡gicas",
+  capture: "Captura e contenÃ§Ã£o",
+  deception: "PercepÃ§Ã£o e engano",
   motion: "Sonoras e de movimento",
-  biological: "Biológicas",
+  biological: "BiolÃ³gicas",
   combat: "Combate",
   complex: "Complexas e encadeadas",
 };
@@ -256,27 +349,7 @@ export type TrapType =
   | "dismantlingRoom"
   | "defensiveVault"
   | "adaptiveTrap";
-export const DOOR_TILE: Tile = 3;
-export const FLOOR_TILE: Tile = 1;
-export const CAVE_TILE: Tile = 50;
-export const CAVE_CONNECTION_WALL_TILE: Tile = 51;
-export const CAVE_BREACH_TILE: Tile = 52;
-export const CAVE_WATER_TILE: Tile = 53;
-export const CAVE_LAVA_TILE: Tile = 54;
-export const CAVE_WATERFALL_TILE: Tile = 55;
-export const CAVE_LAVA_FALL_TILE: Tile = 56;
-export const CAVE_SPRING_TILE: Tile = 57;
-export const CAVE_LAVA_VENT_TILE: Tile = 58;
-export const STAIRS_UP_TILE: Tile = 4;
-export const STAIRS_DOWN_TILE: Tile = 5;
-export const SECRET_DOOR_TILE: Tile = 6;
-export const EXTERIOR_ENTRANCE_TILE: Tile = 7;
-export const EXTERIOR_CONNECTION_TILE: Tile = 8;
-export const PILLAR_TILE: Tile = 9;
-export const ELEVATED_FLOOR_TILE: Tile = 48;
-export const ROOM_STAIRS_TILE: Tile = 49;
-export const WATER_TILE: Tile = 10;
-export const LAVA_TILE: Tile = 11;
+
 const CAVE_LIQUID_TILES = new Set<Tile>([
   CAVE_WATER_TILE,
   CAVE_LAVA_TILE,
@@ -437,144 +510,144 @@ export const TRAP_DEFINITIONS: Record<TrapType, {
   category: TrapCategory;
   placement?: TrapPlacement;
 }> = {
-  hiddenPit: { tile: 12, label: "Fosso oculto", description: "Uma seção do chão se abre, fazendo a vítima cair.", category: "mechanical" },
+  hiddenPit: { tile: 12, label: "Fosso oculto", description: "Uma seÃ§Ã£o do chÃ£o se abre, fazendo a vÃ­tima cair.", category: "mechanical" },
   spikedPit: { tile: 13, label: "Fosso com estacas", description: "Uma queda em um buraco repleto de estacas.", category: "mechanical" },
-  falseFloor: { tile: 14, label: "Piso falso", description: "O chão cede sob o peso de quem passa.", category: "mechanical" },
-  wallBlades: { tile: 15, label: "Lâminas nas paredes", description: "Lâminas saem de aberturas laterais.", category: "mechanical" },
-  pendulumBlade: { tile: 16, label: "Pêndulo cortante", description: "Uma lâmina balança pelo corredor.", category: "mechanical" },
-  spinningBlades: { tile: 17, label: "Lâminas giratórias", description: "Discos afiados emergem do chão ou das paredes.", category: "mechanical" },
-  poisonDarts: { tile: 18, label: "Dardos envenenados", description: "Dardos são disparados de pequenas aberturas.", category: "mechanical" },
-  wallArrows: { tile: 19, label: "Flechas nas paredes", description: "Um mecanismo dispara flechas ao detectar alguém.", category: "mechanical" },
-  hiddenHarpoons: { tile: 20, label: "Arpões ocultos", description: "Ganchos são lançados contra intrusos.", category: "mechanical" },
+  falseFloor: { tile: 14, label: "Piso falso", description: "O chÃ£o cede sob o peso de quem passa.", category: "mechanical" },
+  wallBlades: { tile: 15, label: "LÃ¢minas nas paredes", description: "LÃ¢minas saem de aberturas laterais.", category: "mechanical" },
+  pendulumBlade: { tile: 16, label: "PÃªndulo cortante", description: "Uma lÃ¢mina balanÃ§a pelo corredor.", category: "mechanical" },
+  spinningBlades: { tile: 17, label: "LÃ¢minas giratÃ³rias", description: "Discos afiados emergem do chÃ£o ou das paredes.", category: "mechanical" },
+  poisonDarts: { tile: 18, label: "Dardos envenenados", description: "Dardos sÃ£o disparados de pequenas aberturas.", category: "mechanical" },
+  wallArrows: { tile: 19, label: "Flechas nas paredes", description: "Um mecanismo dispara flechas ao detectar alguÃ©m.", category: "mechanical" },
+  hiddenHarpoons: { tile: 20, label: "ArpÃµes ocultos", description: "Ganchos sÃ£o lanÃ§ados contra intrusos.", category: "mechanical" },
   ceilingPress: { tile: 21, label: "Prensa de teto", description: "O teto desce, esmagando quem estiver embaixo.", category: "mechanical" },
-  crushingWalls: { tile: 22, label: "Paredes esmagadoras", description: "Duas paredes se aproximam até comprimirem o espaço.", category: "mechanical" },
-  guillotineDoor: { tile: 23, label: "Porta guilhotina", description: "Uma lâmina cai quando alguém atravessa uma passagem.", category: "mechanical" },
-  retractableStairs: { tile: 24, label: "Escada retrátil", description: "Degraus desaparecem ou se soltam sob os pés.", category: "mechanical" },
-  destructibleBridge: { tile: 25, label: "Ponte destrutível", description: "A estrutura desaba quando alguém a atravessa.", category: "mechanical" },
-  grindingGears: { tile: 26, label: "Engrenagens trituradoras", description: "Um piso cede e arrasta a vítima para um mecanismo.", category: "mechanical" },
-  capturingChains: { tile: 27, label: "Correntes capturadoras", description: "Correntes prendem braços, pernas ou o corpo inteiro.", category: "capture" },
+  crushingWalls: { tile: 22, label: "Paredes esmagadoras", description: "Duas paredes se aproximam atÃ© comprimirem o espaÃ§o.", category: "mechanical" },
+  guillotineDoor: { tile: 23, label: "Porta guilhotina", description: "Uma lÃ¢mina cai quando alguÃ©m atravessa uma passagem.", category: "mechanical" },
+  retractableStairs: { tile: 24, label: "Escada retrÃ¡til", description: "Degraus desaparecem ou se soltam sob os pÃ©s.", category: "mechanical" },
+  destructibleBridge: { tile: 25, label: "Ponte destrutÃ­vel", description: "A estrutura desaba quando alguÃ©m a atravessa.", category: "mechanical" },
+  grindingGears: { tile: 26, label: "Engrenagens trituradoras", description: "Um piso cede e arrasta a vÃ­tima para um mecanismo.", category: "mechanical" },
+  capturingChains: { tile: 27, label: "Correntes capturadoras", description: "Correntes prendem braÃ§os, pernas ou o corpo inteiro.", category: "capture" },
   droppingCage: { tile: 28, label: "Gaiola suspensa", description: "Uma estrutura cai sobre o alvo, aprisionando-o.", category: "capture" },
-  counterweightTrapdoor: { tile: 29, label: "Alçapão com contrapeso", description: "A vítima é deslocada para outra parte da dungeon.", category: "mechanical" },
-  floodedRoom: { tile: 30, label: "Sala inundável", description: "Água começa a preencher uma sala fechada.", category: "environmental", placement: "room" },
-  floodedCorridor: { tile: 31, label: "Corredor inundado", description: "O nível da água sobe enquanto os personagens avançam.", category: "environmental", placement: "corridor" },
-  vacuumChamber: { tile: 32, label: "Câmara de vácuo", description: "Uma sala mágica ou artificial remove o ar respirável.", category: "magical", placement: "room" },
-  poisonGas: { tile: 33, label: "Gás venenoso", description: "Uma substância tóxica é liberada no ambiente.", category: "environmental" },
-  hallucinogenicGas: { tile: 34, label: "Gás alucinógeno", description: "Os personagens passam a perceber ilusões.", category: "magical" },
-  corrosiveCloud: { tile: 35, label: "Nuvem corrosiva", description: "Uma névoa danifica criaturas e equipamentos.", category: "environmental" },
-  slipperyFloor: { tile: 36, label: "Chão escorregadio", description: "Óleo, gelo ou limo dificulta a movimentação.", category: "environmental" },
-  thinIceFloor: { tile: 37, label: "Piso de gelo fino", description: "O chão quebra sob determinado peso.", category: "environmental" },
-  fallingRocks: { tile: 38, label: "Chuva de pedras", description: "Rochas caem do teto após o acionamento.", category: "environmental" },
-  caveIn: { tile: 39, label: "Desmoronamento", description: "Uma seção do teto ou da parede desaba.", category: "environmental" },
-  quicksand: { tile: 40, label: "Areia movediça", description: "O terreno cede e começa a engolir quem pisa nele.", category: "environmental" },
-  undergroundCurrent: { tile: 41, label: "Correnteza subterrânea", description: "A água arrasta personagens para uma passagem perigosa.", category: "environmental", placement: "corridor" },
-  overheatedChamber: { tile: 42, label: "Câmara superaquecida", description: "A temperatura sobe até tornar a permanência perigosa.", category: "environmental", placement: "room" },
-  freezingChamber: { tile: 43, label: "Câmara congelante", description: "O ambiente provoca frio extremo.", category: "environmental", placement: "room" },
-  electrifiedFloor: { tile: 44, label: "Piso eletrificado", description: "Uma superfície metálica transmite descargas mágicas ou elétricas.", category: "environmental" },
-  ceilingSpikes: { tile: 45, label: "Espinhos no teto", description: "Uma queda ou mudança de pressão faz espinhos despencarem.", category: "mechanical" },
-  lavaFloor: { tile: 46, label: "Chão de lava", description: "Uma ponte ou plataforma se move sobre lava.", category: "environmental", placement: "corridor" },
-  explosiveCrystals: { tile: 47, label: "Cristais explosivos", description: "Cristais reagem à presença, ao som ou ao contato.", category: "environmental" },
-  explosiveRune: { tile: 59, label: "Runa explosiva", description: "Uma inscrição libera uma explosão ao ser ativada.", category: "magical" },
-  protectiveGlyph: { tile: 60, label: "Glifo de proteção", description: "Uma marca mágica ataca intrusos que se aproximam.", category: "magical" },
-  forcedTeleport: { tile: 61, label: "Teletransporte forçado", description: "A vítima é transportada magicamente para outro local.", category: "magical" },
-  prisonTeleport: { tile: 62, label: "Teletransporte para uma prisão", description: "O alvo é enviado para uma cela distante.", category: "magical", placement: "room" },
-  antimagicField: { tile: 63, label: "Campo antimagia", description: "A magia deixa de funcionar dentro de uma área.", category: "magical", placement: "room" },
-  slowField: { tile: 64, label: "Campo de lentidão", description: "Os movimentos ficam extremamente lentos.", category: "magical", placement: "room" },
-  gravityField: { tile: 65, label: "Campo gravitacional", description: "A gravidade aumenta, diminui ou muda de direção.", category: "magical", placement: "room" },
-  weaknessCurse: { tile: 66, label: "Maldição de fraqueza", description: "A vítima sofre uma penalidade temporária.", category: "magical" },
-  agingCurse: { tile: 67, label: "Maldição de envelhecimento", description: "O alvo envelhece magicamente.", category: "magical" },
-  energyDrain: { tile: 68, label: "Roubo de energia", description: "A armadilha drena energia vital ou mágica.", category: "magical" },
-  petrification: { tile: 69, label: "Petrificação", description: "A vítima começa a se transformar em pedra.", category: "magical" },
-  forcedTransformation: { tile: 70, label: "Transformação forçada", description: "O personagem assume outra forma contra a vontade.", category: "magical" },
-  dimensionalPrison: { tile: 71, label: "Aprisionamento dimensional", description: "A vítima fica presa em uma dimensão isolada.", category: "magical", placement: "room" },
-  unstablePortal: { tile: 72, label: "Portal instável", description: "Uma passagem transporta o personagem para um destino imprevisível.", category: "magical", placement: "room" },
-  dangerIllusion: { tile: 73, label: "Ilusão de perigo", description: "Uma ameaça ilusória parece real para quem a vê.", category: "magical" },
-  duplicateIllusion: { tile: 74, label: "Duplicação ilusória", description: "Cópias ilusórias de inimigos ou aliados confundem a vítima.", category: "magical" },
-  magicalSilence: { tile: 75, label: "Silêncio mágico", description: "Sons deixam de existir dentro de determinada área.", category: "magical", placement: "room" },
-  inversionField: { tile: 76, label: "Campo de inversão", description: "Controles, direções ou percepções são invertidos magicamente.", category: "magical", placement: "room" },
-  memoryDrain: { tile: 77, label: "Drenagem de memória", description: "A vítima perde lembranças temporariamente.", category: "magical" },
-  cursedMark: { tile: 78, label: "Marca amaldiçoada", description: "A vítima é marcada e passa a ser perseguida por uma entidade.", category: "magical" },
+  counterweightTrapdoor: { tile: 29, label: "AlÃ§apÃ£o com contrapeso", description: "A vÃ­tima Ã© deslocada para outra parte da dungeon.", category: "mechanical" },
+  floodedRoom: { tile: 30, label: "Sala inundÃ¡vel", description: "Ãgua comeÃ§a a preencher uma sala fechada.", category: "environmental", placement: "room" },
+  floodedCorridor: { tile: 31, label: "Corredor inundado", description: "O nÃ­vel da Ã¡gua sobe enquanto os personagens avanÃ§am.", category: "environmental", placement: "corridor" },
+  vacuumChamber: { tile: 32, label: "CÃ¢mara de vÃ¡cuo", description: "Uma sala mÃ¡gica ou artificial remove o ar respirÃ¡vel.", category: "magical", placement: "room" },
+  poisonGas: { tile: 33, label: "GÃ¡s venenoso", description: "Uma substÃ¢ncia tÃ³xica Ã© liberada no ambiente.", category: "environmental" },
+  hallucinogenicGas: { tile: 34, label: "GÃ¡s alucinÃ³geno", description: "Os personagens passam a perceber ilusÃµes.", category: "magical" },
+  corrosiveCloud: { tile: 35, label: "Nuvem corrosiva", description: "Uma nÃ©voa danifica criaturas e equipamentos.", category: "environmental" },
+  slipperyFloor: { tile: 36, label: "ChÃ£o escorregadio", description: "Ã“leo, gelo ou limo dificulta a movimentaÃ§Ã£o.", category: "environmental" },
+  thinIceFloor: { tile: 37, label: "Piso de gelo fino", description: "O chÃ£o quebra sob determinado peso.", category: "environmental" },
+  fallingRocks: { tile: 38, label: "Chuva de pedras", description: "Rochas caem do teto apÃ³s o acionamento.", category: "environmental" },
+  caveIn: { tile: 39, label: "Desmoronamento", description: "Uma seÃ§Ã£o do teto ou da parede desaba.", category: "environmental" },
+  quicksand: { tile: 40, label: "Areia movediÃ§a", description: "O terreno cede e comeÃ§a a engolir quem pisa nele.", category: "environmental" },
+  undergroundCurrent: { tile: 41, label: "Correnteza subterrÃ¢nea", description: "A Ã¡gua arrasta personagens para uma passagem perigosa.", category: "environmental", placement: "corridor" },
+  overheatedChamber: { tile: 42, label: "CÃ¢mara superaquecida", description: "A temperatura sobe atÃ© tornar a permanÃªncia perigosa.", category: "environmental", placement: "room" },
+  freezingChamber: { tile: 43, label: "CÃ¢mara congelante", description: "O ambiente provoca frio extremo.", category: "environmental", placement: "room" },
+  electrifiedFloor: { tile: 44, label: "Piso eletrificado", description: "Uma superfÃ­cie metÃ¡lica transmite descargas mÃ¡gicas ou elÃ©tricas.", category: "environmental" },
+  ceilingSpikes: { tile: 45, label: "Espinhos no teto", description: "Uma queda ou mudanÃ§a de pressÃ£o faz espinhos despencarem.", category: "mechanical" },
+  lavaFloor: { tile: 46, label: "ChÃ£o de lava", description: "Uma ponte ou plataforma se move sobre lava.", category: "environmental", placement: "corridor" },
+  explosiveCrystals: { tile: 47, label: "Cristais explosivos", description: "Cristais reagem Ã  presenÃ§a, ao som ou ao contato.", category: "environmental" },
+  explosiveRune: { tile: 59, label: "Runa explosiva", description: "Uma inscriÃ§Ã£o libera uma explosÃ£o ao ser ativada.", category: "magical" },
+  protectiveGlyph: { tile: 60, label: "Glifo de proteÃ§Ã£o", description: "Uma marca mÃ¡gica ataca intrusos que se aproximam.", category: "magical" },
+  forcedTeleport: { tile: 61, label: "Teletransporte forÃ§ado", description: "A vÃ­tima Ã© transportada magicamente para outro local.", category: "magical" },
+  prisonTeleport: { tile: 62, label: "Teletransporte para uma prisÃ£o", description: "O alvo Ã© enviado para uma cela distante.", category: "magical", placement: "room" },
+  antimagicField: { tile: 63, label: "Campo antimagia", description: "A magia deixa de funcionar dentro de uma Ã¡rea.", category: "magical", placement: "room" },
+  slowField: { tile: 64, label: "Campo de lentidÃ£o", description: "Os movimentos ficam extremamente lentos.", category: "magical", placement: "room" },
+  gravityField: { tile: 65, label: "Campo gravitacional", description: "A gravidade aumenta, diminui ou muda de direÃ§Ã£o.", category: "magical", placement: "room" },
+  weaknessCurse: { tile: 66, label: "MaldiÃ§Ã£o de fraqueza", description: "A vÃ­tima sofre uma penalidade temporÃ¡ria.", category: "magical" },
+  agingCurse: { tile: 67, label: "MaldiÃ§Ã£o de envelhecimento", description: "O alvo envelhece magicamente.", category: "magical" },
+  energyDrain: { tile: 68, label: "Roubo de energia", description: "A armadilha drena energia vital ou mÃ¡gica.", category: "magical" },
+  petrification: { tile: 69, label: "PetrificaÃ§Ã£o", description: "A vÃ­tima comeÃ§a a se transformar em pedra.", category: "magical" },
+  forcedTransformation: { tile: 70, label: "TransformaÃ§Ã£o forÃ§ada", description: "O personagem assume outra forma contra a vontade.", category: "magical" },
+  dimensionalPrison: { tile: 71, label: "Aprisionamento dimensional", description: "A vÃ­tima fica presa em uma dimensÃ£o isolada.", category: "magical", placement: "room" },
+  unstablePortal: { tile: 72, label: "Portal instÃ¡vel", description: "Uma passagem transporta o personagem para um destino imprevisÃ­vel.", category: "magical", placement: "room" },
+  dangerIllusion: { tile: 73, label: "IlusÃ£o de perigo", description: "Uma ameaÃ§a ilusÃ³ria parece real para quem a vÃª.", category: "magical" },
+  duplicateIllusion: { tile: 74, label: "DuplicaÃ§Ã£o ilusÃ³ria", description: "CÃ³pias ilusÃ³rias de inimigos ou aliados confundem a vÃ­tima.", category: "magical" },
+  magicalSilence: { tile: 75, label: "SilÃªncio mÃ¡gico", description: "Sons deixam de existir dentro de determinada Ã¡rea.", category: "magical", placement: "room" },
+  inversionField: { tile: 76, label: "Campo de inversÃ£o", description: "Controles, direÃ§Ãµes ou percepÃ§Ãµes sÃ£o invertidos magicamente.", category: "magical", placement: "room" },
+  memoryDrain: { tile: 77, label: "Drenagem de memÃ³ria", description: "A vÃ­tima perde lembranÃ§as temporariamente.", category: "magical" },
+  cursedMark: { tile: 78, label: "Marca amaldiÃ§oada", description: "A vÃ­tima Ã© marcada e passa a ser perseguida por uma entidade.", category: "magical" },
   suspendedNet: { tile: 79, label: "Rede suspensa", description: "Uma rede cai sobre os personagens e os captura.", category: "capture" },
-  ankleNoose: { tile: 80, label: "Laço no tornozelo", description: "Um mecanismo prende e suspende a vítima pelo tornozelo.", category: "capture", placement: "corridor" },
-  hiddenManacles: { tile: 81, label: "Algemas ocultas", description: "Dispositivos prendem os membros ao chão ou à parede.", category: "capture", placement: "room" },
-  constrictingRoots: { tile: 82, label: "Raízes constritoras", description: "Plantas ou raízes agarram e imobilizam os invasores.", category: "capture" },
+  ankleNoose: { tile: 80, label: "LaÃ§o no tornozelo", description: "Um mecanismo prende e suspende a vÃ­tima pelo tornozelo.", category: "capture", placement: "corridor" },
+  hiddenManacles: { tile: 81, label: "Algemas ocultas", description: "Dispositivos prendem os membros ao chÃ£o ou Ã  parede.", category: "capture", placement: "room" },
+  constrictingRoots: { tile: 82, label: "RaÃ­zes constritoras", description: "Plantas ou raÃ­zes agarram e imobilizam os invasores.", category: "capture" },
   compactingSand: { tile: 83, label: "Areia compactante", description: "Uma camada de material endurece e prende quem pisa nela.", category: "capture" },
-  trappingGelatin: { tile: 84, label: "Gelatina aprisionadora", description: "Uma substância envolve e imobiliza a vítima.", category: "capture" },
+  trappingGelatin: { tile: 84, label: "Gelatina aprisionadora", description: "Uma substÃ¢ncia envolve e imobiliza a vÃ­tima.", category: "capture" },
   silkCocoon: { tile: 85, label: "Casulo de seda", description: "Uma criatura ou mecanismo envolve o alvo em um casulo.", category: "capture" },
-  magicalCage: { tile: 86, label: "Jaula mágica", description: "Uma barreira invisível impede a saída da área.", category: "capture", placement: "room" },
-  thornWall: { tile: 87, label: "Parede de espinhos", description: "Espinhos surgem ao redor e limitam a movimentação.", category: "capture" },
-  spectralChains: { tile: 88, label: "Correntes espectrais", description: "Correntes sobrenaturais prendem o espírito ou o corpo.", category: "capture" },
-  sealedRoom: { tile: 89, label: "Sala sem saída", description: "Portas e passagens se fecham até que um mecanismo seja resolvido.", category: "capture", placement: "room" },
-  sealingSarcophagus: { tile: 90, label: "Sarcófago selante", description: "Um caixão ou compartimento se fecha sobre quem o abre.", category: "capture", placement: "room" },
-  mimicChest: { tile: 91, label: "Baú mimético", description: "O suposto baú é, na verdade, uma criatura.", category: "deception", placement: "room" },
-  illusoryDoor: { tile: 92, label: "Porta ilusória", description: "Uma passagem aparentemente real não existe.", category: "deception", placement: "corridor" },
-  illusoryWall: { tile: 93, label: "Parede ilusória", description: "Uma parede esconde uma passagem ou cria um caminho falso.", category: "deception", placement: "corridor" },
-  endlessCorridor: { tile: 94, label: "Corredor infinito", description: "A vítima acredita avançar, mas permanece na mesma área.", category: "deception", placement: "corridor" },
+  magicalCage: { tile: 86, label: "Jaula mÃ¡gica", description: "Uma barreira invisÃ­vel impede a saÃ­da da Ã¡rea.", category: "capture", placement: "room" },
+  thornWall: { tile: 87, label: "Parede de espinhos", description: "Espinhos surgem ao redor e limitam a movimentaÃ§Ã£o.", category: "capture" },
+  spectralChains: { tile: 88, label: "Correntes espectrais", description: "Correntes sobrenaturais prendem o espÃ­rito ou o corpo.", category: "capture" },
+  sealedRoom: { tile: 89, label: "Sala sem saÃ­da", description: "Portas e passagens se fecham atÃ© que um mecanismo seja resolvido.", category: "capture", placement: "room" },
+  sealingSarcophagus: { tile: 90, label: "SarcÃ³fago selante", description: "Um caixÃ£o ou compartimento se fecha sobre quem o abre.", category: "capture", placement: "room" },
+  mimicChest: { tile: 91, label: "BaÃº mimÃ©tico", description: "O suposto baÃº Ã©, na verdade, uma criatura.", category: "deception", placement: "room" },
+  illusoryDoor: { tile: 92, label: "Porta ilusÃ³ria", description: "Uma passagem aparentemente real nÃ£o existe.", category: "deception", placement: "corridor" },
+  illusoryWall: { tile: 93, label: "Parede ilusÃ³ria", description: "Uma parede esconde uma passagem ou cria um caminho falso.", category: "deception", placement: "corridor" },
+  endlessCorridor: { tile: 94, label: "Corredor infinito", description: "A vÃ­tima acredita avanÃ§ar, mas permanece na mesma Ã¡rea.", category: "deception", placement: "corridor" },
   loopRoom: { tile: 95, label: "Sala em loop", description: "Uma porta leva repetidamente ao mesmo ambiente.", category: "deception", placement: "room" },
-  illusoryFloor: { tile: 96, label: "Piso ilusório", description: "Uma superfície aparentemente sólida esconde um abismo.", category: "deception" },
-  cursedTreasure: { tile: 97, label: "Tesouro amaldiçoado", description: "Um objeto valioso desencadeia uma maldição quando removido.", category: "deception", placement: "room" },
+  illusoryFloor: { tile: 96, label: "Piso ilusÃ³rio", description: "Uma superfÃ­cie aparentemente sÃ³lida esconde um abismo.", category: "deception" },
+  cursedTreasure: { tile: 97, label: "Tesouro amaldiÃ§oado", description: "Um objeto valioso desencadeia uma maldiÃ§Ã£o quando removido.", category: "deception", placement: "room" },
   hiddenAlarm: { tile: 98, label: "Alarme oculto", description: "O mecanismo alerta os habitantes sem causar dano direto.", category: "deception" },
-  falseSound: { tile: 99, label: "Som falso", description: "Ruídos simulam monstros, passos ou pedidos de socorro.", category: "deception" },
-  watchingStatues: { tile: 100, label: "Estátuas observadoras", description: "Estátuas acompanham os movimentos e acionam mecanismos.", category: "deception", placement: "room" },
+  falseSound: { tile: 99, label: "Som falso", description: "RuÃ­dos simulam monstros, passos ou pedidos de socorro.", category: "deception" },
+  watchingStatues: { tile: 100, label: "EstÃ¡tuas observadoras", description: "EstÃ¡tuas acompanham os movimentos e acionam mecanismos.", category: "deception", placement: "room" },
   deceptiveMirror: { tile: 101, label: "Espelho enganoso", description: "O reflexo mostra uma realidade diferente.", category: "deception", placement: "room" },
-  falseSigns: { tile: 102, label: "Placas falsas", description: "Símbolos ou inscrições fornecem instruções enganosas.", category: "deception" },
-  falseSafeZone: { tile: 103, label: "Falsa zona segura", description: "Uma área aparentemente protegida ativa um mecanismo quando o grupo relaxa.", category: "deception", placement: "room" },
-  poisonedKey: { tile: 104, label: "Chave envenenada", description: "Uma chave aparentemente normal libera uma substância nociva ao ser usada.", category: "deception", placement: "room" },
-  deceptiveSwitch: { tile: 105, label: "Interruptor enganoso", description: "Um botão desativa uma armadilha, mas ativa outra.", category: "deception", placement: "room" },
-  weightSensitiveFloor: { tile: 106, label: "Piso sensível ao peso", description: "O piso é ativado quando recebe determinado peso.", category: "motion" },
-  pressurePlate: { tile: 107, label: "Placa sensível à pressão", description: "A pressão exercida sobre a superfície dispara um mecanismo.", category: "motion" },
-  motionSensor: { tile: 108, label: "Sensor de movimento", description: "O mecanismo detecta criaturas que se movimentam na área.", category: "motion" },
-  heatSensor: { tile: 109, label: "Sensor de calor", description: "O mecanismo reage à presença de corpos quentes.", category: "motion" },
-  magicSensor: { tile: 110, label: "Sensor mágico", description: "O mecanismo detecta o uso ou a presença de magia.", category: "motion" },
+  falseSigns: { tile: 102, label: "Placas falsas", description: "SÃ­mbolos ou inscriÃ§Ãµes fornecem instruÃ§Ãµes enganosas.", category: "deception" },
+  falseSafeZone: { tile: 103, label: "Falsa zona segura", description: "Uma Ã¡rea aparentemente protegida ativa um mecanismo quando o grupo relaxa.", category: "deception", placement: "room" },
+  poisonedKey: { tile: 104, label: "Chave envenenada", description: "Uma chave aparentemente normal libera uma substÃ¢ncia nociva ao ser usada.", category: "deception", placement: "room" },
+  deceptiveSwitch: { tile: 105, label: "Interruptor enganoso", description: "Um botÃ£o desativa uma armadilha, mas ativa outra.", category: "deception", placement: "room" },
+  weightSensitiveFloor: { tile: 106, label: "Piso sensÃ­vel ao peso", description: "O piso Ã© ativado quando recebe determinado peso.", category: "motion" },
+  pressurePlate: { tile: 107, label: "Placa sensÃ­vel Ã  pressÃ£o", description: "A pressÃ£o exercida sobre a superfÃ­cie dispara um mecanismo.", category: "motion" },
+  motionSensor: { tile: 108, label: "Sensor de movimento", description: "O mecanismo detecta criaturas que se movimentam na Ã¡rea.", category: "motion" },
+  heatSensor: { tile: 109, label: "Sensor de calor", description: "O mecanismo reage Ã  presenÃ§a de corpos quentes.", category: "motion" },
+  magicSensor: { tile: 110, label: "Sensor mÃ¡gico", description: "O mecanismo detecta o uso ou a presenÃ§a de magia.", category: "motion" },
   alarmBell: { tile: 111, label: "Sino de alarme", description: "Um sino emite um som que alerta os habitantes.", category: "motion" },
-  creakingFloor: { tile: 112, label: "Piso que range", description: "O ruído do piso denuncia a posição de quem passa.", category: "motion" },
-  acousticTrigger: { tile: 113, label: "Armadilha acústica", description: "Um som específico desencadeia outro mecanismo.", category: "motion" },
-  resonantCrystals: { tile: 114, label: "Cristais ressonantes", description: "Cristais vibram ou explodem quando expostos a certas frequências.", category: "motion" },
-  awakenedGuardian: { tile: 115, label: "Guardião despertado", description: "Ruído excessivo ativa construtos ou criaturas adormecidas.", category: "motion", placement: "room" },
-  collapsingPassage: { tile: 116, label: "Passagem que desaba", description: "Vibrações intensas fazem o teto desmoronar.", category: "motion", placement: "corridor" },
-  proximityDoor: { tile: 117, label: "Porta sensível à proximidade", description: "A aproximação de alguém dispara um mecanismo.", category: "motion", placement: "corridor" },
-  carnivorousPlant: { tile: 118, label: "Planta carnívora", description: "Uma planta captura quem se aproxima.", category: "biological" },
-  toxicSpores: { tile: 119, label: "Esporos tóxicos", description: "Uma nuvem de esporos causa efeitos nocivos.", category: "biological" },
-  explosiveFungus: { tile: 120, label: "Fungo explosivo", description: "O fungo libera uma explosão quando perturbado.", category: "biological" },
-  constrictingVines: { tile: 121, label: "Cipós constritores", description: "Cipós agarram e imobilizam personagens.", category: "biological" },
-  insectNest: { tile: 122, label: "Ninho de insetos", description: "Uma área perturbada libera insetos agressivos.", category: "biological" },
-  invisibleWeb: { tile: 123, label: "Teia invisível", description: "Uma teia prende e denuncia a localização de intrusos.", category: "biological" },
+  creakingFloor: { tile: 112, label: "Piso que range", description: "O ruÃ­do do piso denuncia a posiÃ§Ã£o de quem passa.", category: "motion" },
+  acousticTrigger: { tile: 113, label: "Armadilha acÃºstica", description: "Um som especÃ­fico desencadeia outro mecanismo.", category: "motion" },
+  resonantCrystals: { tile: 114, label: "Cristais ressonantes", description: "Cristais vibram ou explodem quando expostos a certas frequÃªncias.", category: "motion" },
+  awakenedGuardian: { tile: 115, label: "GuardiÃ£o despertado", description: "RuÃ­do excessivo ativa construtos ou criaturas adormecidas.", category: "motion", placement: "room" },
+  collapsingPassage: { tile: 116, label: "Passagem que desaba", description: "VibraÃ§Ãµes intensas fazem o teto desmoronar.", category: "motion", placement: "corridor" },
+  proximityDoor: { tile: 117, label: "Porta sensÃ­vel Ã  proximidade", description: "A aproximaÃ§Ã£o de alguÃ©m dispara um mecanismo.", category: "motion", placement: "corridor" },
+  carnivorousPlant: { tile: 118, label: "Planta carnÃ­vora", description: "Uma planta captura quem se aproxima.", category: "biological" },
+  toxicSpores: { tile: 119, label: "Esporos tÃ³xicos", description: "Uma nuvem de esporos causa efeitos nocivos.", category: "biological" },
+  explosiveFungus: { tile: 120, label: "Fungo explosivo", description: "O fungo libera uma explosÃ£o quando perturbado.", category: "biological" },
+  constrictingVines: { tile: 121, label: "CipÃ³s constritores", description: "CipÃ³s agarram e imobilizam personagens.", category: "biological" },
+  insectNest: { tile: 122, label: "Ninho de insetos", description: "Uma Ã¡rea perturbada libera insetos agressivos.", category: "biological" },
+  invisibleWeb: { tile: 123, label: "Teia invisÃ­vel", description: "Uma teia prende e denuncia a localizaÃ§Ã£o de intrusos.", category: "biological" },
   parasiticLarvae: { tile: 124, label: "Larvas parasitas", description: "Organismos aderem ao corpo e provocam efeitos progressivos.", category: "biological" },
-  defensiveHive: { tile: 125, label: "Colmeia defensiva", description: "Uma colônia ataca quem atravessa seu território.", category: "biological" },
-  predatorAttractant: { tile: 126, label: "Sangue atraente", description: "Uma substância desperta ou atrai predadores.", category: "biological" },
+  defensiveHive: { tile: 125, label: "Colmeia defensiva", description: "Uma colÃ´nia ataca quem atravessa seu territÃ³rio.", category: "biological" },
+  predatorAttractant: { tile: 126, label: "Sangue atraente", description: "Uma substÃ¢ncia desperta ou atrai predadores.", category: "biological" },
   explosiveEgg: { tile: 127, label: "Ovo explosivo", description: "Um organismo reage violentamente ao toque.", category: "biological" },
-  unstableBurrow: { tile: 128, label: "Toca instável", description: "O terreno cede e libera criaturas subterrâneas.", category: "biological" },
+  unstableBurrow: { tile: 128, label: "Toca instÃ¡vel", description: "O terreno cede e libera criaturas subterrÃ¢neas.", category: "biological" },
   controllingParasite: { tile: 129, label: "Parasita controlador", description: "Uma criatura tenta assumir o controle de seu hospedeiro.", category: "biological" },
-  firingTowers: { tile: 130, label: "Torres de disparo", description: "Estruturas atacam automaticamente quem entra na área.", category: "combat", placement: "room" },
-  launcherStatues: { tile: 131, label: "Estátuas lançadoras", description: "Estátuas disparam projéteis em intervalos regulares.", category: "combat", placement: "room" },
-  movingPillars: { tile: 132, label: "Pilares móveis", description: "Pilares alteram o caminho e podem dividir o grupo.", category: "combat", placement: "room" },
-  movingPlatforms: { tile: 133, label: "Plataformas móveis", description: "O chão se desloca e dificulta o combate.", category: "combat", placement: "room" },
-  dividingWalls: { tile: 134, label: "Paredes divisórias", description: "Barreiras se erguem e separam os personagens.", category: "combat", placement: "room" },
-  summoningZone: { tile: 135, label: "Zona de invocação", description: "Um círculo invoca criaturas hostis.", category: "combat", placement: "room" },
-  empowermentTotem: { tile: 136, label: "Totem de fortalecimento", description: "Inimigos próximos recebem bônus enquanto o totem existir.", category: "combat", placement: "room" },
-  regenerationTotem: { tile: 137, label: "Totem de regeneração", description: "Criaturas recuperam vida dentro da área do totem.", category: "combat", placement: "room" },
-  repulsionField: { tile: 138, label: "Campo de repulsão", description: "Personagens são empurrados para longe de um ponto.", category: "combat", placement: "room" },
-  attractionField: { tile: 139, label: "Campo de atração", description: "Criaturas são puxadas para uma região perigosa.", category: "combat", placement: "room" },
-  fragmentedFloor: { tile: 140, label: "Chão fragmentado", description: "A área se divide progressivamente durante o combate.", category: "combat" },
-  reinforcements: { tile: 141, label: "Armadilha de reforços", description: "O acionamento abre passagens para inimigos adicionais.", category: "combat" },
-  sealedArena: { tile: 142, label: "Arena selada", description: "As saídas se fecham quando o combate começa.", category: "combat", placement: "room" },
-  hostileLight: { tile: 143, label: "Iluminação hostil", description: "A luz prejudica determinados tipos de criaturas ou personagens.", category: "combat", placement: "room" },
-  resourceDrain: { tile: 144, label: "Armadilha de recursos", description: "O mecanismo consome mana, munição ou outro recurso do grupo.", category: "combat" },
-  timedBladeCorridor: { tile: 145, label: "Corredor de lâminas temporizadas", description: "Lâminas avançam e recuam em intervalos regulares.", category: "complex", placement: "corridor" },
-  pressureChamber: { tile: 146, label: "Sala de pressão crescente", description: "A pressão aumenta até que um mecanismo seja desativado.", category: "complex", placement: "room" },
-  electrifiedFloodChamber: { tile: 147, label: "Câmara de água e eletricidade", description: "A sala se inunda enquanto descargas elétricas são ativadas.", category: "complex", placement: "room" },
-  movingMaze: { tile: 148, label: "Labirinto móvel", description: "Paredes mudam de posição periodicamente.", category: "complex", placement: "room" },
-  mirrorChamber: { tile: 149, label: "Sala de espelhos", description: "Reflexos direcionam raios mágicos para diferentes pontos.", category: "complex", placement: "room" },
-  sequencePlates: { tile: 150, label: "Sequência de placas", description: "O grupo precisa pisar nas placas na ordem correta.", category: "complex", placement: "room" },
+  firingTowers: { tile: 130, label: "Torres de disparo", description: "Estruturas atacam automaticamente quem entra na Ã¡rea.", category: "combat", placement: "room" },
+  launcherStatues: { tile: 131, label: "EstÃ¡tuas lanÃ§adoras", description: "EstÃ¡tuas disparam projÃ©teis em intervalos regulares.", category: "combat", placement: "room" },
+  movingPillars: { tile: 132, label: "Pilares mÃ³veis", description: "Pilares alteram o caminho e podem dividir o grupo.", category: "combat", placement: "room" },
+  movingPlatforms: { tile: 133, label: "Plataformas mÃ³veis", description: "O chÃ£o se desloca e dificulta o combate.", category: "combat", placement: "room" },
+  dividingWalls: { tile: 134, label: "Paredes divisÃ³rias", description: "Barreiras se erguem e separam os personagens.", category: "combat", placement: "room" },
+  summoningZone: { tile: 135, label: "Zona de invocaÃ§Ã£o", description: "Um cÃ­rculo invoca criaturas hostis.", category: "combat", placement: "room" },
+  empowermentTotem: { tile: 136, label: "Totem de fortalecimento", description: "Inimigos prÃ³ximos recebem bÃ´nus enquanto o totem existir.", category: "combat", placement: "room" },
+  regenerationTotem: { tile: 137, label: "Totem de regeneraÃ§Ã£o", description: "Criaturas recuperam vida dentro da Ã¡rea do totem.", category: "combat", placement: "room" },
+  repulsionField: { tile: 138, label: "Campo de repulsÃ£o", description: "Personagens sÃ£o empurrados para longe de um ponto.", category: "combat", placement: "room" },
+  attractionField: { tile: 139, label: "Campo de atraÃ§Ã£o", description: "Criaturas sÃ£o puxadas para uma regiÃ£o perigosa.", category: "combat", placement: "room" },
+  fragmentedFloor: { tile: 140, label: "ChÃ£o fragmentado", description: "A Ã¡rea se divide progressivamente durante o combate.", category: "combat" },
+  reinforcements: { tile: 141, label: "Armadilha de reforÃ§os", description: "O acionamento abre passagens para inimigos adicionais.", category: "combat" },
+  sealedArena: { tile: 142, label: "Arena selada", description: "As saÃ­das se fecham quando o combate comeÃ§a.", category: "combat", placement: "room" },
+  hostileLight: { tile: 143, label: "IluminaÃ§Ã£o hostil", description: "A luz prejudica determinados tipos de criaturas ou personagens.", category: "combat", placement: "room" },
+  resourceDrain: { tile: 144, label: "Armadilha de recursos", description: "O mecanismo consome mana, muniÃ§Ã£o ou outro recurso do grupo.", category: "combat" },
+  timedBladeCorridor: { tile: 145, label: "Corredor de lÃ¢minas temporizadas", description: "LÃ¢minas avanÃ§am e recuam em intervalos regulares.", category: "complex", placement: "corridor" },
+  pressureChamber: { tile: 146, label: "Sala de pressÃ£o crescente", description: "A pressÃ£o aumenta atÃ© que um mecanismo seja desativado.", category: "complex", placement: "room" },
+  electrifiedFloodChamber: { tile: 147, label: "CÃ¢mara de Ã¡gua e eletricidade", description: "A sala se inunda enquanto descargas elÃ©tricas sÃ£o ativadas.", category: "complex", placement: "room" },
+  movingMaze: { tile: 148, label: "Labirinto mÃ³vel", description: "Paredes mudam de posiÃ§Ã£o periodicamente.", category: "complex", placement: "room" },
+  mirrorChamber: { tile: 149, label: "Sala de espelhos", description: "Reflexos direcionam raios mÃ¡gicos para diferentes pontos.", category: "complex", placement: "room" },
+  sequencePlates: { tile: 150, label: "SequÃªncia de placas", description: "O grupo precisa pisar nas placas na ordem correta.", category: "complex", placement: "room" },
   lightBridge: { tile: 151, label: "Ponte de luz", description: "Plataformas aparecem apenas quando iluminadas corretamente.", category: "complex", placement: "room" },
-  mechanicalClock: { tile: 152, label: "Relógio mecânico", description: "Engrenagens, plataformas e portas se movem segundo um ciclo.", category: "complex", placement: "room" },
-  sacrificeChamber: { tile: 153, label: "Câmara de sacrifício", description: "Um mecanismo exige um custo para liberar a saída.", category: "complex", placement: "room" },
-  deadlyBalance: { tile: 154, label: "Balança mortal", description: "A distribuição de peso determina o destino do grupo.", category: "complex", placement: "room" },
-  twoRoomTrap: { tile: 155, label: "Armadilha de duas salas", description: "Um mecanismo precisa ser operado enquanto alguém atravessa outra sala.", category: "complex", placement: "room" },
-  runeSequence: { tile: 156, label: "Sequência de runas", description: "Símbolos precisam ser ativados em uma ordem determinada.", category: "complex", placement: "room" },
-  advancingSpikes: { tile: 157, label: "Câmara de espinhos progressivos", description: "Espinhos avançam gradualmente e criam um limite de tempo.", category: "complex", placement: "room" },
+  mechanicalClock: { tile: 152, label: "RelÃ³gio mecÃ¢nico", description: "Engrenagens, plataformas e portas se movem segundo um ciclo.", category: "complex", placement: "room" },
+  sacrificeChamber: { tile: 153, label: "CÃ¢mara de sacrifÃ­cio", description: "Um mecanismo exige um custo para liberar a saÃ­da.", category: "complex", placement: "room" },
+  deadlyBalance: { tile: 154, label: "BalanÃ§a mortal", description: "A distribuiÃ§Ã£o de peso determina o destino do grupo.", category: "complex", placement: "room" },
+  twoRoomTrap: { tile: 155, label: "Armadilha de duas salas", description: "Um mecanismo precisa ser operado enquanto alguÃ©m atravessa outra sala.", category: "complex", placement: "room" },
+  runeSequence: { tile: 156, label: "SequÃªncia de runas", description: "SÃ­mbolos precisam ser ativados em uma ordem determinada.", category: "complex", placement: "room" },
+  advancingSpikes: { tile: 157, label: "CÃ¢mara de espinhos progressivos", description: "Espinhos avanÃ§am gradualmente e criam um limite de tempo.", category: "complex", placement: "room" },
   dismantlingRoom: { tile: 158, label: "Sala que se desmonta", description: "O ambiente perde partes de sua estrutura a cada rodada.", category: "complex", placement: "room" },
-  defensiveVault: { tile: 159, label: "Cofre defensivo", description: "Abrir o tesouro desencadeia várias etapas de proteção.", category: "complex", placement: "room" },
-  adaptiveTrap: { tile: 160, label: "Armadilha adaptativa", description: "O mecanismo modifica seu comportamento após cada tentativa.", category: "complex" },
+  defensiveVault: { tile: 159, label: "Cofre defensivo", description: "Abrir o tesouro desencadeia vÃ¡rias etapas de proteÃ§Ã£o.", category: "complex", placement: "room" },
+  adaptiveTrap: { tile: 160, label: "Armadilha adaptativa", description: "O mecanismo modifica seu comportamento apÃ³s cada tentativa.", category: "complex" },
 };
 export const MIN_DUNGEON_DIMENSION = 20;
 export const MAX_DUNGEON_WIDTH = 1_000;
@@ -720,19 +793,19 @@ export interface RoomShapeDefinition {
 }
 
 export const ROOM_SHAPE_DEFINITIONS: readonly RoomShapeDefinition[] = [
-  { key: "rectangular", label: "Retangular", characteristics: "Fácil de gerar e preencher.", applications: "Quartos, depósitos e dormitórios." },
-  { key: "square", label: "Quadrado", characteristics: "Proporções equilibradas.", applications: "Salas de guarda e câmaras rituais." },
-  { key: "round", label: "Circular", characteristics: "Centro bem definido.", applications: "Templos, arenas e câmaras de chefes." },
-  { key: "elliptical", label: "Elíptico", characteristics: "Circular, mas alongado.", applications: "Salões e auditórios." },
-  { key: "octagonal", label: "Octogonal", characteristics: "Geometria arquitetônica marcante.", applications: "Santuários e salas de enigmas." },
-  { key: "lShaped", label: "Em L", characteristics: "Dois espaços conectados.", applications: "Alojamentos e oficinas." },
-  { key: "tShaped", label: "Em T", characteristics: "Uma área principal com ramificação.", applications: "Postos de controle e encruzilhadas." },
-  { key: "crossShaped", label: "Em cruz", characteristics: "Quatro eixos de circulação.", applications: "Templos e câmaras de mecanismos." },
-  { key: "ringShaped", label: "Em anel", characteristics: "Espaço central cercado por circulação.", applications: "Templos, prisões e arenas." },
-  { key: "irregular", label: "Irregular", characteristics: "Contorno não uniforme.", applications: "Cavernas e ruínas." },
-  { key: "columns", label: "Com colunas", characteristics: "Espaço dividido por obstáculos estruturais.", applications: "Salões e templos." },
-  { key: "alcoves", label: "Com alcovas", characteristics: "Nichos nas paredes.", applications: "Bibliotecas, criptas e santuários." },
-  { key: "multiLevel", label: "Multinível", characteristics: "Plataformas em alturas diferentes.", applications: "Arenas, poços e salas de máquinas." },
+  { key: "rectangular", label: "Retangular", characteristics: "FÃ¡cil de gerar e preencher.", applications: "Quartos, depÃ³sitos e dormitÃ³rios." },
+  { key: "square", label: "Quadrado", characteristics: "ProporÃ§Ãµes equilibradas.", applications: "Salas de guarda e cÃ¢maras rituais." },
+  { key: "round", label: "Circular", characteristics: "Centro bem definido.", applications: "Templos, arenas e cÃ¢maras de chefes." },
+  { key: "elliptical", label: "ElÃ­ptico", characteristics: "Circular, mas alongado.", applications: "SalÃµes e auditÃ³rios." },
+  { key: "octagonal", label: "Octogonal", characteristics: "Geometria arquitetÃ´nica marcante.", applications: "SantuÃ¡rios e salas de enigmas." },
+  { key: "lShaped", label: "Em L", characteristics: "Dois espaÃ§os conectados.", applications: "Alojamentos e oficinas." },
+  { key: "tShaped", label: "Em T", characteristics: "Uma Ã¡rea principal com ramificaÃ§Ã£o.", applications: "Postos de controle e encruzilhadas." },
+  { key: "crossShaped", label: "Em cruz", characteristics: "Quatro eixos de circulaÃ§Ã£o.", applications: "Templos e cÃ¢maras de mecanismos." },
+  { key: "ringShaped", label: "Em anel", characteristics: "EspaÃ§o central cercado por circulaÃ§Ã£o.", applications: "Templos, prisÃµes e arenas." },
+  { key: "irregular", label: "Irregular", characteristics: "Contorno nÃ£o uniforme.", applications: "Cavernas e ruÃ­nas." },
+  { key: "columns", label: "Com colunas", characteristics: "EspaÃ§o dividido por obstÃ¡culos estruturais.", applications: "SalÃµes e templos." },
+  { key: "alcoves", label: "Com alcovas", characteristics: "Nichos nas paredes.", applications: "Bibliotecas, criptas e santuÃ¡rios." },
+  { key: "multiLevel", label: "MultinÃ­vel", characteristics: "Plataformas em alturas diferentes.", applications: "Arenas, poÃ§os e salas de mÃ¡quinas." },
 ];
 
 export type RoomSizeCategoryKey =
@@ -757,13 +830,13 @@ export interface RoomSizeCategoryDefinition {
 }
 
 export const ROOM_SIZE_CATEGORIES: readonly RoomSizeCategoryDefinition[] = [
-  { key: "micro", label: "Micro", dimensions: "2–4 m por lado", area: "4–16 m²", usage: "Nichos, esconderijos e pequenas celas.", minDimension: 2, maxDimension: 4, minArea: 4, maxArea: 16 },
-  { key: "verySmall", label: "Muito pequena", dimensions: "3–6 m por lado", area: "9–36 m²", usage: "Quartos, depósitos e criptas individuais.", minDimension: 3, maxDimension: 6, minArea: 17, maxArea: 36 },
-  { key: "small", label: "Pequena", dimensions: "5–8 m por lado", area: "25–64 m²", usage: "Salas de guarda, oficinas e capelas.", minDimension: 5, maxDimension: 8, minArea: 37, maxArea: 64 },
-  { key: "medium", label: "Média", dimensions: "8–12 m por lado", area: "64–144 m²", usage: "Salas de combate, laboratórios e refeitórios.", minDimension: 8, maxDimension: 12, minArea: 65, maxArea: 144 },
-  { key: "large", label: "Grande", dimensions: "12–18 m por lado", area: "144–324 m²", usage: "Salões cerimoniais e arenas menores.", minDimension: 12, maxDimension: 18, minArea: 145, maxArea: 324 },
-  { key: "veryLarge", label: "Muito grande", dimensions: "18–30 m por lado", area: "324–900 m²", usage: "Salões do trono e câmaras de chefes.", minDimension: 18, maxDimension: 30, minArea: 325, maxArea: 900 },
-  { key: "colossal", label: "Colossal", dimensions: "30–50 m ou mais por lado", area: "900–2.500 m² ou mais", usage: "Cavernas e templos monumentais.", minDimension: 30, maxDimension: null, minArea: 901, maxArea: Number.POSITIVE_INFINITY },
+  { key: "micro", label: "Micro", dimensions: "2â€“4 m por lado", area: "4â€“16 mÂ²", usage: "Nichos, esconderijos e pequenas celas.", minDimension: 2, maxDimension: 4, minArea: 4, maxArea: 16 },
+  { key: "verySmall", label: "Muito pequena", dimensions: "3â€“6 m por lado", area: "9â€“36 mÂ²", usage: "Quartos, depÃ³sitos e criptas individuais.", minDimension: 3, maxDimension: 6, minArea: 17, maxArea: 36 },
+  { key: "small", label: "Pequena", dimensions: "5â€“8 m por lado", area: "25â€“64 mÂ²", usage: "Salas de guarda, oficinas e capelas.", minDimension: 5, maxDimension: 8, minArea: 37, maxArea: 64 },
+  { key: "medium", label: "MÃ©dia", dimensions: "8â€“12 m por lado", area: "64â€“144 mÂ²", usage: "Salas de combate, laboratÃ³rios e refeitÃ³rios.", minDimension: 8, maxDimension: 12, minArea: 65, maxArea: 144 },
+  { key: "large", label: "Grande", dimensions: "12â€“18 m por lado", area: "144â€“324 mÂ²", usage: "SalÃµes cerimoniais e arenas menores.", minDimension: 12, maxDimension: 18, minArea: 145, maxArea: 324 },
+  { key: "veryLarge", label: "Muito grande", dimensions: "18â€“30 m por lado", area: "324â€“900 mÂ²", usage: "SalÃµes do trono e cÃ¢maras de chefes.", minDimension: 18, maxDimension: 30, minArea: 325, maxArea: 900 },
+  { key: "colossal", label: "Colossal", dimensions: "30â€“50 m ou mais por lado", area: "900â€“2.500 mÂ² ou mais", usage: "Cavernas e templos monumentais.", minDimension: 30, maxDimension: null, minArea: 901, maxArea: Number.POSITIVE_INFINITY },
 ];
 
 export type RoomSizeFrequencies = Record<RoomSizeCategoryKey, number>;
@@ -779,40 +852,16 @@ export interface RectangularRoomRatioDefinition {
 }
 
 export const RECTANGULAR_ROOM_RATIO_DEFINITIONS: readonly RectangularRoomRatioDefinition[] = [
-  { key: "square", label: "1:1", characteristic: "Quadrada", example: "8 × 8 m", minRatio: 1, maxRatio: 1.125, targetRatio: 1 },
-  { key: "slightlyElongated", label: "1,25:1", characteristic: "Ligeiramente alongada", example: "10 × 8 m", minRatio: 1.125, maxRatio: 1.375, targetRatio: 1.25 },
-  { key: "elongated", label: "1,5:1", characteristic: "Alongada", example: "12 × 8 m", minRatio: 1.375, maxRatio: 1.75, targetRatio: 1.5 },
-  { key: "veryElongated", label: "2:1", characteristic: "Muito alongada", example: "16 × 8 m", minRatio: 1.75, maxRatio: 3, targetRatio: 2 },
-  { key: "gallery", label: "3:1 ou mais", characteristic: "Galeria ou corredor largo", example: "18 × 6 m", minRatio: 3, maxRatio: Number.POSITIVE_INFINITY, targetRatio: 3 },
+  { key: "square", label: "1:1", characteristic: "Quadrada", example: "8 Ã— 8 m", minRatio: 1, maxRatio: 1.125, targetRatio: 1 },
+  { key: "slightlyElongated", label: "1,25:1", characteristic: "Ligeiramente alongada", example: "10 Ã— 8 m", minRatio: 1.125, maxRatio: 1.375, targetRatio: 1.25 },
+  { key: "elongated", label: "1,5:1", characteristic: "Alongada", example: "12 Ã— 8 m", minRatio: 1.375, maxRatio: 1.75, targetRatio: 1.5 },
+  { key: "veryElongated", label: "2:1", characteristic: "Muito alongada", example: "16 Ã— 8 m", minRatio: 1.75, maxRatio: 3, targetRatio: 2 },
+  { key: "gallery", label: "3:1 ou mais", characteristic: "Galeria ou corredor largo", example: "18 Ã— 6 m", minRatio: 3, maxRatio: Number.POSITIVE_INFINITY, targetRatio: 3 },
 ];
 
 export type RectangularRoomRatioFrequencies = Record<RectangularRoomRatioKey, number>;
 
-interface Rect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
-export interface NumericRange {
-  min: number;
-  max: number;
-}
-
-export interface RoomGenerationBounds {
-  minWidth: number;
-  maxWidth: number;
-  minHeight: number;
-  maxHeight: number;
-  areaRange: NumericRange;
-  aspectRatioRange: NumericRange;
-}
-
-interface RoomDimensionChoice extends RoomGenerationBounds {
-  width: number;
-  height: number;
-}
 
 export interface DungeonRoom extends Rect {
   number: number;
@@ -827,7 +876,7 @@ export interface DungeonRoom extends Rect {
   treasures: DungeonTreasure[];
 }
 
-interface GeneratedRoom extends Rect {
+export interface GeneratedRoom extends Rect {
   shape: RoomShape;
   generationBounds: RoomGenerationBounds;
   liquidFeature?: LiquidFeature;
@@ -904,9 +953,8 @@ export const DEFAULT_DUNGEON_PARAMETERS: DungeonParameters = {
     gallery: 5,
   },
 };
-const WALL: Tile = 0;
+const WALL: Tile = WALL_TILE;
 const FLOOR: Tile = FLOOR_TILE;
-export const CORRIDOR_TILE: Tile = 2;
 const CORRIDOR = CORRIDOR_TILE;
 export interface NumberedCorridorTrap extends DungeonTrap {
   number: number;
@@ -922,773 +970,6 @@ export function getNumberedCorridorTraps(dungeon: Dungeon): NumberedCorridorTrap
 const DOOR = DOOR_TILE;
 const STAIRS_UP = STAIRS_UP_TILE;
 const STAIRS_DOWN = STAIRS_DOWN_TILE;
-const MIN_ROOM_SIZE = 2;
-const MAX_ROOM_SIZE = 12;
-const MAX_ROOM_ASPECT_RATIO = 1.5;
-
-function createRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state += 0x6d2b79f5;
-    let value = state;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function deriveRandomStreamSeed(seed: number, streamName: GenerationRandomStreamName): number {
-  let hash = (seed >>> 0) ^ 0x811c9dc5;
-  for (let index = 0; index < streamName.length; index += 1) {
-    hash ^= streamName.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-export function createGenerationRandomStreams(seed: number): GenerationRandomStreams {
-  return {
-    topology: createRandom(deriveRandomStreamSeed(seed, "topology")),
-    placement: createRandom(deriveRandomStreamSeed(seed, "placement")),
-    corridors: createRandom(deriveRandomStreamSeed(seed, "corridors")),
-    content: createRandom(deriveRandomStreamSeed(seed, "content")),
-    decoration: createRandom(deriveRandomStreamSeed(seed, "decoration")),
-  };
-}
-
-function createGrid(width: number, height: number, tile: Tile = WALL): Tile[][] {
-  return Array.from({ length: height }, () => Array<Tile>(width).fill(tile));
-}
-
-function carveRect(tiles: Tile[][], rect: Rect, tile: Tile): void {
-  for (let y = rect.y; y < rect.y + rect.height; y += 1) {
-    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
-      tiles[y][x] = tile;
-    }
-  }
-}
-
-function squareRoomBounds(room: Rect): Rect {
-  const size = Math.min(room.width, room.height);
-  return {
-    x: room.x + Math.floor((room.width - size) / 2),
-    y: room.y + Math.floor((room.height - size) / 2),
-    width: size,
-    height: size,
-  };
-}
-
-function carveRoom(
-  tiles: Tile[][],
-  room: Rect,
-  shape: RoomShape,
-  variation: number,
-  tile: Tile,
-): void {
-  if (shape === "rectangular" || shape === "square" || shape === "columns") {
-    carveRect(tiles, room, tile);
-    return;
-  }
-
-  if (shape === "multiLevel") {
-    carveRect(tiles, room, tile);
-    const platformWidth = Math.max(1, Math.floor(room.width * 0.45));
-    const platformHeight = Math.max(1, Math.floor(room.height * 0.45));
-    const platformX = room.x + Math.floor((room.width - platformWidth) / 2);
-    const platformY = room.y + Math.floor((room.height - platformHeight) / 2);
-    carveRect(tiles, {
-      x: platformX,
-      y: platformY,
-      width: platformWidth,
-      height: platformHeight,
-    }, ELEVATED_FLOOR_TILE);
-    const stairX = platformX > room.x ? platformX - 1 : platformX + platformWidth;
-    const stairY = room.y + Math.floor(room.height / 2);
-    if (stairX < room.x + room.width) tiles[stairY][stairX] = ROOM_STAIRS_TILE;
-    return;
-  }
-
-  const centerX = room.x + (room.width - 1) / 2;
-  const centerY = room.y + (room.height - 1) / 2;
-  const radiusX = (shape === "round" ? Math.min(room.width, room.height) : room.width) / 2;
-  const radiusY = (shape === "round" ? Math.min(room.width, room.height) : room.height) / 2;
-  const orientation = Math.floor(variation / (Math.PI / 2)) % 4;
-  let carvedTileCount = 0;
-
-  for (let y = room.y; y < room.y + room.height; y += 1) {
-    for (let x = room.x; x < room.x + room.width; x += 1) {
-      const deltaX = (x - centerX) / radiusX;
-      const deltaY = (y - centerY) / radiusY;
-      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-      const angle = Math.atan2(deltaY, deltaX);
-      const boundary = 0.86
-        + 0.12 * Math.sin(angle * 3 + variation)
-        + 0.08 * Math.cos(angle * 5 - variation * 1.7);
-      const normalizedX = (x - room.x + 0.5) / room.width;
-      const normalizedY = (y - room.y + 0.5) / room.height;
-      const [orientedX, orientedY] = orientation === 1
-        ? [normalizedY, 1 - normalizedX]
-        : orientation === 2
-          ? [1 - normalizedX, 1 - normalizedY]
-          : orientation === 3
-            ? [1 - normalizedY, normalizedX]
-            : [normalizedX, normalizedY];
-      let isFloor = false;
-      if (shape === "round" || shape === "elliptical") {
-        isFloor = distance <= 1;
-      } else if (shape === "octagonal") {
-        isFloor = Math.abs(deltaX) + Math.abs(deltaY) <= 1.5;
-      } else if (shape === "lShaped") {
-        isFloor = orientedX <= 0.38
-          || orientedY >= 0.5
-          || (orientedX >= 0.35 && orientedX <= 0.65 && orientedY >= 0.35 && orientedY <= 0.65);
-      } else if (shape === "tShaped") {
-        isFloor = orientedY <= 0.38 || (orientedX >= 0.37 && orientedX <= 0.63);
-      } else if (shape === "crossShaped") {
-        isFloor = Math.abs(orientedX - 0.5) <= 0.18 || Math.abs(orientedY - 0.5) <= 0.18;
-      } else if (shape === "ringShaped") {
-        isFloor = distance <= 1
-          && (distance >= 0.55 || distance <= 0.24 || Math.abs(deltaX) <= 0.12 || Math.abs(deltaY) <= 0.12);
-      } else if (shape === "alcoves") {
-        const inMainRoom = normalizedX >= 0.12
-          && normalizedX <= 0.88
-          && normalizedY >= 0.12
-          && normalizedY <= 0.88;
-        const inTopOrBottomAlcove = (normalizedY < 0.12 || normalizedY > 0.88)
-          && (
-            (normalizedX >= 0.2 && normalizedX <= 0.36)
-            || (normalizedX >= 0.64 && normalizedX <= 0.8)
-          );
-        const inLeftOrRightAlcove = (normalizedX < 0.12 || normalizedX > 0.88)
-          && (
-            (normalizedY >= 0.2 && normalizedY <= 0.36)
-            || (normalizedY >= 0.64 && normalizedY <= 0.8)
-          );
-        isFloor = inMainRoom || inTopOrBottomAlcove || inLeftOrRightAlcove;
-      } else {
-        isFloor = distance <= boundary;
-      }
-      if (isFloor) {
-        tiles[y][x] = tile;
-        carvedTileCount += 1;
-      }
-    }
-  }
-  if (carvedTileCount === 0) carveRect(tiles, room, tile);
-}
-
-function createWeightedTargets<T extends string>(
-  count: number,
-  random: () => number,
-  weights: readonly { key: T; frequency: number }[],
-  fallback: T,
-): T[] {
-  const totalFrequency = weights.reduce((total, entry) => total + Math.max(0, entry.frequency), 0);
-  if (totalFrequency <= 0) return Array.from({ length: count }, () => fallback);
-
-  const allocations = weights.map((entry) => {
-    const exactCount = Math.max(0, entry.frequency) / totalFrequency * count;
-    return { ...entry, exactCount, tieBreak: random(), count: Math.floor(exactCount) };
-  });
-  let remaining = count - allocations.reduce((total, entry) => total + entry.count, 0);
-  const largestRemainders = [...allocations].sort((left, right) => {
-    const difference = (right.exactCount % 1) - (left.exactCount % 1);
-    return difference || left.tieBreak - right.tieBreak;
-  });
-  for (const entry of largestRemainders) {
-    if (remaining <= 0) break;
-    entry.count += 1;
-    remaining -= 1;
-  }
-
-  const targets: T[] = [];
-  for (const entry of allocations) {
-    for (let index = 0; index < entry.count; index += 1) {
-      targets.push(entry.key);
-    }
-  }
-  for (let index = targets.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [targets[index], targets[swapIndex]] = [targets[swapIndex], targets[index]];
-  }
-  return targets;
-}
-
-function createRoomShapes(
-  count: number,
-  random: () => number,
-  frequencies: RoomShapeFrequencies,
-): RoomShape[] {
-  return createWeightedTargets(
-    count,
-    random,
-    ROOM_SHAPE_DEFINITIONS.map(({ key }) => ({ key, frequency: frequencies[key] })),
-    "rectangular",
-  );
-}
-
-function createRoomSizeTargets(
-  count: number,
-  random: () => number,
-  frequencies: RoomSizeFrequencies,
-): RoomSizeCategoryKey[] {
-  return createWeightedTargets(
-    count,
-    random,
-    ROOM_SIZE_CATEGORIES.map((category) => ({
-      key: category.key,
-      frequency: frequencies[category.key],
-    })),
-    "micro",
-  );
-}
-
-function createRoomRatioTargets(
-  count: number,
-  random: () => number,
-  frequencies: RectangularRoomRatioFrequencies,
-): RectangularRoomRatioKey[] {
-  const totalFrequency = RECTANGULAR_ROOM_RATIO_DEFINITIONS.reduce(
-    (total, definition) => total + Math.max(0, frequencies[definition.key]),
-    0,
-  );
-  if (totalFrequency <= 0) return Array.from({ length: count }, () => "square");
-
-  return Array.from({ length: count }, () => {
-    let remainingWeight = random() * totalFrequency;
-    for (const definition of RECTANGULAR_ROOM_RATIO_DEFINITIONS) {
-      remainingWeight -= Math.max(0, frequencies[definition.key]);
-      if (remainingWeight < 0) return definition.key;
-    }
-    return RECTANGULAR_ROOM_RATIO_DEFINITIONS[RECTANGULAR_ROOM_RATIO_DEFINITIONS.length - 1].key;
-  });
-}
-
-function chooseRoomDimensions(
-  availableWidth: number,
-  availableHeight: number,
-  maxRoomSize: number,
-  shape: RoomShape,
-  categoryKey: RoomSizeCategoryKey | null,
-  random: () => number,
-  ratioKey?: RectangularRoomRatioKey,
-): RoomDimensionChoice | null {
-  const category = categoryKey === null
-    ? undefined
-    : ROOM_SIZE_CATEGORIES.find((entry) => entry.key === categoryKey);
-  if (categoryKey !== null && !category) return null;
-  const minDimension = category?.minDimension ?? MIN_ROOM_SIZE;
-  const categoryMaxDimension = category?.maxDimension ?? maxRoomSize;
-  const maxWidth = Math.min(availableWidth, maxRoomSize, categoryMaxDimension);
-  const maxHeight = Math.min(availableHeight, maxRoomSize, categoryMaxDimension);
-  const candidates: Array<{ width: number; height: number }> = [];
-
-  for (let width = minDimension; width <= maxWidth; width += 1) {
-    for (let height = minDimension; height <= maxHeight; height += 1) {
-      const area = width * height;
-      if (
-        (category && (area < category.minArea || area > category.maxArea))
-        || ((shape === "square" || shape === "round") && width !== height)
-      ) continue;
-      const ratio = Math.max(width, height) / Math.min(width, height);
-      if (!ratioKey && ratio > MAX_ROOM_ASPECT_RATIO) continue;
-      candidates.push({ width, height });
-    }
-  }
-
-  if (candidates.length === 0) return null;
-  let validCandidates = candidates;
-  if (ratioKey) {
-    const ratioDefinition = RECTANGULAR_ROOM_RATIO_DEFINITIONS.find((entry) => entry.key === ratioKey);
-    if (!ratioDefinition) return null;
-    const matchingCandidates = candidates.filter(({ width, height }) => {
-      const ratio = Math.max(width, height) / Math.min(width, height);
-      return ratio >= ratioDefinition.minRatio && ratio < ratioDefinition.maxRatio;
-    });
-    if (matchingCandidates.length > 0) {
-      validCandidates = matchingCandidates;
-    } else {
-      let closestDifference = Number.POSITIVE_INFINITY;
-      const closestCandidates: Array<{ width: number; height: number }> = [];
-      for (const candidate of candidates) {
-        const ratio = Math.max(candidate.width, candidate.height) / Math.min(candidate.width, candidate.height);
-        const difference = Math.abs(ratio - ratioDefinition.targetRatio);
-        if (difference < closestDifference) {
-          closestDifference = difference;
-          closestCandidates.length = 0;
-          closestCandidates.push(candidate);
-        } else if (difference === closestDifference) {
-          closestCandidates.push(candidate);
-        }
-      }
-      validCandidates = closestCandidates;
-    }
-  }
-
-  const selected = validCandidates[Math.floor(random() * validCandidates.length)];
-  const getRange = (valueFor: (candidate: { width: number; height: number }) => number) => (
-    validCandidates.reduce(
-      (range, candidate) => {
-        const value = valueFor(candidate);
-        return { min: Math.min(range.min, value), max: Math.max(range.max, value) };
-      },
-      { min: Number.POSITIVE_INFINITY, max: Number.NEGATIVE_INFINITY },
-    )
-  );
-  return {
-    ...selected,
-    minWidth: getRange((candidate) => candidate.width).min,
-    maxWidth: getRange((candidate) => candidate.width).max,
-    minHeight: getRange((candidate) => candidate.height).min,
-    maxHeight: getRange((candidate) => candidate.height).max,
-    areaRange: getRange((candidate) => candidate.width * candidate.height),
-    aspectRatioRange: getRange(
-      (candidate) => Math.max(candidate.width, candidate.height) / Math.min(candidate.width, candidate.height),
-    ),
-  };
-}
-
-function carveHorizontal(tiles: Tile[][], x1: number, x2: number, y: number, width: number): void {
-  for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x += 1) {
-    for (let offset = 0; offset < width; offset += 1) {
-      const corridorY = y + offset - Math.floor((width - 1) / 2);
-      if (tiles[corridorY]?.[x] === WALL) tiles[corridorY][x] = CORRIDOR;
-    }
-  }
-}
-
-function carveVertical(tiles: Tile[][], y1: number, y2: number, x: number, width: number): void {
-  for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y += 1) {
-    for (let offset = 0; offset < width; offset += 1) {
-      const corridorX = x + offset - Math.floor((width - 1) / 2);
-      if (tiles[y][corridorX] === WALL) tiles[y][corridorX] = CORRIDOR;
-    }
-  }
-}
-
-function roomCenter(room: Rect): [number, number] {
-  return [Math.floor(room.x + room.width / 2), Math.floor(room.y + room.height / 2)];
-}
-
-function generateBsp(
-  width: number,
-  height: number,
-  random: () => number,
-  roomTarget: number,
-  corridorWidth: number,
-  corridorCompactness: number,
-  roomShapeFrequencies: RoomShapeFrequencies,
-  roomSizeDistributionEnabled: boolean,
-  roomSizeFrequencies: RoomSizeFrequencies,
-  rectangularRoomRatioFrequencies: RectangularRoomRatioFrequencies,
-): {
-  tiles: Tile[][];
-  rooms: GeneratedRoom[];
-} {
-  const tiles = createGrid(width, height);
-  const compactness = Math.max(0, Math.min(1, corridorCompactness / 100));
-  const roomScale = Math.min(1.25, Math.sqrt(DEFAULT_DUNGEON_PARAMETERS.roomCount / Math.max(1, roomTarget)));
-  const compactFootprintScaleX = Math.max(0.75, 1 - 0.25 * compactness * roomScale);
-  const compactFootprintScaleY = Math.max(0.75, 1 - 0.18 * compactness * roomScale);
-  const expandedFootprint = random() >= compactness;
-  const layoutWidth = Math.max(
-    Math.min(width - 4, 15),
-    Math.round((width - 4) * (expandedFootprint ? 1 : compactFootprintScaleX)),
-  );
-  const layoutHeight = Math.max(
-    Math.min(height - 4, 15),
-    Math.round((height - 4) * (expandedFootprint ? 1 : compactFootprintScaleY)),
-  );
-  const leaves: Rect[] = [{
-    x: Math.floor((width - layoutWidth) / 2),
-    y: Math.floor((height - layoutHeight) / 2),
-    width: layoutWidth,
-    height: layoutHeight,
-  }];
-  const rooms: GeneratedRoom[] = [];
-  const defaultAreaPerRoom = (
-    DEFAULT_DUNGEON_PARAMETERS.width
-    * DEFAULT_DUNGEON_PARAMETERS.height
-    / DEFAULT_DUNGEON_PARAMETERS.roomCount
-  );
-  const areaPerRoom = width * height / Math.max(1, roomTarget);
-  const requestedMaxRoomDimension = roomSizeDistributionEnabled
-    ? ROOM_SIZE_CATEGORIES.reduce(
-      (largest, category) => (
-        roomSizeFrequencies[category.key] > 0
-          ? Math.max(largest, category.maxDimension ?? MAX_ROOM_SIZE * 10)
-          : largest
-      ),
-      MIN_ROOM_SIZE,
-    )
-    : MAX_ROOM_SIZE;
-  const maxRoomSize = Math.min(
-    MAX_ROOM_SIZE * 10,
-    Math.max(
-      MAX_ROOM_SIZE,
-      Math.round(MAX_ROOM_SIZE * Math.sqrt(areaPerRoom / defaultAreaPerRoom)),
-      requestedMaxRoomDimension,
-    ),
-  );
-  const minRoomSize = MIN_ROOM_SIZE;
-  const roomSizeTargets = roomSizeDistributionEnabled
-    ? createRoomSizeTargets(roomTarget, random, roomSizeFrequencies)
-    : [];
-  const placementBounds: Rect = {
-    x: leaves[0].x,
-    y: leaves[0].y,
-    width: leaves[0].width,
-    height: leaves[0].height,
-  };
-  const targetFootprintScale = Math.min(
-    0.98,
-    0.82 + 0.13 * Math.sqrt(roomTarget / DEFAULT_DUNGEON_PARAMETERS.roomCount) + 0.1 * (1 - compactness),
-  );
-  const targetFootprintWidth = placementBounds.width * targetFootprintScale;
-  const targetFootprintHeight = placementBounds.height * targetFootprintScale;
-  const fullBounds: Rect = { x: 2, y: 2, width: width - 4, height: height - 4 };
-  const canPlaceRoom = (candidate: Rect, bounds: Rect): boolean => {
-    if (
-      candidate.x < bounds.x + 1
-      || candidate.y < bounds.y + 1
-      || candidate.x + candidate.width > bounds.x + bounds.width - 1
-      || candidate.y + candidate.height > bounds.y + bounds.height - 1
-    ) return false;
-    return rooms.every((room) => {
-      const horizontalGap = Math.max(
-        0,
-        candidate.x - (room.x + room.width),
-        room.x - (candidate.x + candidate.width),
-      );
-      const verticalGap = Math.max(
-        0,
-        candidate.y - (room.y + room.height),
-        room.y - (candidate.y + candidate.height),
-      );
-      return horizontalGap > 0 || verticalGap > 0;
-    });
-  };
-  const placeRoom = (roomWidth: number, roomHeight: number): Rect | null => {
-    if (rooms.length === 0) {
-      return {
-        x: placementBounds.x + Math.floor((placementBounds.width - roomWidth) / 2),
-        y: placementBounds.y + Math.floor((placementBounds.height - roomHeight) / 2),
-        width: roomWidth,
-        height: roomHeight,
-      };
-    }
-
-    const candidates = new Map<string, { room: Rect; score: number; tieBreak: number }>();
-    const maxGap = 1 + Math.ceil((1 - compactness) * 8);
-    const addCandidate = (x: number, y: number): void => {
-      const candidate = { x, y, width: roomWidth, height: roomHeight };
-      if (!canPlaceRoom(candidate, placementBounds)) return;
-      const key = `${x},${y}`;
-      if (candidates.has(key)) return;
-
-      const minX = Math.min(x, ...rooms.map((room) => room.x));
-      const minY = Math.min(y, ...rooms.map((room) => room.y));
-      const maxX = Math.max(x + roomWidth, ...rooms.map((room) => room.x + room.width));
-      const maxY = Math.max(y + roomHeight, ...rooms.map((room) => room.y + room.height));
-      const centerX = x + roomWidth / 2;
-      const centerY = y + roomHeight / 2;
-      const layoutCenterX = placementBounds.x + placementBounds.width / 2;
-      const layoutCenterY = placementBounds.y + placementBounds.height / 2;
-      const footprintWidth = maxX - minX;
-      const footprintHeight = maxY - minY;
-      const nearestGap = Math.min(...rooms.map((room) => {
-        const horizontalGap = Math.max(
-          0,
-          x - (room.x + room.width),
-          room.x - (x + roomWidth),
-        );
-        const verticalGap = Math.max(
-          0,
-          y - (room.y + room.height),
-          room.y - (y + roomHeight),
-        );
-        return horizontalGap + verticalGap;
-      }));
-      const adjacentRoomCount = rooms.filter((room) => {
-        const horizontalGap = Math.max(
-          0,
-          x - (room.x + room.width),
-          room.x - (x + roomWidth),
-        );
-        const verticalGap = Math.max(
-          0,
-          y - (room.y + room.height),
-          room.y - (y + roomHeight),
-        );
-        return horizontalGap + verticalGap === 1;
-      }).length;
-      const score = Math.abs(targetFootprintWidth - footprintWidth)
-        + Math.abs(targetFootprintHeight - footprintHeight)
-        + 0.25 * (Math.abs(centerX - layoutCenterX) + Math.abs(centerY - layoutCenterY))
-        + 1.95 * nearestGap
-        - 1.5 * Math.max(0, adjacentRoomCount - 1);
-      candidates.set(key, { room: candidate, score, tieBreak: random() });
-    };
-
-    for (const anchor of rooms) {
-      const alignedY = new Set([
-        anchor.y,
-        anchor.y + Math.floor((anchor.height - roomHeight) / 2),
-        anchor.y + anchor.height - roomHeight,
-        anchor.y - roomHeight + 1,
-        anchor.y + anchor.height - 1,
-      ]);
-      const alignedX = new Set([
-        anchor.x,
-        anchor.x + Math.floor((anchor.width - roomWidth) / 2),
-        anchor.x + anchor.width - roomWidth,
-        anchor.x - roomWidth + 1,
-        anchor.x + anchor.width - 1,
-      ]);
-      for (let gap = 1; gap <= maxGap; gap += 1) {
-        for (const y of alignedY) {
-          addCandidate(anchor.x - gap - roomWidth, y);
-          addCandidate(anchor.x + anchor.width + gap, y);
-        }
-        for (const x of alignedX) {
-          addCandidate(x, anchor.y - gap - roomHeight);
-          addCandidate(x, anchor.y + anchor.height + gap);
-        }
-      }
-    }
-
-    if (candidates.size > 0) {
-      const rankedCandidates = [...candidates.values()].sort(
-        (left, right) => left.score - right.score || left.tieBreak - right.tieBreak,
-      );
-      const candidateCount = Math.max(1, Math.ceil(rankedCandidates.length * (1 - compactness) * 0.25));
-      return rankedCandidates[Math.floor(random() * Math.min(candidateCount, rankedCandidates.length))].room;
-    }
-
-    for (const bounds of [placementBounds, fullBounds]) {
-      for (let y = bounds.y + 1; y <= bounds.y + bounds.height - roomHeight - 1; y += 1) {
-        for (let x = bounds.x + 1; x <= bounds.x + bounds.width - roomWidth - 1; x += 1) {
-          const candidate = { x, y, width: roomWidth, height: roomHeight };
-          if (canPlaceRoom(candidate, bounds)) return candidate;
-        }
-      }
-    }
-    return null;
-  };
-
-  for (let index = 0; index < leaves.length && leaves.length < roomTarget; index += 1) {
-    const leaf = leaves[index];
-    const canSplitHorizontally = leaf.height >= 15;
-    const canSplitVertically = leaf.width >= 15;
-    if (!canSplitHorizontally && !canSplitVertically) continue;
-
-    let splitHorizontally: boolean;
-    if (!canSplitHorizontally) {
-      splitHorizontally = false;
-    } else if (!canSplitVertically) {
-      splitHorizontally = true;
-    } else {
-      const aspectRatio = leaf.width / leaf.height;
-      if (aspectRatio > MAX_ROOM_ASPECT_RATIO) {
-        splitHorizontally = false;
-      } else if (aspectRatio < 1 / MAX_ROOM_ASPECT_RATIO) {
-        splitHorizontally = true;
-      } else {
-        splitHorizontally = random() > 0.5;
-      }
-    }
-
-    const dimension = splitHorizontally ? leaf.height : leaf.width;
-    const minimum = Math.max(7, Math.floor(dimension * 0.3));
-    const maximum = Math.min(dimension - 7, Math.ceil(dimension * 0.7));
-    const split = minimum + Math.floor(random() * (maximum - minimum + 1));
-    if (split < minimum || dimension - split < minimum) continue;
-
-    if (splitHorizontally) {
-      leaves.push(
-        { x: leaf.x, y: leaf.y, width: leaf.width, height: split },
-        { x: leaf.x, y: leaf.y + split, width: leaf.width, height: leaf.height - split },
-      );
-    } else {
-      leaves.push(
-        { x: leaf.x, y: leaf.y, width: split, height: leaf.height },
-        { x: leaf.x + split, y: leaf.y, width: leaf.width - split, height: leaf.height },
-      );
-    }
-    leaves.splice(index, 1);
-    index -= 1;
-  }
-
-  const roomLeaves = leaves.filter((leaf) => (
-    Math.min(leaf.width - 2, maxRoomSize) >= minRoomSize
-    && Math.min(leaf.height - 2, maxRoomSize) >= minRoomSize
-  ));
-  const roomShapes = createRoomShapes(roomLeaves.length, random, roomShapeFrequencies);
-  const rectangularRoomCount = roomShapes.filter((shape) => shape === "rectangular").length;
-  const roomRatioTargets = createRoomRatioTargets(
-    rectangularRoomCount,
-    random,
-    rectangularRoomRatioFrequencies,
-  );
-  let rectangularRoomIndex = 0;
-
-  for (const [leafIndex, leaf] of roomLeaves.entries()) {
-    const maxWidth = Math.min(leaf.width - 2, maxRoomSize);
-    const maxHeight = Math.min(leaf.height - 2, maxRoomSize);
-    const shape = roomShapes[leafIndex];
-    const ratioKey = shape === "rectangular"
-      ? roomRatioTargets[rectangularRoomIndex++]
-      : undefined;
-    let dimensions: RoomDimensionChoice | null = null;
-    const requestedCategory = roomSizeTargets[leafIndex];
-    if (requestedCategory) {
-      const requestedIndex = ROOM_SIZE_CATEGORIES.findIndex((category) => category.key === requestedCategory);
-      const fallbackCategories = [...ROOM_SIZE_CATEGORIES].sort((left, right) => (
-        Math.abs(ROOM_SIZE_CATEGORIES.indexOf(left) - requestedIndex)
-        - Math.abs(ROOM_SIZE_CATEGORIES.indexOf(right) - requestedIndex)
-      ));
-      for (const category of fallbackCategories) {
-        dimensions = chooseRoomDimensions(
-          maxWidth,
-          maxHeight,
-          maxRoomSize,
-          shape,
-          category.key,
-          random,
-          ratioKey,
-        );
-        if (dimensions) break;
-      }
-    }
-    dimensions ??= chooseRoomDimensions(
-      maxWidth,
-      maxHeight,
-      maxRoomSize,
-      shape,
-      null,
-      random,
-      ratioKey,
-    );
-    if (!dimensions) continue;
-    const room = placeRoom(dimensions.width, dimensions.height);
-    if (!room) continue;
-    rooms.push({
-      ...room,
-      shape,
-      generationBounds: {
-        minWidth: dimensions.minWidth,
-        maxWidth: dimensions.maxWidth,
-        minHeight: dimensions.minHeight,
-        maxHeight: dimensions.maxHeight,
-        areaRange: dimensions.areaRange,
-        aspectRatioRange: dimensions.aspectRatioRange,
-      },
-    });
-  }
-
-  const generatedRooms = rooms.map((room): GeneratedRoom => {
-    const shape = room.shape;
-    const shapedRoom = shape === "square" || shape === "round"
-      ? squareRoomBounds(room)
-      : room;
-    carveRoom(tiles, shapedRoom, shape, random() * Math.PI * 2, FLOOR);
-    return { ...shapedRoom, shape, generationBounds: room.generationBounds };
-  });
-
-  const roomBoundaryPoints = generatedRooms.map((room) => {
-    const points: Array<[number, number]> = [];
-    for (let y = room.y; y < room.y + room.height; y += 1) {
-      for (let x = room.x; x < room.x + room.width; x += 1) {
-        if (
-          tiles[y][x] !== WALL
-          && (x === room.x || x === room.x + room.width - 1 || y === room.y || y === room.y + room.height - 1)
-        ) {
-          points.push([x, y]);
-        }
-      }
-    }
-    if (points.length > 0) return points;
-    for (let y = room.y; y < room.y + room.height; y += 1) {
-      for (let x = room.x; x < room.x + room.width; x += 1) {
-        if (tiles[y][x] !== WALL) points.push([x, y]);
-      }
-    }
-    return points.length > 0 ? points : [roomCenter(room)];
-  });
-
-  const connectedRoomIndices = new Set<number>(generatedRooms.length > 0 ? [0] : []);
-  const pendingRoomIndices = new Set(generatedRooms.map((_, index) => index).slice(1));
-  const getRoomSeparation = (firstIndex: number, secondIndex: number): number => {
-    let shortestDistance = Number.POSITIVE_INFINITY;
-    for (const [firstX, firstY] of roomBoundaryPoints[firstIndex]) {
-      for (const [secondX, secondY] of roomBoundaryPoints[secondIndex]) {
-        shortestDistance = Math.min(
-          shortestDistance,
-          Math.abs(firstX - secondX) + Math.abs(firstY - secondY),
-        );
-      }
-    }
-    return shortestDistance;
-  };
-
-  const connectRooms = (sourceIndex: number, targetIndex: number) => {
-    let shortestDistance = Number.POSITIVE_INFINITY;
-    const shortestConnections: Array<[[number, number], [number, number]]> = [];
-    for (const sourcePoint of roomBoundaryPoints[sourceIndex]) {
-      for (const targetPoint of roomBoundaryPoints[targetIndex]) {
-        const distance = Math.abs(sourcePoint[0] - targetPoint[0])
-          + Math.abs(sourcePoint[1] - targetPoint[1]);
-        if (distance < shortestDistance) {
-          shortestDistance = distance;
-          shortestConnections.length = 0;
-          shortestConnections.push([sourcePoint, targetPoint]);
-        } else if (distance === shortestDistance) {
-          shortestConnections.push([sourcePoint, targetPoint]);
-        }
-      }
-    }
-    const [[sourceX, sourceY], [targetX, targetY]] = shortestConnections[
-      Math.floor(random() * shortestConnections.length)
-    ];
-    if (sourceX === targetX) {
-      carveVertical(tiles, sourceY, targetY, sourceX, corridorWidth);
-    } else if (sourceY === targetY) {
-      carveHorizontal(tiles, sourceX, targetX, sourceY, corridorWidth);
-    } else if (random() > 0.5) {
-      carveHorizontal(tiles, sourceX, targetX, sourceY, corridorWidth);
-      carveVertical(tiles, sourceY, targetY, targetX, corridorWidth);
-    } else {
-      carveVertical(tiles, sourceY, targetY, sourceX, corridorWidth);
-      carveHorizontal(tiles, sourceX, targetX, targetY, corridorWidth);
-    }
-  };
-
-  while (pendingRoomIndices.size > 0) {
-    let shortestDistance = Number.POSITIVE_INFINITY;
-    const shortestConnections: Array<[number, number]> = [];
-    for (const connectedIndex of connectedRoomIndices) {
-      for (const pendingIndex of pendingRoomIndices) {
-        const distance = getRoomSeparation(connectedIndex, pendingIndex);
-        if (distance < shortestDistance) {
-          shortestDistance = distance;
-          shortestConnections.length = 0;
-          shortestConnections.push([connectedIndex, pendingIndex]);
-        } else if (distance === shortestDistance) {
-          shortestConnections.push([connectedIndex, pendingIndex]);
-        }
-      }
-    }
-
-    const [sourceIndex, targetIndex] = shortestConnections[
-      Math.floor(random() * shortestConnections.length)
-    ];
-    connectRooms(sourceIndex, targetIndex);
-    connectedRoomIndices.add(targetIndex);
-    pendingRoomIndices.delete(targetIndex);
-  }
-
-  return { tiles, rooms: generatedRooms };
-}
 
 type Point = [number, number];
 
@@ -2298,13 +1579,13 @@ function createTreasureDetails(
     );
   } else if (category === "equipment") {
     const attributes = [
-      "Origem cultural: uma tradição local antiga.",
-      "Material: liga metálica de procedência incomum.",
-      "Qualidade artesanal: acabamento acima do padrão.",
-      "Conservação: marcas de uso, mas ainda funcional.",
-      "Inscrição: símbolo ou nome de um antigo proprietário.",
-      "Valor histórico: associado a uma facção desaparecida.",
-      "Propriedade especial: possível efeito sobrenatural, a critério da campanha.",
+      "Origem cultural: uma tradiÃ§Ã£o local antiga.",
+      "Material: liga metÃ¡lica de procedÃªncia incomum.",
+      "Qualidade artesanal: acabamento acima do padrÃ£o.",
+      "ConservaÃ§Ã£o: marcas de uso, mas ainda funcional.",
+      "InscriÃ§Ã£o: sÃ­mbolo ou nome de um antigo proprietÃ¡rio.",
+      "Valor histÃ³rico: associado a uma facÃ§Ã£o desaparecida.",
+      "Propriedade especial: possÃ­vel efeito sobrenatural, a critÃ©rio da campanha.",
     ];
     const selected = new Set<string>();
     while (selected.size < 3) selected.add(selectRandomValue(attributes, random));
@@ -2312,29 +1593,29 @@ function createTreasureDetails(
   } else if (category === "consumables") {
     details.push(
       `Quantidade: ${Math.floor(random() * 4) + 1} unidade(s).`,
-      `Condição: ${selectRandomValue(qualityDescriptions, random)}.`,
+      `CondiÃ§Ã£o: ${selectRandomValue(qualityDescriptions, random)}.`,
     );
   } else if (category === "relics") {
     const values = ["baixo", "moderado", "alto", "excepcional"];
     details.push(
       `Valor comercial: ${selectRandomValue(values, random)}.`,
-      `Valor histórico: ${selectRandomValue(values, random)}.`,
+      `Valor histÃ³rico: ${selectRandomValue(values, random)}.`,
       `Valor narrativo: ${selectRandomValue(values, random)}.`,
     );
   } else if (category === "documents") {
-    details.push("Pista potencial: pode conectar esta sala a outra área ou facção.");
+    details.push("Pista potencial: pode conectar esta sala a outra Ã¡rea ou facÃ§Ã£o.");
   } else if (category === "materials") {
     details.push(
       `Quantidade: ${selectRandomValue(quantityDescriptions, random)}.`,
       `Qualidade: ${selectRandomValue(qualityDescriptions, random)}.`,
     );
   } else if (category === "creatureTrophies") {
-    details.push(`Comportamento do acumulador: ${selectRandomValue(["organizado por valor ou utilidade", "acumulado aleatoriamente, sem critério aparente"], random)}.`);
+    details.push(`Comportamento do acumulador: ${selectRandomValue(["organizado por valor ou utilidade", "acumulado aleatoriamente, sem critÃ©rio aparente"], random)}.`);
   } else if (category === "cursed") {
-    details.push("O risco está vinculado ao próprio objeto e pode persistir depois de retirado; não é uma armadilha de piso.");
+    details.push("O risco estÃ¡ vinculado ao prÃ³prio objeto e pode persistir depois de retirado; nÃ£o Ã© uma armadilha de piso.");
   } else if (category === "secret" && definition.discoveryMethod) {
     details.push(`Forma de descoberta: ${definition.discoveryMethod}`);
-    details.push(`Relevância: ${selectRandomValue(["objeto incomum", "pista importante", "recompensa valiosa"], random)}.`);
+    details.push(`RelevÃ¢ncia: ${selectRandomValue(["objeto incomum", "pista importante", "recompensa valiosa"], random)}.`);
   }
 
   return details;
@@ -2688,152 +1969,6 @@ function generateDrunkard(
   return tiles;
 }
 
-function generateHybrid(
-  width: number,
-  height: number,
-  seed: number,
-  parameters: DungeonParameters,
-  includeCellular = true,
-  includeDrunkard = true,
-): { tiles: Tile[][]; rooms: GeneratedRoom[] } {
-  const bsp = generateBsp(
-    width,
-    height,
-    createRandom(seed),
-    parameters.roomCount,
-    parameters.corridorWidth,
-    parameters.corridorCompactness,
-    parameters.roomShapeFrequencies,
-    parameters.roomSizeDistributionEnabled,
-    parameters.roomSizeFrequencies,
-    parameters.rectangularRoomRatioFrequencies,
-  );
-  const caves = includeCellular
-    ? generateCellular(
-      width,
-      height,
-      createRandom(seed ^ 0x9e3779b9),
-      parameters.cellularFillPercent,
-      parameters.cellularIterations,
-    )
-    : null;
-  const paths = includeDrunkard
-    ? generateDrunkard(
-      width,
-      height,
-      createRandom(seed ^ 0x85ebca6b),
-      parameters.drunkardCoveragePercent,
-    )
-    : null;
-  const tiles = createGrid(width, height);
-  const queue: Array<[number, number]> = [];
-  const visited = Array.from({ length: height }, () => Array<boolean>(width).fill(false));
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      if (bsp.tiles[y][x] !== WALL) {
-        tiles[y][x] = bsp.tiles[y][x];
-        visited[y][x] = true;
-        queue.push([x, y]);
-      }
-    }
-  }
-
-  for (let cursor = 0; cursor < queue.length; cursor += 1) {
-    const [x, y] = queue[cursor];
-    for (const [nextX, nextY] of [
-      [x + 1, y],
-      [x - 1, y],
-      [x, y + 1],
-      [x, y - 1],
-    ]) {
-      if (
-        nextX < 0
-        || nextY < 0
-        || nextX >= width
-        || nextY >= height
-        || visited[nextY][nextX]
-      ) continue;
-      const isOpenInCellular = caves === null || caves[nextY][nextX] !== WALL;
-      const isOpenInDrunkard = paths === null || paths[nextY][nextX] !== WALL;
-      const touchesCorridor = [
-        [nextX + 1, nextY],
-        [nextX - 1, nextY],
-        [nextX, nextY + 1],
-        [nextX, nextY - 1],
-      ].some(([corridorX, corridorY]) => bsp.tiles[corridorY]?.[corridorX] === CORRIDOR_TILE);
-      if (isOpenInCellular && isOpenInDrunkard && !touchesCorridor) {
-        tiles[nextY][nextX] = caves === null ? FLOOR : CAVE_TILE;
-        visited[nextY][nextX] = true;
-        queue.push([nextX, nextY]);
-      }
-    }
-  }
-  if (caves !== null) {
-    placeCaveConnectionWalls(
-      tiles,
-      bsp.rooms,
-      createRandom(seed ^ 0xc2b2ae35),
-    );
-  }
-  return { tiles, rooms: bsp.rooms };
-}
-
-function placeCaveConnectionWalls(
-  tiles: Tile[][],
-  rooms: GeneratedRoom[],
-  random: () => number,
-): void {
-  const width = tiles[0]?.length ?? 0;
-  const boundaries: Array<Map<number, [number, number]>> = [];
-  for (const room of rooms) {
-    const boundary = new Map<number, [number, number]>();
-    for (let y = room.y; y < room.y + room.height; y += 1) {
-      for (let x = room.x; x < room.x + room.width; x += 1) {
-        if (tiles[y]?.[x] !== FLOOR) continue;
-        for (const [offsetX, offsetY] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-          const wallX = x + offsetX;
-          const wallY = y + offsetY;
-          const isOutsideRoom = (
-            wallX < room.x
-            || wallX >= room.x + room.width
-            || wallY < room.y
-            || wallY >= room.y + room.height
-          );
-          if (isOutsideRoom && tiles[wallY]?.[wallX] === CAVE_TILE) {
-            boundary.set(wallY * width + wallX, [wallX, wallY]);
-          }
-        }
-      }
-    }
-    boundaries.push(boundary);
-  }
-
-  const boundaryKeys = new Set(boundaries.flatMap((boundary) => [...boundary.keys()]));
-  for (const boundary of boundaries) {
-    for (const [x, y] of boundary.values()) tiles[y][x] = WALL;
-  }
-
-  const markedWalls = new Set<number>();
-  for (const boundary of boundaries) {
-    const candidates = [...boundary.entries()].filter(([position, [x, y]]) => (
-      !markedWalls.has(position)
-      && [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].some(([caveX, caveY]) => (
-        tiles[caveY]?.[caveX] === CAVE_TILE
-        && !boundaryKeys.has(caveY * width + caveX)
-      ))
-    ));
-    if (candidates.length === 0 || random() >= 0.65) continue;
-    const [position, [wallX, wallY]] = candidates[Math.floor(random() * candidates.length)];
-    markedWalls.add(position);
-    const connectionType = random();
-    tiles[wallY][wallX] = connectionType < 0.34
-      ? CAVE_TILE
-      : connectionType < 0.67
-        ? CAVE_CONNECTION_WALL_TILE
-        : CAVE_BREACH_TILE;
-  }
-}
 
 function getRoomTraversalOrder(tiles: Tile[][], rooms: GeneratedRoom[]): number[] {
   if (rooms.length < 2) return rooms.map((_, index) => index);
@@ -3833,4 +2968,78 @@ export function repositionDungeonRooms(
     })),
     floorCount,
   };
+}
+
+export function getDimensionValidationMessage(
+  width: number,
+  height: number,
+): string | undefined {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
+    return "Informe largura e altura como números inteiros.";
+  }
+  if (width < MIN_DUNGEON_DIMENSION || height < MIN_DUNGEON_DIMENSION) {
+    return `Cada dimensão deve ter pelo menos ${MIN_DUNGEON_DIMENSION} tiles.`;
+  }
+  if (width > MAX_DUNGEON_WIDTH) {
+    return `A largura máxima é ${MAX_DUNGEON_WIDTH.toLocaleString("pt-BR")} tiles.`;
+  }
+  if (height > MAX_DUNGEON_HEIGHT) {
+    return `A altura máxima é ${MAX_DUNGEON_HEIGHT.toLocaleString("pt-BR")} tiles.`;
+  }
+  if (width * height > MAX_DUNGEON_TILE_COUNT) {
+    return `A área máxima é ${MAX_DUNGEON_TILE_COUNT.toLocaleString("pt-BR")} tiles.`;
+  }
+  return undefined;
+}
+
+export function redistributeFrequencies<T extends string>(
+  frequencies: Record<T, number>,
+  keys: readonly T[],
+  selectedKey: T,
+  selectedValue: number,
+): Record<T, number> {
+  const otherKeys = keys.filter((key) => key !== selectedKey);
+  const otherTotal = otherKeys.reduce((total, key) => total + frequencies[key], 0);
+  const remaining = 100 - selectedValue;
+  const allocations = otherKeys.map((key) => {
+    const exactValue = otherTotal === 0 ? remaining / otherKeys.length : remaining * frequencies[key] / otherTotal;
+    return { key, value: Math.floor(exactValue), remainder: exactValue % 1 };
+  });
+  let unallocated = remaining - allocations.reduce((total, entry) => total + entry.value, 0);
+  const remainderOrder = [...allocations].sort((left, right) => right.remainder - left.remainder);
+  for (const entry of remainderOrder) { if (unallocated <= 0) break; entry.value += 1; unallocated -= 1; }
+  const updated: Record<T, number> = { ...frequencies };
+  updated[selectedKey] = selectedValue;
+  for (const allocation of allocations) updated[allocation.key] = allocation.value;
+  return updated;
+}
+
+export function getFrequencyPercentages<T extends string>(
+  weights: Record<T, number>,
+  keys: readonly T[],
+): Record<T, number> {
+  const total = keys.reduce((sum, key) => sum + Math.max(0, weights[key]), 0);
+  const allocations = keys.map((key) => {
+    const exactValue = total === 0 ? 100 / keys.length : 100 * Math.max(0, weights[key]) / total;
+    return { key, value: Math.floor(exactValue), remainder: exactValue % 1 };
+  });
+  let unallocated = 100 - allocations.reduce((sum, allocation) => sum + allocation.value, 0);
+  for (const allocation of [...allocations].sort((left, right) => right.remainder - left.remainder)) {
+    if (unallocated <= 0) break; allocation.value += 1; unallocated -= 1;
+  }
+  const percentages: Record<T, number> = { ...weights };
+  for (const allocation of allocations) percentages[allocation.key] = allocation.value;
+  return percentages;
+}
+
+export const rotatableRoomShapes: ReadonlySet<RoomShape> = new Set(["lShaped", "tShaped", "crossShaped"]);
+
+const roomTrapTypes = TRAP_TYPES.filter((type) => TRAP_DEFINITIONS[type].placement !== "corridor");
+
+export function getEnvironmentalRoomTrapChance(weights: TrapCategoryWeights): number {
+  const availableCategories = TRAP_CATEGORY_ORDER.filter((category) => roomTrapTypes.some((type) => TRAP_DEFINITIONS[type].category === category));
+  const totalWeight = availableCategories.reduce((total, category) => (Number.isFinite(weights[category]) && weights[category] > 0 ? total + weights[category] : total), 0);
+  if (totalWeight === 0) return 0;
+  const environmentalWeight = (["environmental", "biological"] as const).reduce((total, category) => (availableCategories.includes(category) && Number.isFinite(weights[category]) && weights[category] > 0 ? total + weights[category] : total), 0);
+  return 25 * environmentalWeight / totalWeight;
 }

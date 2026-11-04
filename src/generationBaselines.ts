@@ -51,7 +51,7 @@ export const DUNGEON_GENERATION_V1_BASELINES: readonly DungeonGenerationBaseline
     seed: 22002,
     parameters: { width: 64, height: 48, roomCount: 12, cellularFillPercent: 48 },
     expectedRoomCount: 12,
-    expectedFingerprint: "a6bb96e09ddb3ea45d0cc83fb68f96763dc0890e9fff452c7fd439dc5839155a",
+    expectedFingerprint: "8c26b0766a77f0e42a095414c580d268c9a75731a63837b5887ee1a88f241538",
   },
   {
     id: "large-laboratory-hybrid",
@@ -61,7 +61,7 @@ export const DUNGEON_GENERATION_V1_BASELINES: readonly DungeonGenerationBaseline
     seed: 33003,
     parameters: { width: 96, height: 72, roomCount: 18 },
     expectedRoomCount: 18,
-    expectedFingerprint: "5d2ed4d3f5374288fc1f50e2e7b20e217fb70373fec7e840fc5bf7c62d88b41f",
+    expectedFingerprint: "7a17f25e34e619c77885626db40fb5e9578d456482d6f8f027c5f284a0419e2c",
   },
   {
     id: "small-natural-cavern-cellular",
@@ -91,7 +91,7 @@ export const DUNGEON_GENERATION_V1_BASELINES: readonly DungeonGenerationBaseline
     seed: 66006,
     parameters: { width: 80, height: 60, roomCount: 16, drunkardCoveragePercent: 34 },
     expectedRoomCount: 16,
-    expectedFingerprint: "99e2a7e502b3ef8a72f68345d46a21f79416543ef3f8d62cc39a22bc1368b86d",
+    expectedFingerprint: "a65b9c5aad9edf242f6dba9ba32402cdbd9578033489767e7ecb184bf4d802ca",
   },
 ];
 

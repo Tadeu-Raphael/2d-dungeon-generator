@@ -66,7 +66,7 @@ button { color: inherit; }
   margin: 0 auto;
   padding: 42px;
   display: grid;
-  grid-template-columns: 276px minmax(0, 1fr) 310px;
+  grid-template-columns: 276px minmax(0, 1fr) 250px;
   gap: 28px;
 }
 
@@ -277,8 +277,8 @@ h1 {
 .status-dot { width: 6px; height: 6px; margin-right: 7px; background: #81a98a; }
 .version { margin-left: auto; color: #58616c; }
 
-.map-panel { min-width: 0; display: flex; flex-direction: column; }
-.room-panel { min-width: 0; }
+.map-panel { min-width: 0; display: flex; flex-direction: column; grid-column: 2; grid-row: 1; }
+.room-panel { min-width: 0; grid-column: 3; grid-row: 1; }
 .room-panel-tools { height: 38px; display: flex; justify-content: flex-end; }
 .room-index {
   height: min(70vh, 690px);
@@ -357,6 +357,7 @@ h1 {
 .treasure-room-badge { border-color: rgba(201, 169, 87, 0.45); background: rgba(99, 73, 29, 0.2); color: #e2bd73; }
 .trap-room-badge { border-color: rgba(191, 111, 79, 0.48); background: rgba(93, 46, 31, 0.22); color: #e7a17b; }
 .water-room-badge { border-color: rgba(120, 199, 226, 0.48); background: rgba(40, 127, 166, 0.2); color: #a9e3f2; }
+.lava-room-badge { border-color: rgba(231, 125, 76, 0.5); background: rgba(142, 64, 50, 0.22); color: #ff9a59; }
 .room-copy .trap-feature-description {
   padding-left: 5px;
   border-left: 1px solid #754536;
@@ -713,7 +714,7 @@ h1 {
 
 @media (max-width: 1100px) {
   .topbar { padding: 0 24px; }
-  .workspace { padding: 30px 24px; grid-template-columns: 220px minmax(0, 1fr) 250px; gap: 18px; }
+  .workspace { padding: 30px 24px; grid-template-columns: 220px minmax(0, 1fr) 220px; gap: 18px; }
   .sidebar { grid-column: 1; grid-row: 1; }
   .map-panel { grid-column: 2; grid-row: 1; }
   .room-panel { grid-column: 3; grid-row: 1; }
@@ -723,11 +724,10 @@ h1 {
 }
 
 @media (max-width: 900px) {
-  .workspace { grid-template-columns: 235px minmax(0, 1fr); gap: 25px; }
-  .sidebar { grid-column: 1; grid-row: 1 / span 2; }
-  .map-panel { grid-column: 2; grid-row: 1; }
+  .workspace { grid-template-columns: minmax(0, 1fr) 240px; gap: 18px; }
+  .sidebar { grid-column: 1 / -1; grid-row: 1; }
+  .map-panel { grid-column: 1; grid-row: 2; }
   .room-panel { grid-column: 2; grid-row: 2; }
-  .room-index { height: 430px; min-height: 360px; }
 }
 
 @media (max-width: 650px) {
