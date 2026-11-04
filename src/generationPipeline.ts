@@ -82,8 +82,17 @@ const SPATIAL_STYLE_ORDER: readonly SpatialLayoutStyle[] = [
   "ring",
   "clusters",
 ];
+const TOPOLOGY_SPATIAL_STYLE: Record<TopologyStyle, SpatialLayoutStyle> = {
+  linear: "axis-branches",
+  branching: "axis-branches",
+  circuit: "ring",
+  centralized: "central-hub",
+  sectorized: "clusters",
+  hybrid: "axis-branches",
+};
 
 const WALL_TILE: Tile = 0;
+const MAX_V2_ROUTING_STATES_PER_CONNECTION = 16_384;
 
 function assertSpatialDensity(value: number): void {
   if (!Number.isFinite(value) || value < 0 || value > 100) {
@@ -154,8 +163,10 @@ function chooseSpatialStyle(
   profile: DungeonConcept,
   seed: number,
   requestedStyle?: SpatialLayoutStyle,
+  topologyStyle?: TopologyStyle,
 ): SpatialLayoutStyle {
   if (requestedStyle) return requestedStyle;
+  if (topologyStyle) return TOPOLOGY_SPATIAL_STYLE[topologyStyle];
   const weights = DUNGEON_CONCEPTS[profile].v2Preferences.spatialLayoutWeights;
   const totalWeight = SPATIAL_STYLE_ORDER.reduce((total, style) => total + weights[style], 0);
   if (totalWeight <= 0) {
@@ -167,6 +178,32 @@ function chooseSpatialStyle(
     if (choice < 0) return style;
   }
   return SPATIAL_STYLE_ORDER[SPATIAL_STYLE_ORDER.length - 1];
+}
+
+function routeWithConnectionOrderRecovery(
+  plan: GenerationPlan,
+  maxExpandedStates: number,
+): GenerationPlan {
+  const prioritizedConnectionIds: string[] = [];
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return routeGenerationPlanCorridors(plan, {
+        maxExpandedStates,
+        prioritizedConnectionIds,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof CorridorRoutingError)
+        || error.code !== "no-route"
+        || !error.connectionId
+        || prioritizedConnectionIds.includes(error.connectionId)
+      ) throw error;
+      lastError = error;
+      prioritizedConnectionIds.unshift(error.connectionId);
+    }
+  }
+  throw lastError;
 }
 
 function roomFootprintFromDungeon(dungeon: Dungeon, room: Dungeon["roomDetails"][number]): GridPosition[] {
@@ -261,9 +298,14 @@ function addProfileCorridorWidths(
       || target.roomRole === "boss"
       || linksSectors;
     const narrow = edge.isSecret || edge.connectionType === "secret-door" || edge.isOptional;
-    const preferredWidth = varyCorridorWidths
-      ? globalWidth + bias + (important ? 1 : narrow ? -1 : 0)
-      : globalWidth;
+    const profileWidth = globalWidth + bias;
+    const preferredWidth = !varyCorridorWidths
+      ? globalWidth
+      : important
+        ? Math.max(profileWidth, globalWidth + 1)
+        : narrow
+          ? Math.min(profileWidth, globalWidth - 1)
+          : profileWidth;
     const width = Math.max(1, Math.min(3, preferredWidth));
     return {
       ...edge,
@@ -633,10 +675,22 @@ function generateDungeonV2Pipeline(
     parameters: roomRecipeParameters,
     settings: { role: "v2-room-and-content-recipe" },
   });
+  if (v1RoomRecipe.dungeon.roomDetails.length < parameters.roomCount) {
+    return createFallbackResult(
+      request,
+      `A receita de salas V2 posicionou ${v1RoomRecipe.dungeon.roomDetails.length} de ${parameters.roomCount} salas solicitadas; foi usado o gerador V1 do perfil sem ocultar a redução.`,
+      "room-recipe-capacity",
+    );
+  }
   const profileAlgorithmNote = profile.algorithm === "bsp"
     ? undefined
     : `O perfil declara ${profile.algorithm} no V1. No V2, o BSP é usado somente como receita de salas e conteúdo; topologia, layout e corredores vêm do GenerationPlan.`;
-  const style = chooseSpatialStyle(request.profile, request.seed, request.spatialLayoutStyle);
+  const style = chooseSpatialStyle(
+    request.profile,
+    request.seed,
+    request.spatialLayoutStyle,
+    request.topologyStyle,
+  );
   const density = request.spatialDensity ?? profile.v2Preferences.defaultDensity;
   let sourcePlan: GenerationPlan;
   let roomFeatures: RoomFeatureBlueprint[];
@@ -681,56 +735,99 @@ function generateDungeonV2Pipeline(
     request.varyCorridorWidths ?? true,
   );
 
-  let spatialPlan: GenerationPlan;
-  try {
-    spatialPlan = generateGenerationSpatialLayout(topologyWithWidths, {
-      style,
-      minimumRoomGap: Math.round(((100 - density) / 100) * 10),
-    });
-  } catch (error) {
-    if (error instanceof SpatialLayoutError) {
-      return createFallbackResult(
-        request,
-        `O posicionamento V2 não encontrou um layout válido (${error.message}); foi usado o gerador V1 do perfil.`,
-        "spatial-layout",
-      );
+  const layoutStyles = request.spatialLayoutStyle
+    ? [style]
+    : [style, ...SPATIAL_STYLE_ORDER.filter((candidate) => candidate !== style)];
+  const maxExpandedStates = Math.min(
+    parameters.width * parameters.height * 4,
+    MAX_V2_ROUTING_STATES_PER_CONNECTION,
+  );
+  let routedPlan: GenerationPlan | undefined;
+  let lastSpatialError: SpatialLayoutError | undefined;
+  let lastContentSignal: V2FallbackSignal | undefined;
+  let lastRouteError: CorridorRoutingError | GenerationPlanValidationError | undefined;
+
+  for (const layoutStyle of layoutStyles) {
+    const layoutInput: GenerationPlan = {
+      ...topologyWithWidths,
+      generation: {
+        ...topologyWithWidths.generation,
+        settings: {
+          ...topologyWithWidths.generation.settings,
+          spatialLayoutStyle: layoutStyle,
+        },
+      },
+    };
+    let spatialPlan: GenerationPlan;
+    try {
+      spatialPlan = generateGenerationSpatialLayout(layoutInput, {
+        style: layoutStyle,
+        minimumRoomGap: Math.round(((100 - density) / 100) * 10),
+        maximumConnectionDistance: Math.hypot(parameters.width, parameters.height) * 0.75,
+      });
+    } catch (error) {
+      if (error instanceof SpatialLayoutError) {
+        lastSpatialError = error;
+        continue;
+      }
+      throw error;
     }
-    throw error;
+
+    let positionedPlan: GenerationPlan;
+    try {
+      positionedPlan = transferRoomContent(
+        sourcePlan,
+        spatialPlan,
+        roomFeatures,
+        parameters.entranceMode,
+      );
+    } catch (error) {
+      if (error instanceof V2FallbackSignal) {
+        lastContentSignal = error;
+        continue;
+      }
+      throw error;
+    }
+
+    try {
+      routedPlan = routeWithConnectionOrderRecovery(positionedPlan, maxExpandedStates);
+      break;
+    } catch (error) {
+      if (error instanceof CorridorRoutingError || error instanceof GenerationPlanValidationError) {
+        lastRouteError = error;
+        if (error instanceof CorridorRoutingError && error.code === "search-limit") break;
+        continue;
+      }
+      throw error;
+    }
   }
 
-  let positionedPlan: GenerationPlan;
-  try {
-    positionedPlan = transferRoomContent(
-      sourcePlan,
-      spatialPlan,
-      roomFeatures,
-      parameters.entranceMode,
-    );
-  } catch (error) {
-    if (error instanceof V2FallbackSignal) {
+  if (!routedPlan) {
+    if (lastRouteError) {
+      const details = lastRouteError instanceof CorridorRoutingError
+        ? lastRouteError.details.join("; ")
+        : lastRouteError.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ");
       return createFallbackResult(
         request,
-        `${error.message} Foi usado o gerador V1 do perfil.`,
-        error.stage,
-      );
-    }
-    throw error;
-  }
-  let routedPlan: GenerationPlan;
-  try {
-    routedPlan = routeGenerationPlanCorridors(positionedPlan);
-  } catch (error) {
-    if (error instanceof CorridorRoutingError || error instanceof GenerationPlanValidationError) {
-      const details = error instanceof CorridorRoutingError
-        ? error.details.join("; ")
-        : error.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ");
-      return createFallbackResult(
-        request,
-        `O roteamento ou a validação geométrica V2 falhou (${error.message}${details ? ` ${details}` : ""}); foi usado o gerador V1 do perfil.`,
+        `O roteamento ou a validação geométrica V2 falhou em ${layoutStyles.length} layouts (${lastRouteError.message}${details ? ` ${details}` : ""}); foi usado o gerador V1 do perfil.`,
         "corridor-routing",
       );
     }
-    throw error;
+    if (lastContentSignal) {
+      return createFallbackResult(
+        request,
+        `${lastContentSignal.message} Foi usado o gerador V1 do perfil.`,
+        lastContentSignal.stage,
+      );
+    }
+    if (lastSpatialError) {
+      return createFallbackResult(
+        request,
+        `O posicionamento V2 não encontrou um layout válido (${lastSpatialError.message}); foi usado o gerador V1 do perfil.`,
+        "spatial-layout",
+      );
+    }
+    throw new Error("V2 layout did not produce a routed plan or a failure reason.");
   }
   const validation = validateGenerationPlan(routedPlan);
   if (!validation.valid) {

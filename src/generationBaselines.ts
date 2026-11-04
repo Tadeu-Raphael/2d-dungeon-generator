@@ -95,29 +95,34 @@ export const DUNGEON_GENERATION_V1_BASELINES: readonly DungeonGenerationBaseline
   },
 ];
 
+export function createDungeonV1BaselineRequest(
+  baseline: DungeonGenerationBaseline,
+): DungeonGenerationRequest {
+  const profile = baseline.profile === "custom" ? undefined : DUNGEON_CONCEPTS[baseline.profile];
+  const parameters: DungeonParameters = {
+    ...DEFAULT_DUNGEON_PARAMETERS,
+    ...baseline.parameters,
+    roomTypeDistributionEnabled: true,
+    roomTypeCategoryFrequencies:
+      profile?.roomTypeCategoryFrequencies ?? DEFAULT_DUNGEON_PARAMETERS.roomTypeCategoryFrequencies,
+    trapCategoryWeights:
+      profile?.trapCategoryWeights ?? DEFAULT_DUNGEON_PARAMETERS.trapCategoryWeights,
+    treasureCategoryWeights:
+      profile?.treasureCategoryWeights ?? DEFAULT_DUNGEON_PARAMETERS.treasureCategoryWeights,
+  };
+  return {
+    generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
+    algorithm: baseline.algorithm,
+    seed: baseline.seed,
+    profile: baseline.profile,
+    parameters,
+    settings: { baselineId: baseline.id },
+  };
+}
+
 export function generateDungeonV1BaselineCollection(): DungeonGenerationBaselineRun[] {
   return DUNGEON_GENERATION_V1_BASELINES.map((baseline) => {
-    const profile = baseline.profile === "custom" ? undefined : DUNGEON_CONCEPTS[baseline.profile];
-    const parameters: DungeonParameters = {
-      ...DEFAULT_DUNGEON_PARAMETERS,
-      ...baseline.parameters,
-      roomTypeDistributionEnabled: true,
-      roomTypeCategoryFrequencies:
-        profile?.roomTypeCategoryFrequencies ?? DEFAULT_DUNGEON_PARAMETERS.roomTypeCategoryFrequencies,
-      trapCategoryWeights:
-        profile?.trapCategoryWeights ?? DEFAULT_DUNGEON_PARAMETERS.trapCategoryWeights,
-      treasureCategoryWeights:
-        profile?.treasureCategoryWeights ?? DEFAULT_DUNGEON_PARAMETERS.treasureCategoryWeights,
-    };
-    const request: DungeonGenerationRequest = {
-      generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
-      algorithm: baseline.algorithm,
-      seed: baseline.seed,
-      profile: baseline.profile,
-      parameters,
-      settings: { baselineId: baseline.id },
-    };
-
+    const request = createDungeonV1BaselineRequest(baseline);
     return {
       baseline,
       request,

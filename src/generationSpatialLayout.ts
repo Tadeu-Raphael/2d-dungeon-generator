@@ -872,38 +872,58 @@ function buildPlacementAttempt(
       const maxX = plan.width - variant.width - 1;
       const maxY = plan.height - variant.height - 1;
       if (maxX < 1 || maxY < 1) continue;
-      for (let y = 1; y <= maxY; y += 1) {
-        for (let x = 1; x <= maxX; x += 1) {
-          const rectangle = { x, y, width: variant.width, height: variant.height };
-          if (doesPlacementConflict(
-            room,
-            rectangle,
-            placements,
-            pairByKey,
-            baseGap,
-            corridorWidth,
-            importantRoomClearance,
-          )) {
-            continue;
-          }
-          const score = scoreCandidate(
-            room,
-            rectangle,
-            variant,
-            target,
-            sectorCenterByRoomId.get(room.id),
-            placements,
-            pairByKey,
-            baseGap,
-            corridorWidth,
-            maximumConnectionDistance,
-            random,
-          );
-          if (score < bestScore) {
-            bestScore = score;
-            bestPlacement = { room, rectangle, variant };
+      const targetX = clamp(Math.round(target.x - variant.width / 2), 1, maxX);
+      const targetY = clamp(Math.round(target.y - variant.height / 2), 1, maxY);
+      const targetOffset = Math.max(
+        Math.abs(targetX + variant.width / 2 - target.x),
+        Math.abs(targetY + variant.height / 2 - target.y),
+      );
+      const maxRadius = Math.max(
+        targetX - 1,
+        maxX - targetX,
+        targetY - 1,
+        maxY - targetY,
+      );
+      for (let radius = 0; radius <= maxRadius; radius += 1) {
+        const minY = Math.max(1, targetY - radius);
+        const maxRingY = Math.min(maxY, targetY + radius);
+        const minX = Math.max(1, targetX - radius);
+        const maxRingX = Math.min(maxX, targetX + radius);
+        for (let y = minY; y <= maxRingY; y += 1) {
+          for (let x = minX; x <= maxRingX; x += 1) {
+            if (Math.max(Math.abs(x - targetX), Math.abs(y - targetY)) !== radius) continue;
+            const rectangle = { x, y, width: variant.width, height: variant.height };
+            if (doesPlacementConflict(
+              room,
+              rectangle,
+              placements,
+              pairByKey,
+              baseGap,
+              corridorWidth,
+              importantRoomClearance,
+            )) {
+              continue;
+            }
+            const score = scoreCandidate(
+              room,
+              rectangle,
+              variant,
+              target,
+              sectorCenterByRoomId.get(room.id),
+              placements,
+              pairByKey,
+              baseGap,
+              corridorWidth,
+              maximumConnectionDistance,
+              random,
+            );
+            if (score < bestScore) {
+              bestScore = score;
+              bestPlacement = { room, rectangle, variant };
+            }
           }
         }
+        if (bestPlacement && 1.4 * Math.max(0, radius + 1 - targetOffset) >= bestScore) break;
       }
     }
     if (!bestPlacement) {

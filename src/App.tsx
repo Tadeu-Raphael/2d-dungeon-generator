@@ -80,6 +80,10 @@ import {
   type DungeonConcept,
 } from "./dungeonProfiles";
 import { generateDungeonPipeline } from "./generationPipeline";
+import {
+  createGenerationBenchmarkGalleryHtml,
+  runGenerationBenchmark,
+} from "./generationBenchmark";
 import type { SpatialLayoutStyle, TopologyStyle } from "./generationPlan";
 import {
   ROOM_TYPE_CATEGORY_ORDER,
@@ -875,6 +879,8 @@ export default function App() {
   const [showWater, setShowWater] = useState(true);
   const [showLava, setShowLava] = useState(true);
   const [cavesEnabled, setCavesEnabled] = useState(false);
+  const [benchmarkGalleryError, setBenchmarkGalleryError] = useState<string | null>(null);
+  const [benchmarkGalleryStatus, setBenchmarkGalleryStatus] = useState<string | null>(null);
   const conceptProfile = DUNGEON_CONCEPTS[concept];
   const cavesRequired = concept === "natural-cavern";
   const spatialDensity = spatialDensityOverride ?? conceptProfile.v2Preferences.defaultDensity;
@@ -1174,6 +1180,31 @@ export default function App() {
     setSeedDraft(String(nextSeed));
     window.scrollTo({ top: 0, behavior: "auto" });
   };
+  const downloadBenchmarkGallery = () => {
+    setBenchmarkGalleryError(null);
+    setBenchmarkGalleryStatus(null);
+    let objectUrl: string | undefined;
+    try {
+      const html = createGenerationBenchmarkGalleryHtml(runGenerationBenchmark());
+      objectUrl = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = "generation-benchmark.html";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setBenchmarkGalleryStatus("Galeria V1 × V2 gerada para download.");
+    } catch (error) {
+      setBenchmarkGalleryError(
+        error instanceof Error ? error.message : "Não foi possível gerar a galeria de benchmark.",
+      );
+    } finally {
+      if (objectUrl) {
+        const url = objectUrl;
+        window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      }
+    }
+  };
 
   return (
     <main className="app-shell">
@@ -1233,6 +1264,22 @@ export default function App() {
                       : "Topologia, layout espacial e roteamento de corredores."}
                   </small>
                 </label>
+                <div className="benchmark-gallery-action">
+                  <button
+                    className="benchmark-gallery-button"
+                    type="button"
+                    onClick={downloadBenchmarkGallery}
+                  >
+                    Baixar galeria V1 × V2
+                  </button>
+                  <small>Compara os seis seeds congelados da Fase 1, com mapas e métricas.</small>
+                  {benchmarkGalleryError && (
+                    <p className="benchmark-gallery-error" role="alert">{benchmarkGalleryError}</p>
+                  )}
+                  {benchmarkGalleryStatus && (
+                    <p className="benchmark-gallery-status" role="status">{benchmarkGalleryStatus}</p>
+                  )}
+                </div>
 
                 <div className="section-heading settings-section-heading">
                   <span>CONCEITO DA MASMORRA</span>

@@ -35,6 +35,7 @@ export interface CorridorRoutingCosts {
 export interface CorridorRoutingOptions {
   costs?: Partial<CorridorRoutingCosts>;
   maxExpandedStates?: number;
+  prioritizedConnectionIds?: readonly string[];
 }
 
 export type CorridorRoutingErrorCode =
@@ -796,9 +797,16 @@ function searchRoute(
   return { reachedLimit: false };
 }
 
-function resolveConnectionOrder(plan: GenerationPlan): ConnectionEdge[] {
+function resolveConnectionOrder(
+  plan: GenerationPlan,
+  prioritizedConnectionIds: readonly string[] = [],
+): ConnectionEdge[] {
   const roomsById = new Map(plan.rooms.map((room) => [room.id, room]));
+  const priorityById = new Map(prioritizedConnectionIds.map((id, index) => [id, index]));
   return [...plan.connections].sort((first, second) => {
+    const firstPriority = priorityById.get(first.id) ?? Number.POSITIVE_INFINITY;
+    const secondPriority = priorityById.get(second.id) ?? Number.POSITIVE_INFINITY;
+    if (firstPriority !== secondPriority) return firstPriority - secondPriority;
     const firstSource = roomsById.get(first.sourceRoomId);
     const firstTarget = roomsById.get(first.targetRoomId);
     const secondSource = roomsById.get(second.sourceRoomId);
@@ -1089,15 +1097,19 @@ export function routeGenerationPlanCorridors(
   let vestibuleCount = 0;
   let doorCount = 0;
 
-  for (const originalEdge of resolveConnectionOrder(sourcePlan)) {
+  for (const originalEdge of resolveConnectionOrder(sourcePlan, options.prioritizedConnectionIds)) {
     const sourceRoom = roomsById.get(originalEdge.sourceRoomId)!;
     const targetRoom = roomsById.get(originalEdge.targetRoomId)!;
     const routeStyle = chooseRouteStyle(sourcePlan, originalEdge, corridorRandom);
     const requestedWidth = getConnectionWidth(sourcePlan, originalEdge, routeStyle);
+    const minimumWidth = originalEdge.metadata.widthIsFixed ? requestedWidth : 1;
     let routed: RoutedConnection | undefined;
     let edgeSearchLimitHit = false;
+    const attemptedWidths: number[] = [];
+    const exitDiagnostics: string[] = [];
 
-    for (let width = requestedWidth; width >= 1; width -= 1) {
+    for (let width = requestedWidth; width >= minimumWidth; width -= 1) {
+      attemptedWidths.push(width);
       const sourceExits = getRoomExits(
         sourcePlan,
         sourceRoom,
@@ -1114,7 +1126,7 @@ export function routeGenerationPlanCorridors(
         roomAt,
         obstacles,
       );
-      const search = searchRoute(
+      let search = searchRoute(
         sourcePlan,
         originalEdge,
         routeStyle,
@@ -1126,6 +1138,30 @@ export function routeGenerationPlanCorridors(
         context,
         costs,
         maxExpandedStates,
+      );
+      if (search.reachedLimit) {
+        const retryStateLimit = Math.min(
+          Math.ceil(maxExpandedStates * 1.5),
+          sourcePlan.width * sourcePlan.height * CORRIDOR_DIRECTIONS.length,
+        );
+        if (retryStateLimit > maxExpandedStates) {
+          search = searchRoute(
+            sourcePlan,
+            originalEdge,
+            routeStyle,
+            width,
+            sourceRoom,
+            targetRoom,
+            sourceExits,
+            targetExits,
+            context,
+            costs,
+            retryStateLimit,
+          );
+        }
+      }
+      exitDiagnostics.push(
+        `width ${width}: ${sourceExits.length} source exits, ${targetExits.length} target exits${search.reachedLimit ? ", state limit reached" : ""}`,
       );
       edgeSearchLimitHit ||= search.reachedLimit;
       if (!search.route) continue;
@@ -1158,8 +1194,10 @@ export function routeGenerationPlanCorridors(
           : `No obstacle-free corridor path was found for ${originalEdge.id}.`,
         originalEdge.id,
         [
+          `Source room ${sourceRoom.id} at ${sourceRoom.position.x},${sourceRoom.position.y}; target room ${targetRoom.id} at ${targetRoom.position.x},${targetRoom.position.y}.`,
           `Requested width: ${requestedWidth}.`,
-          `Attempted widths: ${Array.from({ length: requestedWidth }, (_, index) => requestedWidth - index).join(", ")}.`,
+          `Attempted widths: ${attemptedWidths.join(", ")}.`,
+          ...exitDiagnostics,
         ],
       );
     }
