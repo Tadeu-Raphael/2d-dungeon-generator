@@ -63,6 +63,50 @@ export interface GenerationTopologyMetadata {
   parameters: TopologyParameters;
 }
 
+export type SpatialLayoutStyle = "axis-branches" | "central-hub" | "ring" | "clusters";
+
+export interface SpatialLayoutScore {
+  overlapAvoidance: number;
+  distanceCoherence: number;
+  compactness: number;
+  spatialDistribution: number;
+  topologyPreservation: number;
+  styleFit: number;
+  corridorClearance: number;
+  sectorGrouping: number;
+  total: number;
+}
+
+export interface SpatialLayoutMetrics {
+  roomCount: number;
+  totalRoomArea: number;
+  mapArea: number;
+  roomAreaUtilization: number;
+  layoutBoundsArea: number;
+  boundsUtilization: number;
+  spatialCoverage: number;
+  minimumRoomGap: number;
+  averageRoomGap: number;
+  averageConnectionDistance: number;
+  maxConnectionDistance: number;
+  connectedPairCount: number;
+  connectionsWithinDistanceLimit: number;
+  sectorCompactness: number;
+  score: SpatialLayoutScore;
+}
+
+export interface SpatialLayoutMetadata {
+  version: "layout-v1";
+  style: SpatialLayoutStyle;
+  metrics: SpatialLayoutMetrics;
+  attempts: number;
+  minimumRoomGap: number;
+  fallbackUsed: boolean;
+  rotatedRoomIds: readonly string[];
+  resizedRoomIds: readonly string[];
+  distanceLimitViolations: readonly string[];
+}
+
 export type ConnectionType =
   | "corridor"
   | "open-passage"
@@ -83,6 +127,7 @@ export type SectorType =
 export interface RoomNodeMetadata extends Readonly<Record<string, unknown>> {
   roomTypeDefinition?: RoomTypeDefinition;
   generationBounds?: RoomGenerationBounds;
+  rotationAllowed?: boolean;
   liquidFeature?: LiquidFeature;
   liquidType?: LiquidType;
   treasures?: readonly DungeonTreasure[];
@@ -190,6 +235,7 @@ export interface GenerationPlan {
   objectiveRoomId?: string;
   mainPathRoomIds?: readonly string[];
   topology?: GenerationTopologyMetadata;
+  spatialLayout?: SpatialLayoutMetadata;
   intersections: readonly PlanIntersection[];
   transitions: readonly PlanTransition[];
   features: readonly PlanFeature[];

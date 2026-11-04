@@ -78,6 +78,22 @@ Esta função não escolhe nem move salas e não roteia corredores: conserva dim
 
 `analyzeTopologyConnectivity` retorna resultados separados: **físico**, que considera as relações entre salas inclusive passagens bloqueadas, e **acesso do jogador**, que exclui bloqueios, portas trancadas sem `lockId` desbloqueado, segredos não descobertos e requisitos não satisfeitos. `validateDungeonTopology` verifica entrada/objetivo, sequência e arestas do caminho principal, acessibilidade das salas obrigatórias/importantes, conexão das ramificações e se as conexões marcadas como ciclos realmente aumentam o ciclo do grafo. `getDungeonTopologyStatistics` resume salas, arestas, becos sem saída, ciclos, setores e conexões especiais.
 
+### Posicionamento espacial do GenerationPlan
+
+`generateGenerationSpatialLayout` posiciona as salas de um plano topológico sem modificar suas conexões, setores ou caminho principal. O estilo espacial pode ser escolhido independentemente da topologia — `axis-branches`, `central-hub`, `ring` ou `clusters` — e, se omitido, é inferido da topologia (`centralized` → hub, `sectorized`/`hybrid` → clusters, `circuit` → anel; demais → eixo com ramificações).
+
+```ts
+const topology = generateDungeonTopology(roomPlan, { profile: "catacombs" });
+const layout = generateGenerationSpatialLayout(topology, { style: "ring" });
+layout.spatialLayout?.metrics.score;
+```
+
+O posicionamento combina âncoras por estilo, relaxação force-directed de atrações/repulsões e empacotamento de retângulos com footprints como aproximação conservadora de colisão. O estilo `clusters` divide zonas por BSP apenas para posicionar setores/agrupamentos; os outros estilos não usam zoneamento BSP. As distâncias de conexões influenciam o layout e são verificadas contra `maximumConnectionDistance`. A busca é limitada, determinística pela seed e pelo subfluxo `placement`; tenta reduzir o espaçamento e, como último recurso, girar ou reduzir salas somente dentro dos limites registrados em `generationBounds`. Se não for possível posicionar todas as salas ou respeitar o limite de distância, `SpatialLayoutError` informa as salas/conexões afetadas — elas não são descartadas silenciosamente.
+
+`spatialLayout` registra `layout-v1`, estilo, contagem de tentativas, ajustes aplicados e métricas de sobreposição, distâncias, compactação, cobertura, topologia, espaço para corredores, agrupamento por setor e pontuação ponderada. A busca é limitada pela área do mapa, pelas variantes de cada sala e por até cinco tentativas; cada candidato compara no máximo 24 retângulos. Como o projeto limita a dungeon a 24 salas e 160 × 120 tiles, esse limite foi preferido a um índice espacial adicional. A divisão de zonas BSP serve apenas como âncora de clusters e não substitui o gerador legado.
+
+Esta etapa não roteia corredores: as arestas permanecem com `path` vazio e `geometryStatus: "unrouted"`. Portanto, o plano ainda não pode ser rasterizado por `generationPlanToDungeon` nem enviado aos renderizadores; a próxima fase deverá calcular as rotas físicas. Os algoritmos, perfis, posicionamento e renderizadores da V1 permanecem inalterados.
+
 ## Controles e interação
 
 As configurações estão organizadas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Elas permitem ajustar o conceito, as dimensões, a compactação do mapa, as proporções e os formatos das salas, as categorias funcionais e as chances de geração.
