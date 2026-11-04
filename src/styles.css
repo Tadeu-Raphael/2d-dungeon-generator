@@ -122,6 +122,9 @@ h1 {
 .dimension-hint { margin: 7px 0 16px; color: #78818d; font-size: 8px; line-height: 1.5; }
 .corridor-compactness-hint { margin: 4px 0 14px; color: #78818d; font-size: 8px; line-height: 1.4; }
 .generation-notice { margin: 12px 0 0; padding: 9px 10px; border-left: 2px solid #d7b77f; background: rgba(215, 183, 127, 0.08); color: #c8b083; font-size: 8px; line-height: 1.5; }
+.generation-worker-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.generation-worker-status button { flex: 0 0 auto; padding: 5px 9px; border: 1px solid #8c7655; background: transparent; color: #e7d2ab; font: inherit; cursor: pointer; }
+.generation-worker-status button:hover { background: rgba(215, 183, 127, 0.12); }
 .generation-advanced { margin-top: 12px; }
 .parameter-list { display: grid; gap: 13px; }
 .entrance-control { margin-top: 16px; display: grid; gap: 7px; color: #aeb4bb; }

@@ -81,7 +81,8 @@ import {
   DUNGEON_CONCEPT_ORDER,
   type DungeonConcept,
 } from "./dungeonProfiles";
-import { generateDungeonPipeline } from "./generationPipeline";
+import type { DungeonGenerationPipelineRequest } from "./generationPipeline";
+import { useDungeonGeneration } from "./useDungeonGeneration";
 import {
   createGenerationBenchmarkGalleryHtml,
   runGenerationBenchmark,
@@ -906,8 +907,8 @@ export default function App() {
   const conceptProfile = DUNGEON_CONCEPTS[concept];
   const cavesRequired = concept === "natural-cavern";
   const spatialDensity = spatialDensityOverride ?? conceptProfile.v2Preferences.defaultDensity;
-  const generationRun = useMemo(
-    () => generateDungeonPipeline({
+  const generationRequest = useMemo<DungeonGenerationPipelineRequest>(
+    () => ({
       generatorVersion,
       profile: concept,
       seed,
@@ -933,6 +934,15 @@ export default function App() {
       varyCorridorWidths,
     ],
   );
+  const {
+    generationRun,
+    status: generationStatus,
+    isWorker: isWorkerGeneration,
+    progress: generationProgress,
+    error: generationError,
+    metrics: generationMetrics,
+    cancel: cancelGeneration,
+  } = useDungeonGeneration(generationRequest);
   const generatedDungeon = generationRun.dungeon;
   const algorithm = generatedDungeon.algorithm;
   const hasBspRooms = generatedDungeon.roomDetails.length > 0;
@@ -997,24 +1007,27 @@ export default function App() {
     }
   }, [focusRequest]);
   const floorPercentage = Math.round((dungeon.floorCount / (dungeon.width * dungeon.height)) * 100);
-  const hasOpenCaveConnection = dungeon.tiles.some((row, y) => row.some((tile, x) => (
-    tile === CAVE_TILE
-    && [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].some(([neighborX, neighborY]) => {
-      const neighborTile = dungeon.tiles[neighborY]?.[neighborX];
-      return neighborTile !== undefined
-        && neighborTile !== 0
-        && neighborTile !== CORRIDOR_TILE
-        && neighborTile !== CAVE_TILE
-        && neighborTile !== CAVE_CONNECTION_WALL_TILE
-        && neighborTile !== CAVE_BREACH_TILE
-        && dungeon.roomDetails.some((room) => (
-        neighborX >= room.x
-        && neighborX < room.x + room.width
-        && neighborY >= room.y
-        && neighborY < room.y + room.height
-      ));
-    })
-  )));
+  const hasOpenCaveConnection = useMemo(
+    () => dungeon.tiles.some((row, y) => row.some((tile, x) => (
+      tile === CAVE_TILE
+      && [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].some(([neighborX, neighborY]) => {
+        const neighborTile = dungeon.tiles[neighborY]?.[neighborX];
+        return neighborTile !== undefined
+          && neighborTile !== 0
+          && neighborTile !== CORRIDOR_TILE
+          && neighborTile !== CAVE_TILE
+          && neighborTile !== CAVE_CONNECTION_WALL_TILE
+          && neighborTile !== CAVE_BREACH_TILE
+          && dungeon.roomDetails.some((room) => (
+            neighborX >= room.x
+            && neighborX < room.x + room.width
+            && neighborY >= room.y
+            && neighborY < room.y + room.height
+          ));
+      })
+    ))),
+    [dungeon],
+  );
   const floorLabel = generationRun.metadata.generatorVersion === DUNGEON_GENERATOR_VERSION_V2
     ? "SALAS E CORREDORES V2"
     : algorithm === "cellular"
@@ -1458,6 +1471,32 @@ export default function App() {
                 )}
                 {generationRun.algorithmNote && !generationRun.fallbackReason && (
                   <p className="generation-notice" role="status">{generationRun.algorithmNote}</p>
+                )}
+                {generationStatus === "running" && isWorkerGeneration && (
+                  <div className="generation-notice generation-worker-status" role="status" aria-live="polite">
+                    <span>
+                      {generationProgress ?? "Gerando a dungeon no Worker..."}
+                      {" "}Você pode alterar os parâmetros para substituir esta solicitação.
+                    </span>
+                    <button type="button" onClick={cancelGeneration}>Cancelar</button>
+                  </div>
+                )}
+                {generationStatus === "cancelled" && (
+                  <p className="generation-notice" role="status">
+                    Geração cancelada. O último mapa concluído continua em exibição.
+                  </p>
+                )}
+                {generationStatus === "error" && generationError && (
+                  <p className="generation-notice" role="alert">
+                    Falha ao gerar a dungeon: {generationError} O último mapa concluído foi mantido.
+                  </p>
+                )}
+                {generationStatus === "ready" && (
+                  <p className="generation-notice" role="status">
+                    Geração concluída em {generationMetrics.generationMs.toLocaleString("pt-BR", {
+                      maximumFractionDigits: 0,
+                    })} ms · {generationMetrics.roomCount} salas.
+                  </p>
                 )}
 
                 <div className="section-heading settings-section-heading">

@@ -12,6 +12,7 @@ Aplicação web interativa para gerar, explorar e exportar mapas de masmorras pa
 - **Oito conceitos de masmorra**, cada um com regras próprias para geração e distribuição de salas, armadilhas e tesouros.
 - **Geração procedural combinável** com BSP, Cellular Automata e Drunkard's Walk.
 - **Dois pipelines disponíveis**: V1 permanece como padrão; V2 gera topologia, layout e corredores por meio de `GenerationPlan`.
+- **Geração responsiva**: solicitações maiores usam Web Worker; mapas menores mantêm a execução síncrona e os mesmos algoritmos.
 - **Seed reproduzível** e dimensões configuráveis: de 20 a 1.000 tiles por eixo, com orçamento máximo de 250.000 tiles.
 - **Salas ajustáveis**: de 4 a 24 salas, 13 formatos, sete portes, proporções retangulares e frequências personalizáveis para 11 categorias e 168 funções.
 - **Cavernas naturais opcionais**, além do conceito Caverna natural, que gera cavernas sem salas estruturadas.
@@ -32,6 +33,12 @@ No V2, salas e conexões permanecem no `GenerationPlan` até a conversão final.
 | 160×120 | 6 | 6 | 177 ms | 1,2 ms | V2, sem falhas |
 | 250×250 | 8 | 8 | 472 ms | 3,1 ms | V2, sem falhas |
 | 400×300 | 12 | 12 | 740 ms | 3,7 ms | V2, sem falhas |
+
+## Geração em segundo plano
+
+A aplicação estima o trabalho como `área do mapa × maior valor entre salas e iterações celulares aplicáveis`; a partir de 120.000 unidades, executa o mesmo `generateDungeonPipeline` em um Web Worker. O limite foi calibrado com benchmarks: 160×120 com 6 salas representa 115.200 unidades e levou cerca de 177 ms, enquanto 96×72 com 18 salas representa 124.416 unidades e levou cerca de 427 ms. Assim, a decisão considera dimensão e complexidade, não apenas um tamanho fixo do mapa.
+
+O mapa concluído permanece visível durante o trabalho. Alterar parâmetros substitui a solicitação, cancelar termina o Worker ativo e identificadores de solicitação impedem que respostas antigas atualizem a tela. O Worker transfere os tiles em um `ArrayBuffer` compacto, que é reconstruído como `Dungeon.tiles` na interface. O progresso disponível é indeterminado (“gerando”): o pipeline é síncrono internamente e ainda não fornece etapas intermediárias para uma porcentagem confiável.
 | 500×500 | 16 | 17 | 630 ms | 5,3 ms | V2, sem falhas |
 | 1000×1000 | 24 req./— ger. | — | 452.301 ms | — | Quatro layouts sem rota; fallback V1; acima do limite atual |
 
