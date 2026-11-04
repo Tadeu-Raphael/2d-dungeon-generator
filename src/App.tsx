@@ -15,12 +15,12 @@ import {
   CAVE_WATER_TILE,
   CORRIDOR_TILE,
   DUNGEON_GENERATOR_VERSION_V1,
+  DUNGEON_GENERATOR_VERSION_V2,
   DOOR_TILE,
   ELEVATED_FLOOR_TILE,
   EXTERIOR_CONNECTION_TILE,
   EXTERIOR_ENTRANCE_TILE,
   FLOOR_TILE,
-  generateDungeonVersioned,
   getNumberedCorridorTraps,
   LAVA_TILE,
   MAX_DUNGEON_HEIGHT,
@@ -77,9 +77,10 @@ import type {
 import {
   DUNGEON_CONCEPTS,
   DUNGEON_CONCEPT_ORDER,
-  getDungeonGenerationAlgorithm,
   type DungeonConcept,
 } from "./dungeonProfiles";
+import { generateDungeonPipeline } from "./generationPipeline";
+import type { SpatialLayoutStyle, TopologyStyle } from "./generationPlan";
 import {
   ROOM_TYPE_CATEGORY_ORDER,
   ROOM_TYPE_CATEGORIES,
@@ -269,6 +270,22 @@ const settingsSections: Array<{ id: SettingsSection; label: string }> = [
   { id: "traps", label: "Armadilhas" },
   { id: "treasures", label: "Tesouros" },
   { id: "access", label: "Acesso" },
+];
+
+const topologyStyleOptions: Array<{ id: TopologyStyle; label: string }> = [
+  { id: "linear", label: "Linear" },
+  { id: "branching", label: "Ramificada" },
+  { id: "circuit", label: "Circuito" },
+  { id: "centralized", label: "Centralizada" },
+  { id: "sectorized", label: "Setorizada" },
+  { id: "hybrid", label: "Híbrida" },
+];
+
+const spatialStyleOptions: Array<{ id: SpatialLayoutStyle; label: string }> = [
+  { id: "axis-branches", label: "Eixo com ramificações" },
+  { id: "central-hub", label: "Hub central" },
+  { id: "ring", label: "Anel" },
+  { id: "clusters", label: "Clusters" },
 ];
 
 const roomShapeLabels: Record<RoomShape, string> = {
@@ -833,6 +850,14 @@ function createSeed(): number {
 
 export default function App() {
   const [concept, setConcept] = useState<DungeonConcept>("military-fortress");
+  const [generatorVersion, setGeneratorVersion] = useState<
+    typeof DUNGEON_GENERATOR_VERSION_V1 | typeof DUNGEON_GENERATOR_VERSION_V2
+  >(DUNGEON_GENERATOR_VERSION_V1);
+  const [topologyStyleSelection, setTopologyStyleSelection] = useState<TopologyStyle | "profile">("profile");
+  const [spatialStyleSelection, setSpatialStyleSelection] = useState<SpatialLayoutStyle | "profile">("profile");
+  const [cycleCountOverride, setCycleCountOverride] = useState<number | null>(null);
+  const [spatialDensityOverride, setSpatialDensityOverride] = useState<number | null>(null);
+  const [varyCorridorWidths, setVaryCorridorWidths] = useState(true);
   const [seed, setSeed] = useState(createSeed);
   const [seedDraft, setSeedDraft] = useState(String(seed));
   const [parameters, setParameters] = useState<DungeonParameters>(DEFAULT_DUNGEON_PARAMETERS);
@@ -852,36 +877,37 @@ export default function App() {
   const [cavesEnabled, setCavesEnabled] = useState(false);
   const conceptProfile = DUNGEON_CONCEPTS[concept];
   const cavesRequired = concept === "natural-cavern";
-  const algorithm = getDungeonGenerationAlgorithm(conceptProfile.algorithm, cavesEnabled);
-  const hasBspRooms = algorithm !== "cellular" && algorithm !== "drunkard";
-  const generationParameters = useMemo(() => ({
-    ...parameters,
-    roomTypeDistributionEnabled: true,
-    roomTypeCategoryFrequencies: parameters.roomTypeDistributionEnabled
-      ? parameters.roomTypeCategoryFrequencies
-      : conceptProfile.roomTypeCategoryFrequencies,
-    trapCategoryWeights: parameters.trapCategoryDistributionEnabled
-      ? parameters.trapCategoryWeights
-      : conceptProfile.trapCategoryWeights,
-    treasureCategoryWeights: parameters.treasureCategoryDistributionEnabled
-      ? parameters.treasureCategoryWeights
-      : conceptProfile.treasureCategoryWeights,
-    treasureRarityWeights: parameters.treasureRarityDistributionEnabled
-      ? parameters.treasureRarityWeights
-      : DEFAULT_TREASURE_RARITY_WEIGHTS,
-  }), [conceptProfile, parameters]);
+  const spatialDensity = spatialDensityOverride ?? conceptProfile.v2Preferences.defaultDensity;
   const generationRun = useMemo(
-    () => generateDungeonVersioned({
-      generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
-      algorithm,
-      seed,
+    () => generateDungeonPipeline({
+      generatorVersion,
       profile: concept,
-      parameters: generationParameters,
-      settings: { cavesEnabled: cavesEnabled || cavesRequired },
+      seed,
+      parameters,
+      cavesEnabled: cavesEnabled || cavesRequired,
+      topologyStyle: topologyStyleSelection === "profile" ? undefined : topologyStyleSelection,
+      spatialLayoutStyle: spatialStyleSelection === "profile" ? undefined : spatialStyleSelection,
+      cycleCount: cycleCountOverride ?? undefined,
+      spatialDensity,
+      varyCorridorWidths,
     }),
-    [algorithm, cavesEnabled, cavesRequired, concept, generationParameters, seed],
+    [
+      cavesEnabled,
+      cavesRequired,
+      concept,
+      cycleCountOverride,
+      generatorVersion,
+      parameters,
+      seed,
+      spatialDensity,
+      spatialStyleSelection,
+      topologyStyleSelection,
+      varyCorridorWidths,
+    ],
   );
   const generatedDungeon = generationRun.dungeon;
+  const algorithm = generatedDungeon.algorithm;
+  const hasBspRooms = generatedDungeon.roomDetails.length > 0;
   const dungeon = roomPositionEdit?.baseDungeon === generatedDungeon
     ? roomPositionEdit.dungeon
     : generatedDungeon;
@@ -961,16 +987,20 @@ export default function App() {
       ));
     })
   )));
-  const floorLabel = algorithm === "cellular"
-    ? "CAVERNA NATURAL"
-    : algorithm === "bsp-cellular"
-      ? "SALAS E CAVERNAS"
-      : algorithm === "bsp-drunkard"
-        ? "SALAS E TRILHAS"
-        : algorithm === "hybrid"
-          ? "GERAÇÃO MISTA"
-          : "SALA";
-  const floorDescription = conceptProfile.generationDescription;
+  const floorLabel = generationRun.metadata.generatorVersion === DUNGEON_GENERATOR_VERSION_V2
+    ? "SALAS E CORREDORES V2"
+    : algorithm === "cellular"
+      ? "CAVERNA NATURAL"
+      : algorithm === "bsp-cellular"
+        ? "SALAS E CAVERNAS"
+        : algorithm === "bsp-drunkard"
+          ? "SALAS E TRILHAS"
+          : algorithm === "hybrid"
+            ? "GERAÇÃO MISTA"
+            : "SALA";
+  const floorDescription = generationRun.fallbackReason
+    ?? generationRun.algorithmNote
+    ?? conceptProfile.generationDescription;
   const updateDimensionDraft = (key: "width" | "height", value: string) => {
     if (key === "width") setWidthDraft(value);
     else setHeightDraft(value);
@@ -1179,6 +1209,32 @@ export default function App() {
             {settingsSection === "generation" && (
               <>
                 <div className="section-heading settings-section-heading">
+                  <span>VERSÃO DO GERADOR</span>
+                </div>
+                <label className="entrance-control" htmlFor="generator-version">
+                  <span>PIPELINE</span>
+                  <select
+                    id="generator-version"
+                    value={generatorVersion}
+                    onChange={(event) => {
+                      setGeneratorVersion(
+                        event.currentTarget.value === DUNGEON_GENERATOR_VERSION_V2
+                          ? DUNGEON_GENERATOR_VERSION_V2
+                          : DUNGEON_GENERATOR_VERSION_V1,
+                      );
+                    }}
+                  >
+                    <option value={DUNGEON_GENERATOR_VERSION_V1}>V1 · compatível</option>
+                    <option value={DUNGEON_GENERATOR_VERSION_V2}>V2 · GenerationPlan</option>
+                  </select>
+                  <small>
+                    {generatorVersion === DUNGEON_GENERATOR_VERSION_V1
+                      ? "Geração legada, mantida como padrão."
+                      : "Topologia, layout espacial e roteamento de corredores."}
+                  </small>
+                </label>
+
+                <div className="section-heading settings-section-heading">
                   <span>CONCEITO DA MASMORRA</span>
                 </div>
                 <label className="entrance-control" htmlFor="dungeon-concept">
@@ -1190,7 +1246,13 @@ export default function App() {
                       const selectedConcept = DUNGEON_CONCEPT_ORDER.find(
                         (candidate) => candidate === event.currentTarget.value,
                       );
-                      if (selectedConcept) setConcept(selectedConcept);
+                      if (selectedConcept) {
+                        setConcept(selectedConcept);
+                        setTopologyStyleSelection("profile");
+                        setSpatialStyleSelection("profile");
+                        setCycleCountOverride(null);
+                        setSpatialDensityOverride(null);
+                      }
                     }}
                   >
                     {DUNGEON_CONCEPT_ORDER.map((conceptId) => (
@@ -1218,6 +1280,105 @@ export default function App() {
                     </small>
                   </span>
                 </label>
+                {generatorVersion === DUNGEON_GENERATOR_VERSION_V2 && (
+                  <>
+                    <label className="entrance-control" htmlFor="v2-topology-style">
+                      <span>TOPOLOGIA</span>
+                      <select
+                        id="v2-topology-style"
+                        value={topologyStyleSelection}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          const option = topologyStyleOptions.find((candidate) => candidate.id === value);
+                          setTopologyStyleSelection(option?.id ?? "profile");
+                        }}
+                      >
+                        <option value="profile">Preferência do perfil</option>
+                        {topologyStyleOptions.map((option) => (
+                          <option key={option.id} value={option.id}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="entrance-control" htmlFor="v2-spatial-style">
+                      <span>DISTRIBUIÇÃO ESPACIAL</span>
+                      <select
+                        id="v2-spatial-style"
+                        value={spatialStyleSelection}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          const option = spatialStyleOptions.find((candidate) => candidate.id === value);
+                          setSpatialStyleSelection(option?.id ?? "profile");
+                        }}
+                      >
+                        <option value="profile">Preferência do perfil</option>
+                        {spatialStyleOptions.map((option) => (
+                          <option key={option.id} value={option.id}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="parameter-control" htmlFor="v2-spatial-density">
+                      <span className="parameter-label">
+                        <span>Compactação espacial</span>
+                        <strong>{spatialDensity}%</strong>
+                      </span>
+                      <input
+                        id="v2-spatial-density"
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={spatialDensity}
+                        onChange={(event) => setSpatialDensityOverride(Number(event.currentTarget.value))}
+                      />
+                    </label>
+                    <details className="room-size-distribution generation-advanced">
+                      <summary>
+                        <span>AJUSTES AVANÇADOS V2</span>
+                        <small>conexões e corredores</small>
+                      </summary>
+                      <div className="shape-frequency-settings-content">
+                        <label className="entrance-control" htmlFor="v2-cycle-count">
+                          <span>CIRCUITOS E CONEXÕES ADICIONAIS</span>
+                          <select
+                            id="v2-cycle-count"
+                            value={cycleCountOverride === null ? "profile" : String(cycleCountOverride)}
+                            onChange={(event) => setCycleCountOverride(
+                              event.currentTarget.value === "profile"
+                                ? null
+                                : Number(event.currentTarget.value),
+                            )}
+                          >
+                            <option value="profile">Preferência do perfil ({conceptProfile.topology.parameters.cycleCount ?? 0})</option>
+                            {[0, 1, 2, 3, 4].map((count) => (
+                              <option key={count} value={count}>{count}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="double-door-option">
+                          <input
+                            type="checkbox"
+                            checked={varyCorridorWidths}
+                            onChange={(event) => setVaryCorridorWidths(event.currentTarget.checked)}
+                          />
+                          <span>
+                            <strong>Variar largura dos corredores</strong>
+                            <small>
+                              {varyCorridorWidths
+                                ? "Eixos principais e ligações importantes podem ser mais largos."
+                                : "Todas as conexões usam a largura global definida em Salas."}
+                            </small>
+                          </span>
+                        </label>
+                      </div>
+                    </details>
+                  </>
+                )}
+                {generationRun.fallbackReason && (
+                  <p className="generation-notice" role="status">{generationRun.fallbackReason}</p>
+                )}
+                {generationRun.algorithmNote && !generationRun.fallbackReason && (
+                  <p className="generation-notice" role="status">{generationRun.algorithmNote}</p>
+                )}
 
                 <div className="section-heading settings-section-heading">
                   <span>DIMENSÕES E SEED</span>
@@ -1268,7 +1429,8 @@ export default function App() {
                 <p className="dimension-hint" id="dimension-hint">
                   Largura: {MIN_DUNGEON_DIMENSION}–{MAX_DUNGEON_WIDTH} · altura: {MIN_DUNGEON_DIMENSION}–{MAX_DUNGEON_HEIGHT} tiles.
                 </p>
-                {algorithmControls[algorithm].length > 0 && (
+                {generationRun.metadata.generatorVersion === DUNGEON_GENERATOR_VERSION_V1
+                  && algorithmControls[algorithm].length > 0 && (
                   <div className="parameter-list">
                     {algorithmControls[algorithm].map(renderParameterControl)}
                   </div>

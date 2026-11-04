@@ -11,6 +11,7 @@ Aplicação web interativa para gerar, explorar e exportar mapas de masmorras pa
 
 - **Oito conceitos de masmorra**, cada um com regras próprias para geração e distribuição de salas, armadilhas e tesouros.
 - **Geração procedural combinável** com BSP, Cellular Automata e Drunkard's Walk.
+- **Dois pipelines disponíveis**: V1 permanece como padrão; V2 gera topologia, layout e corredores por meio de `GenerationPlan`.
 - **Seed reproduzível** e dimensões configuráveis: de 20 a 160 tiles de largura e de 20 a 120 tiles de altura.
 - **Salas ajustáveis**: de 4 a 24 salas, 13 formatos, sete portes, proporções retangulares e frequências personalizáveis para 11 categorias e 168 funções.
 - **Cavernas naturais opcionais**, além do conceito Caverna natural, que gera cavernas sem salas estruturadas.
@@ -47,15 +48,23 @@ Os métodos podem ser combinados para criar mapas com salas, túneis e cavernas.
 
 ### Versionamento e compatibilidade da geração
 
-A geração existente é a **V1**. `generateDungeon` permanece como entrada legada, e `generateDungeonV1` é um alias explícito para comparação futura. `generateDungeonVersioned` retorna a dungeon no contrato atual e, separadamente, metadados com versão do gerador, seed, perfil, algoritmo efetivo, parâmetros completos, configurações adicionais e horário da execução. O horário é apenas informativo; não participa do resultado determinístico.
+A geração legada é a **V1**. `generateDungeon` permanece como entrada compatível, e `generateDungeonV1` é um alias explícito. `generateDungeonVersioned` retorna a dungeon e metadados com versão, seed, perfil, algoritmo efetivo, parâmetros e horário da execução. O horário é apenas informativo; não participa do resultado determinístico. A interface inicia em V1 e permite selecionar V2 sem remover a versão anterior.
 
-A V1 continua usando o fluxo aleatório original. `createGenerationRandomStreams` oferece fluxos independentes para topologia, posicionamento, corredores, conteúdo e decoração para versões futuras, sem alterar a sequência aleatória da V1.
+A V1 continua usando o fluxo aleatório original. `createGenerationRandomStreams` oferece fluxos independentes para topologia, posicionamento, corredores, conteúdo e decoração; o pipeline V2 usa esses fluxos para que posicionamento, rotas e conteúdo não compartilhem o mesmo estado aleatório.
 
-Na interface V1, o perfil **Caverna natural** usa Cellular Automata; os demais perfis usam BSP e o controle **Incluir cavernas** alterna entre BSP e BSP + Cellular Automata. Embora os perfis também declarem `bsp-drunkard` e `hybrid`, esse encaminhamento não chega à interface atualmente; `generateDungeon` ainda oferece esses algoritmos para chamadas diretas. O histórico simplificou o despacho, mas não registra uma justificativa, e o gerador não tem uma limitação técnica que impeça essas combinações. Para preservar mapas V1, `getDungeonGenerationAlgorithm` não foi alterado. As afinidades topológicas adicionadas na Fase 3 atuam separadamente e não mudam esse despacho; o encaminhamento dos algoritmos dos perfis continua sendo uma decisão pendente para uma versão futura explícita.
+O despacho V1 respeita os algoritmos declarados em `dungeonProfiles.ts`: o templo usa BSP + Cellular Automata; catacumbas e mina usam BSP + Drunkard's Walk; laboratório e civilização perdida usam o híbrido; a caverna natural usa Cellular Automata. O controle **Incluir cavernas** acrescenta Cellular Automata aos perfis compatíveis, combinando os passes em `hybrid` quando necessário. `resolveDungeonGenerationAlgorithm` retorna o algoritmo efetivo e uma explicação quando há fallback.
+
+### Integração do pipeline V2
+
+`generateDungeonPipeline` é o ponto de entrada usado pela interface para V1 e V2. A V2 utiliza BSP como receita de dimensões e conteúdo de salas; em seguida cria `RoomNode`s, aplica as afinidades probabilísticas do perfil, gera topologia e caminho principal, posiciona as salas, transfere armadilhas/elementos de sala, roteia corredores, valida o plano e converte o resultado para `Dungeon`. O perfil influencia estilo espacial, porte das salas, densidade e largura dos corredores sem substituir as categorias ou os pesos temáticos existentes.
+
+Os controles V2 permitem substituir a topologia e o estilo espacial sugeridos pelo perfil, ajustar conexões/ciclos, compactação e variação das larguras. A seed reproduz grafo, layout, rotas e tiles. `metadata.generatorVersion` identifica a versão efetivamente usada; em um fallback V2→V1, `requestedGeneratorVersion`, `fallbackReason` e `fallbackStage` tornam a decisão explícita.
+
+O perfil **Caverna natural**, a opção de cavernas híbridas e entradas externas usam fallback V1 enquanto essas geometrias não estiverem representadas como conexões roteáveis no GenerationPlan. O fallback preserva o algoritmo e o conteúdo V1, e a interface exibe o motivo. Para perfis cuja receita V1 declara `bsp-drunkard` ou `hybrid`, a V2 informa que usa BSP apenas como receita de salas/conteúdo; topologia, layout e corredores finais continuam vindo do pipeline V2.
 
 ### Modelo lógico GenerationPlan
 
-`GenerationPlan` é uma camada adicional e independente da renderização; ela não substitui nem altera os algoritmos V1. `RoomNode.roomRole` descreve a função estrutural da sala (como entrada ou objetivo), enquanto `roomType` continua usando as categorias temáticas existentes (como religiosa ou arcana). Cada sala fornece um `footprint` de tiles locais explícitos, e cada conexão geométrica fornece seu próprio caminho absoluto. O contrato permanece separado dos algoritmos de posicionamento e roteamento. Caminhos duplicados são rejeitados, mas conexões paralelas intencionais podem declarar `metadata.allowParallel: true`.
+`GenerationPlan` é a camada lógica/geométrica usada pela V2, sem substituir o contrato consumido pelo restante da aplicação. `RoomNode.roomRole` descreve a função estrutural da sala (como entrada ou objetivo), enquanto `roomType` continua usando as categorias temáticas existentes (como religiosa ou arcana). Cada sala fornece um `footprint` de tiles locais explícitos, e cada conexão geométrica fornece seu próprio caminho absoluto. Caminhos duplicados são rejeitados, mas conexões paralelas intencionais podem declarar `metadata.allowParallel: true`.
 
 O plano também registra setores, interseções, transições, recursos, versão e metadados completos da geração. `validateGenerationPlan` verifica IDs e referências, dimensões, setores, sobreposições de footprints e geometrias obrigatórias. Essa validação estrutural é distinta da análise de conectividade do grafo; ela não altera o BFS existente usado ao reposicionar salas.
 
@@ -116,11 +125,11 @@ reta        angular      sinuosa   transição/larga
 
 As larguras são verificadas durante o A*, inclusive nas curvas. Aberturas de portas recebem `ConnectionEndpointGeometry` com orientação, tiles da parede e posição de entrada; transições de porta/porta secreta são colocadas nesses endpoints (a configuração de portas duplas continua respeitada). Junções compartilhadas geram `PlanIntersection` de tipo T, cruzamento ou merge; rotas `transition` podem gerar vestíbulos 3×3 quando há espaço. A validação final verifica continuidade, limites, footprints completos, obstáculos, endpoints, portas e junções antes de marcar `geometryStatus: "routed"`.
 
-O resultado informa em `corridorRouting` quantas conexões foram roteadas, o comprimento total, células de corredor compartilhadas, junções, vestíbulos e transições de porta. Conexões verticais/múltiplos andares são rejeitadas explicitamente nesta fase. A conversão mantém `Dungeon.tiles`, `roomDetails` e os elementos que os renderizadores já entendem; PixiJS, Three.js e SVG não recebem dependência de `GenerationPlan`. Essa API é aditiva e ainda não substitui o fluxo de geração V1 da interface.
+O resultado informa em `corridorRouting` quantas conexões foram roteadas, o comprimento total, células de corredor compartilhadas, junções, vestíbulos e transições de porta. Conexões verticais/múltiplos andares são rejeitadas explicitamente nesta fase. A conversão mantém `Dungeon.tiles`, `roomDetails` e os elementos que os renderizadores já entendem; PixiJS, Three.js, SVG e PNG não dependem de `GenerationPlan`. A V2 é integrada à interface, enquanto o fluxo V1 continua disponível.
 
 ## Controles e interação
 
-As configurações estão organizadas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Elas permitem ajustar o conceito, as dimensões, a compactação do mapa, as proporções e os formatos das salas, as categorias funcionais e as chances de geração.
+As configurações estão organizadas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Na aba **Geração**, escolha V1/V2, conceito e dimensões; V2 também expõe topologia, distribuição espacial, compactação e ajustes avançados de ciclos e larguras. As demais abas ajustam proporções e formatos das salas, categorias funcionais e chances de conteúdo.
 
 - Na aba **Acesso**, escolha uma escadaria superior, uma entrada externa ou uma conexão com o exterior. Portas são colocadas em soleiras reais, e escadas indicam a direção de subida ou descida.
 - Selecione uma sala no mapa para destacá-la no guia e abrir seus detalhes. O modal separa metadados de estrutura, uso e riscos, narrativa, armadilhas e tesouros.
@@ -214,6 +223,8 @@ Os arquivos de produção são gerados em `dist/`.
 | `src/generationBaselines.ts` | Casos V1 de referência e gerador da coleção |
 | `src/dungeon.test.ts` | Testes de regressão e contrato da geração |
 | `src/generationPlan.ts` | Modelo lógico de salas, conexões, setores e transições |
+| `src/generationPipeline.ts` | Despacho V1/V2, receita de salas, integração do grafo, layout e roteamento |
+| `src/generationPipeline.test.ts` | Integração por perfil, determinismo, fallbacks e contrato dos renderizadores/exportações |
 | `src/generationPlanValidation.ts` | Validação estrutural do GenerationPlan |
 | `src/generationPlanToDungeon.ts` | Conversão de GenerationPlan para Dungeon |
 | `src/generationPlan.test.ts` | Testes do modelo, validador e conversor |

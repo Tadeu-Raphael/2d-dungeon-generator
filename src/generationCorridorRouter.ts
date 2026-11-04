@@ -840,7 +840,6 @@ function getContactIntersections(
   plan: GenerationPlan,
   routed: RoutedConnection,
   context: RouterContext,
-  intersections: PlanIntersection[],
   nextIntersectionOrdinal: { value: number },
 ): PlanIntersection[] {
   const brushCells = getCorridorPathBrush(routed.path, routed.endpointWidth);
@@ -873,11 +872,10 @@ function getContactIntersections(
         component.push(neighborIndex);
       }
     }
-    const connectionIds = new Set<string>([routed.edge.id]);
+    const contactConnectionIds = new Set<string>([routed.edge.id]);
     for (const index of component) {
-      for (const ownerId of contacts.get(index) ?? []) connectionIds.add(ownerId);
+      for (const ownerId of contacts.get(index) ?? []) contactConnectionIds.add(ownerId);
     }
-    if (connectionIds.size < 2) continue;
 
     const currentCenterline = new Set(
       routed.path.map((position) => positionIndex(position, plan.width)),
@@ -904,37 +902,26 @@ function getContactIntersections(
     const width = Math.max(
       3,
       routed.endpointWidth,
-      ...[...connectionIds].map((id) => context.edgeById.get(id)?.width ?? 1),
+      ...[...contactConnectionIds].map((id) => context.edgeById.get(id)?.width ?? 1),
     );
-    const nearbyIntersection = [...intersections, ...newIntersections].find((intersection) => (
-      Math.abs(intersection.position.x - position.x) <= 1
-      && Math.abs(intersection.position.y - position.y) <= 1
-      && intersection.kind !== "vestibule"
-    ));
-    if (nearbyIntersection) {
-      const updated: PlanIntersection = {
-        ...nearbyIntersection,
-        width: Math.max(nearbyIntersection.width, width),
-        connectionIds: [...new Set([...nearbyIntersection.connectionIds, ...connectionIds])],
-        kind: kind === "cross" || nearbyIntersection.kind === "cross"
-          ? "cross"
-          : kind === "t-junction" || nearbyIntersection.kind === "t-junction"
-            ? "t-junction"
-            : "merge",
-      };
-      const newIndex = newIntersections.findIndex((intersection) => intersection.id === nearbyIntersection.id);
-      if (newIndex >= 0) newIntersections[newIndex] = updated;
-      else {
-        const existingIndex = intersections.findIndex((intersection) => intersection.id === nearbyIntersection.id);
-        if (existingIndex >= 0) intersections[existingIndex] = updated;
-      }
-      continue;
-    }
+    const left = position.x - Math.floor((width - 1) / 2);
+    const top = position.y - Math.floor((width - 1) / 2);
+    const right = position.x + Math.ceil((width - 1) / 2);
+    const bottom = position.y + Math.ceil((width - 1) / 2);
+    const connectionIds = [...contactConnectionIds].filter((connectionId) => {
+      const edge = context.edgeById.get(connectionId);
+      const path = connectionId === routed.edge.id ? routed.path : edge?.path ?? [];
+      const pathWidth = connectionId === routed.edge.id ? routed.endpointWidth : edge?.width ?? 1;
+      return getCorridorPathBrush(path, pathWidth).some((cell) => (
+        cell.x >= left && cell.x <= right && cell.y >= top && cell.y <= bottom
+      ));
+    });
+    if (connectionIds.length < 2) continue;
     newIntersections.push({
       id: createStableGenerationId(plan.id, "intersection", nextIntersectionOrdinal.value),
       position,
       width,
-      connectionIds: [...connectionIds].sort(),
+      connectionIds: connectionIds.sort(),
       kind,
       metadata: {},
     });
@@ -1179,12 +1166,12 @@ export function routeGenerationPlanCorridors(
 
     const sourceEndpoint = routed.edge.metadata.sourceEndpoint!;
     const targetEndpoint = routed.edge.metadata.targetEndpoint!;
+    edgeById.set(routed.edge.id, routed.edge);
     const updatedContext: RouterContext = { ...context, edgeById };
     const contacts = getContactIntersections(
       sourcePlan,
       routed,
       updatedContext,
-      intersections,
       intersectionIdOrdinal,
     );
     intersections.push(...contacts);

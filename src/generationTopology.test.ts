@@ -4,7 +4,7 @@ import {
   DUNGEON_GENERATOR_VERSION_V1,
 } from "./dungeon";
 import type { DungeonParameters } from "./dungeon";
-import { DUNGEON_CONCEPTS, getDungeonGenerationAlgorithm } from "./dungeonProfiles";
+import { DUNGEON_CONCEPTS } from "./dungeonProfiles";
 import type { GenerationPlan, RoomNode } from "./generationPlan";
 import { generationPlanToDungeon } from "./generationPlanToDungeon";
 import { validateGenerationPlan } from "./generationPlanValidation";
@@ -290,18 +290,15 @@ describe("seeded dungeon topology", () => {
       .toContain("cycle-count-mismatch");
   });
 
-  it("uses each concept's topology affinity without changing its V1 algorithm routing", () => {
+  it("uses each concept's topology affinity without changing generation metadata", () => {
     for (const profile of Object.values(DUNGEON_CONCEPTS)) {
       const sourcePlan = createSourcePlan(12, 13579, profile.id);
       const topology = generateDungeonTopology(sourcePlan);
-      const expectedWithoutCaves = profile.algorithm === "cellular" ? "cellular" : "bsp";
-      const expectedWithCaves = profile.algorithm === "cellular" ? "cellular" : "bsp-cellular";
 
       expect(topology.topology?.profile).toBe(profile.id);
       expect(topology.topology?.style).toBe(profile.topology.style);
       expect(validateDungeonTopology(topology).valid).toBe(true);
-      expect(getDungeonGenerationAlgorithm(profile.algorithm, false)).toBe(expectedWithoutCaves);
-      expect(getDungeonGenerationAlgorithm(profile.algorithm, true)).toBe(expectedWithCaves);
+      expect(topology.generation).toEqual(sourcePlan.generation);
     }
   });
 

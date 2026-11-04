@@ -929,7 +929,7 @@ function createCorridorTrapNumberSvgLabel(
   ].join("");
 }
 
-function createDungeonSvg(dungeon: Dungeon): string {
+export function createDungeonSvg(dungeon: Dungeon): string {
   const tileSize = getExportTileSize(dungeon);
   const inset = Math.max(1, tileSize * 0.09);
   const width = dungeon.width * tileSize;

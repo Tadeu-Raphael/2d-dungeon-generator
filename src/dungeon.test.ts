@@ -11,7 +11,11 @@ import {
   generateDungeonVersioned,
 } from "./dungeon";
 import type { Dungeon, Tile } from "./dungeon";
-import { DUNGEON_CONCEPTS, getDungeonGenerationAlgorithm } from "./dungeonProfiles";
+import {
+  DUNGEON_CONCEPTS,
+  getDungeonGenerationAlgorithm,
+  resolveDungeonGenerationAlgorithm,
+} from "./dungeonProfiles";
 import { generateDungeonV1BaselineCollection } from "./generationBaselines";
 
 const baselineRuns = generateDungeonV1BaselineCollection();
@@ -167,15 +171,30 @@ describe("legacy V1 generation baselines", () => {
 });
 
 describe("V1 profile algorithm routing", () => {
-  for (const profile of Object.values(DUNGEON_CONCEPTS)) {
-    it(`preserves current ${profile.id} routing`, () => {
-      const expectedWithoutCaves = profile.algorithm === "cellular" ? "cellular" : "bsp";
-      const expectedWithCaves = profile.algorithm === "cellular" ? "cellular" : "bsp-cellular";
+  const expectedAlgorithms = {
+    "military-fortress": ["bsp", "bsp-cellular"],
+    "ancient-temple": ["bsp-cellular", "bsp-cellular"],
+    catacombs: ["bsp-drunkard", "hybrid"],
+    "abandoned-mine": ["bsp-drunkard", "hybrid"],
+    "arcane-laboratory": ["hybrid", "hybrid"],
+    "natural-cavern": ["cellular", "cellular"],
+    prison: ["bsp", "bsp-cellular"],
+    "lost-civilization": ["hybrid", "hybrid"],
+  } as const;
 
-      expect(getDungeonGenerationAlgorithm(profile.algorithm, false)).toBe(expectedWithoutCaves);
-      expect(getDungeonGenerationAlgorithm(profile.algorithm, true)).toBe(expectedWithCaves);
+  for (const [profileId, profile] of Object.entries(DUNGEON_CONCEPTS)) {
+    it(`respects the declared ${profile.id} algorithm`, () => {
+      const [withoutCaves, withCaves] = expectedAlgorithms[profileId as keyof typeof expectedAlgorithms];
+      expect(getDungeonGenerationAlgorithm(profile.algorithm, false)).toBe(withoutCaves);
+      expect(getDungeonGenerationAlgorithm(profile.algorithm, true)).toBe(withCaves);
     });
   }
+
+  it("reports the V1 fallback when pure Drunkard's Walk is combined with caves", () => {
+    const resolution = resolveDungeonGenerationAlgorithm("drunkard", true);
+    expect(resolution.algorithm).toBe("hybrid");
+    expect(resolution.fallbackReason).toMatch(/híbrido/);
+  });
 });
 
 describe("independent generation random streams", () => {

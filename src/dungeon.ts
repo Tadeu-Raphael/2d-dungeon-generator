@@ -26,7 +26,10 @@ export type Algorithm =
   | "bsp-cellular"
   | "bsp-drunkard";
 export const DUNGEON_GENERATOR_VERSION_V1 = "v1" as const;
-export type DungeonGeneratorVersion = typeof DUNGEON_GENERATOR_VERSION_V1;
+export const DUNGEON_GENERATOR_VERSION_V2 = "v2" as const;
+export type DungeonGeneratorVersion =
+  | typeof DUNGEON_GENERATOR_VERSION_V1
+  | typeof DUNGEON_GENERATOR_VERSION_V2;
 export type GenerationRandomStreamName =
   | "topology"
   | "placement"
@@ -641,7 +644,7 @@ export interface DungeonParameters {
 }
 
 export interface DungeonGenerationRequest {
-  generatorVersion: DungeonGeneratorVersion;
+  generatorVersion: typeof DUNGEON_GENERATOR_VERSION_V1;
   algorithm: Algorithm;
   seed: number;
   profile?: string;
