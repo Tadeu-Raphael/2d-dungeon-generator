@@ -1,6 +1,6 @@
 import type { Tile } from "../types";
 import { FLOOR_TILE, WALL_TILE } from "../tiles";
-import { createGrid } from "./cellular";
+import { createTileGrid } from "./grid";
 
 export function generateDrunkard(
   width: number,
@@ -8,7 +8,7 @@ export function generateDrunkard(
   random: () => number,
   coveragePercent: number,
 ): Tile[][] {
-  const tiles = createGrid(width, height);
+  const tiles = createTileGrid(width, height);
   let x = Math.floor(width / 2);
   let y = Math.floor(height / 2);
   const targetFloorCount = Math.floor(width * height * coveragePercent / 100);

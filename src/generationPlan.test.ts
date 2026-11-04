@@ -347,6 +347,23 @@ describe("GenerationPlan", () => {
     }
   });
 
+  it("rejects vertical connections that the single-floor Dungeon cannot represent", () => {
+    const plan = createValidPlan();
+    const verticalPlan: GenerationPlan = {
+      ...plan,
+      rooms: plan.rooms.map((room) => (
+        room.id === plan.exitRoomId ? { ...room, floorId: "floor-2" } : room
+      )),
+      connections: plan.connections.map((edge) => ({
+        ...edge,
+        connectionType: "vertical",
+      })),
+    };
+
+    expect(() => generationPlanToDungeon(verticalPlan))
+      .toThrow(/vertical connection .*single-floor Dungeon representation/i);
+  });
+
   it("rejects invalid plans with structured validation details", () => {
     const plan = createValidPlan();
     const invalidPlan = {

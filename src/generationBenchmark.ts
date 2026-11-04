@@ -25,7 +25,10 @@ import type {
 import { DUNGEON_CONCEPTS } from "./dungeonProfiles";
 import type { DungeonConcept } from "./dungeonProfiles";
 import { generateDungeonPipeline } from "./generationPipeline";
-import type { DungeonGenerationPipelineResult } from "./generationPipeline";
+import type {
+  DungeonGenerationPipelineResult,
+  GenerationStageTimings,
+} from "./generationPipeline";
 import {
   DUNGEON_GENERATION_V1_BASELINES,
   createDungeonV1BaselineRequest,
@@ -49,6 +52,7 @@ export interface GenerationBenchmarkOptions {
   spatialLayoutStyle?: SpatialLayoutStyle;
   corridorWidth?: number;
   varyCorridorWidths?: boolean;
+  collectStageTimings?: boolean;
 }
 
 export interface GenerationBenchmarkMetrics {
@@ -80,6 +84,7 @@ export interface GenerationBenchmarkRun {
   spatialLayoutStyle?: SpatialLayoutStyle;
   elapsedMs?: number;
   rasterizationMs?: number;
+  stageTimings?: GenerationStageTimings;
   fallbackReason?: string;
   unsupportedReason?: string;
   dungeon?: Dungeon;
@@ -478,6 +483,7 @@ function generateBaselineRun(
   let generation: VersionedDungeonGeneration;
   let plan: GenerationPlan | undefined;
   let fallbackReason: string | undefined;
+  let stageTimings: GenerationStageTimings | undefined;
   if (version === DUNGEON_GENERATOR_VERSION_V1) {
     generation = generateDungeonVersioned({
       ...baseRequest,
@@ -492,10 +498,12 @@ function generateBaselineRun(
       topologyStyle: options.topologyStyle,
       spatialLayoutStyle: options.spatialLayoutStyle,
       varyCorridorWidths: options.varyCorridorWidths,
+      collectStageTimings: options.collectStageTimings,
     });
     generation = result;
     plan = result.plan;
     fallbackReason = result.fallbackReason;
+    stageTimings = result.stageTimings;
   }
   const elapsedMs = globalThis.performance.now() - startedAt;
   let rasterizationMs: number | undefined;
@@ -523,6 +531,7 @@ function generateBaselineRun(
     spatialLayoutStyle: plan?.spatialLayout?.style,
     elapsedMs,
     rasterizationMs,
+    stageTimings,
     fallbackReason,
     dungeon: generation.dungeon,
     plan,

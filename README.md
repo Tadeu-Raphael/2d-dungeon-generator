@@ -24,25 +24,30 @@ Aplicação web interativa para gerar, explorar e exportar mapas de masmorras pa
 
 ## Limites de escala
 
-A aplicação aceita mapas de 20 a 1.000 tiles em cada eixo, limitados também a 250.000 tiles no total. O limite de área foi definido por benchmark: 500×500 foi gerado pela V2 em cerca de 630 ms, enquanto 1000×1000 levou cerca de 452 s, falhou no roteamento V2 e caiu para V1. O teto preserva a matriz legada `Dungeon.tiles` e limita o roteador direcional a, no máximo, um milhão de estados A*; dimensões fora desses limites são rejeitadas antes da geração, em vez de alocar matrizes sem limite. A exportação reduz a escala para permanecer abaixo de 16 milhões de pixels.
+A aplicação aceita mapas de 20 a 1.000 tiles em cada eixo, limitados também a 250.000 tiles no total. O teto preserva a matriz legada `Dungeon.tiles` e limita o roteador direcional a, no máximo, um milhão de estados A*; dimensões fora desses limites são rejeitadas antes da geração, em vez de alocar matrizes sem limite. Assim, 1000×1000 não é suportado (excede o limite de área), embora dimensões como 1000×250 sejam permitidas. A exportação reduz a escala para permanecer abaixo de 16 milhões de pixels.
 
-No V2, salas e conexões permanecem no `GenerationPlan` até a conversão final. A busca de posições adapta sua resolução ao tamanho do mapa e refina localmente cada candidato; o roteador mantém índices compactos de salas/obstáculos e reutiliza buffers tipados entre conexões. O benchmark verifica o grafo contra um BFS em tiles com filas tipadas e mede separadamente a rasterização:
+No V2, salas e conexões permanecem no `GenerationPlan` até a conversão final. A busca de posições adapta sua resolução ao tamanho do mapa e refina localmente cada candidato. Para cada sala, o layout pré-calcula limites, folgas de colisão e relações topológicas; a pontuação considera apenas salas conectadas ou do mesmo setor. Isso preserva a ordem de busca e as chamadas ao RNG, mantendo o resultado determinístico. O roteador mantém índices compactos de salas/obstáculos e reutiliza buffers tipados entre conexões. O benchmark verifica o grafo contra um BFS em tiles com filas tipadas e mede separadamente as etapas:
 
-| Dimensões | Salas | Conexões | Geração | Rasterização V2 | Resultado |
-|---|---:|---:|---:|---:|---|
-| 160×120 | 6 | 6 | 177 ms | 1,2 ms | V2, sem falhas |
-| 250×250 | 8 | 8 | 472 ms | 3,1 ms | V2, sem falhas |
-| 400×300 | 12 | 12 | 740 ms | 3,7 ms | V2, sem falhas |
+Três execuções com as mesmas seeds (83001–83004); valores abaixo são medianas. “Antes” é a medição imediatamente anterior à otimização do layout e já inclui o cache da heurística A*. A integridade e o roteamento foram validados em cada execução.
+
+| Dimensões | Salas | Conexões | Geração antes | Layout antes | Geração depois | Layout depois | Rasterização depois | Falhas / fallback |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 160×120 | 6 | 6 | 237 ms | 75 ms | 197 ms | 24 ms | 3,1 ms | 0 / não |
+| 250×250 | 8 | 8 | 451 ms | 199 ms | 282 ms | 25 ms | 3,0 ms | 0 / não |
+| 400×300 | 12 | 12 | 715 ms | 437 ms | 300 ms | 23 ms | 4,4 ms | 0 / não |
+| 500×500 | 16 | 17 | 627 ms | 435 ms | 212 ms | 26 ms | 4,6 ms | 0 / não |
+
+No caso de estresse com 24 salas em 160×120 (seed 81004), a V2 gerou todas as salas sem fallback e passou na validação de conectividade. A mediana de três execuções foi 3.044 ms no total, com 103 ms no layout e 2.904 ms no roteamento; portanto, o roteamento permanece o principal gargalo nesse caso.
+
+As medições usam seeds fixas e representam o ambiente local, não uma garantia de tempo em todos os dispositivos. A variação de heap é aproximada e não representa o pico de memória. A serialização SVG é medida separadamente, mas não representa o tempo de renderização GPU de PixiJS ou Three.js; a renderização Three.js ainda não foi medida.
 
 ## Geração em segundo plano
 
-A aplicação estima o trabalho como `área do mapa × maior valor entre salas e iterações celulares aplicáveis`; a partir de 120.000 unidades, executa o mesmo `generateDungeonPipeline` em um Web Worker. O limite foi calibrado com benchmarks: 160×120 com 6 salas representa 115.200 unidades e levou cerca de 177 ms, enquanto 96×72 com 18 salas representa 124.416 unidades e levou cerca de 427 ms. Assim, a decisão considera dimensão e complexidade, não apenas um tamanho fixo do mapa.
+A aplicação estima o trabalho como `área do mapa × maior valor entre salas e iterações celulares aplicáveis`; a partir de 120.000 unidades, executa o mesmo `generateDungeonPipeline` em um Web Worker. Com a otimização atual, 160×120 com 6 salas representa 115.200 unidades e levou uma mediana de cerca de 197 ms; 96×72 com 18 salas representa 124.416 unidades e levou cerca de 164 ms. O limite é uma heurística baseada no trabalho estimado, não uma garantia de duração.
 
 O mapa concluído permanece visível durante o trabalho. Alterar parâmetros substitui a solicitação, cancelar termina o Worker ativo e identificadores de solicitação impedem que respostas antigas atualizem a tela. O Worker transfere os tiles em um `ArrayBuffer` compacto, que é reconstruído como `Dungeon.tiles` na interface. O progresso disponível é indeterminado (“gerando”): o pipeline é síncrono internamente e ainda não fornece etapas intermediárias para uma porcentagem confiável.
-| 500×500 | 16 | 17 | 630 ms | 5,3 ms | V2, sem falhas |
-| 1000×1000 | 24 req./— ger. | — | 452.301 ms | — | Quatro layouts sem rota; fallback V1; acima do limite atual |
 
-As medições usam seeds fixas da suíte de benchmark e representam o ambiente local, não uma garantia de tempo em todos os dispositivos. Memória e tempo de renderização Three.js não foram medidos. A prévia 2D usa uma base rasterizada e desenha detalhes apenas na região visível em mapas grandes.
+A prévia 2D usa uma base rasterizada e desenha detalhes apenas na região visível em mapas grandes.
 
 ## Conceitos
 
@@ -220,12 +225,16 @@ O Vite informa o endereço local ao iniciar; por padrão, é `http://localhost:5
 Para validar e gerar a versão de produção:
 
 ```bash
+npm run typecheck
 npm test
+npm run benchmark
 npm run build
 npm run preview
 ```
 
 Os arquivos de produção são gerados em `dist/`.
+
+Para responsabilidades dos módulos, fluxo de geração, convenções de contribuição e limites conhecidos, consulte o [guia técnico](./docs/architecture.md).
 
 ## Tecnologias
 
@@ -241,12 +250,17 @@ Os arquivos de produção são gerados em `dist/`.
 | Caminho | Responsabilidade |
 |---|---|
 | `src/App.tsx` | Interface, configurações e guia |
-| `src/dungeon.ts` | Algoritmos, mapa e elementos gerados |
+| `src/dungeon.ts` | Modelo legado `Dungeon`, APIs de geração V1 e fachada de compatibilidade |
+| `src/core/` | Tipos fundamentais, tiles, aleatoriedade e algoritmos legados de geração |
+| `src/core/generation/` | Algoritmos BSP, cellular e drunkard, composição híbrida e utilitário compartilhado de matriz |
+| `src/core/generation/grid.ts` | Criação consistente de matrizes de tiles, reutilizada pelo V1, V2 e algoritmos |
+| `src/core/generation/roomOptions.ts` | Tipos e catálogos de formas/tamanhos; referência dimensional compartilhada com o BSP |
 | `src/dungeonProfiles.ts` | Conceitos e perfis de geração |
 | `src/generationBaselines.ts` | Casos V1 de referência e gerador da coleção |
 | `src/dungeon.test.ts` | Testes de regressão e contrato da geração |
 | `src/generationPlan.ts` | Modelo lógico de salas, conexões, setores e transições |
-| `src/generationPipeline.ts` | Despacho V1/V2, receita de salas, integração do grafo, layout e roteamento |
+| `src/generationPipeline.ts` | Despacho V1/V2 e orquestração do grafo, layout, roteamento e conversão |
+| `src/generationRoomRecipe.ts` | Receita BSP de salas e conteúdo usada como entrada para a V2 |
 | `src/generationPipeline.test.ts` | Integração por perfil, determinismo, fallbacks e contrato dos renderizadores/exportações |
 | `src/generationPlanValidation.ts` | Validação estrutural do GenerationPlan |
 | `src/generationPlanToDungeon.ts` | Conversão de GenerationPlan para Dungeon |
@@ -258,8 +272,17 @@ Os arquivos de produção são gerados em `dist/`.
 | `src/generationTopology.test.ts` | Testes de estilos, progressão, perfis, ciclos e acessibilidade |
 | `src/roomTypes.ts` | Categorias e funções de salas |
 | `src/treasures.ts` | Categorias e catálogo de tesouros |
-| `src/DungeonCanvas.tsx` | Renderização do mapa e exportação |
-| `src/DungeonThreeCanvas.tsx` | Visualização 3D orbitável e seleção de salas |
+| `src/rendering/` | Renderizadores PixiJS/Three.js, semântica de tiles e exportação SVG |
+| `src/rendering/DungeonCanvas.tsx` | Visualização PixiJS, interação 2D, zoom e arraste de salas |
+| `src/rendering/DungeonThreeCanvas.tsx` | Visualização Three.js, câmera e interação 3D |
+| `src/ui/components/` | Componentes da interface, incluindo controles de exportação |
+| `src/ui/hooks/` | Hooks da interface |
+| `src/DungeonCanvas.tsx`, `src/DungeonThreeCanvas.tsx`, `src/DungeonExportControl.tsx` | Fachadas para manter compatibilidade com imports existentes |
+| `src/rendering/dungeonSvg.ts` | Serialização SVG e preparação para exportação PNG |
+| `src/rendering/dungeonTileSemantics.ts` | Paleta, visibilidade e regras de tiles compartilhadas entre renderizadores |
+| `src/rendering/dungeonThreeResources.ts` | Descarte de geometrias, materiais, texturas e buffers instanciados do Three.js |
+
+PixiJS e Three.js consomem o mesmo modelo legado `Dungeon`; regras visuais compartilhadas ficam em `dungeonTileSemantics.ts`, enquanto geometria de cena e ciclo de vida permanecem específicos do renderizador. O foco de sala é tipado em `src/rendering/types.ts`. Os renderizadores são isolados de atualizações alheias da interface, e alternar água/lava em 3D atualiza cores/visibilidade sem reconstruir toda a cena.
 
 ## Referências relacionadas
 

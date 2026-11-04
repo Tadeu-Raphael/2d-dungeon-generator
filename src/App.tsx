@@ -1,7 +1,17 @@
-import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Component,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
-import DungeonCanvas, { DungeonExportControl } from "./DungeonCanvas";
-import type { MapFocusRequest } from "./DungeonCanvas";
+import DungeonCanvas from "./rendering/DungeonCanvas";
+import { DungeonExportControl } from "./ui/components/DungeonExportControl";
+import type { MapFocusRequest } from "./rendering/DungeonCanvas";
 import {
   CAVE_TILE,
   CAVE_BREACH_TILE,
@@ -94,7 +104,7 @@ interface GeneratedTrap extends DungeonTrap {
   corridorNumber?: number;
 }
 
-const DungeonThreeCanvas = lazy(() => import("./DungeonThreeCanvas"));
+const DungeonThreeCanvas = lazy(() => import("./rendering/DungeonThreeCanvas"));
 
 class CanvasViewErrorBoundary extends Component<
   { children: ReactNode; onBackTo2D: () => void },
@@ -339,18 +349,52 @@ export default function App() {
     );
     entry?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [focusRequest]);
-  const moveRoom = (roomNumber: number, x: number, y: number) => { setRoomPositionEdit((current) => { const activeEdit = current?.baseDungeon === generatedDungeon ? current : null; const positions = { ...activeEdit?.positions, [roomNumber]: { x, y } }; const movedDungeon = repositionDungeonRooms(generatedDungeon, positions); return movedDungeon ? { baseDungeon: generatedDungeon, positions, dungeon: movedDungeon } : current; }); };
-  const openRoomDetails = (roomNumber: number) => { setRoomDetailSection(null); setRoomDetailNumber(roomNumber); setFocusRequest((current) => ({ type: "room", roomNumber, requestId: (current?.requestId ?? 0) + 1, shouldFocus: true })); };
-  const selectMovedRoom = (roomNumber: number) => { setFocusRequest((current) => ({ type: "room", roomNumber, requestId: (current?.requestId ?? 0) + 1, shouldFocus: false })); };
+  const moveRoom = useCallback((roomNumber: number, x: number, y: number) => {
+    setRoomPositionEdit((current) => {
+      const activeEdit = current?.baseDungeon === generatedDungeon ? current : null;
+      const positions = { ...activeEdit?.positions, [roomNumber]: { x, y } };
+      const movedDungeon = repositionDungeonRooms(generatedDungeon, positions);
+      return movedDungeon
+        ? { baseDungeon: generatedDungeon, positions, dungeon: movedDungeon }
+        : current;
+    });
+  }, [generatedDungeon]);
+  const openRoomDetails = useCallback((roomNumber: number) => {
+    setRoomDetailSection(null);
+    setRoomDetailNumber(roomNumber);
+    setFocusRequest((current) => ({
+      type: "room",
+      roomNumber,
+      requestId: (current?.requestId ?? 0) + 1,
+      shouldFocus: true,
+    }));
+  }, []);
+  const selectMovedRoom = useCallback((roomNumber: number) => {
+    setFocusRequest((current) => ({
+      type: "room",
+      roomNumber,
+      requestId: (current?.requestId ?? 0) + 1,
+      shouldFocus: false,
+    }));
+  }, []);
   const downloadBenchmarkGallery = () => { setBenchmarkGalleryError(null); let objectUrl: string | undefined; try { const html = createGenerationBenchmarkGalleryHtml(runGenerationBenchmark()); objectUrl = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" })); const link = document.createElement("a"); link.href = objectUrl; link.download = "generation-benchmark.html"; document.body.appendChild(link); link.click(); link.remove(); setBenchmarkGalleryStatus("Galeria V1 × V2 gerada para download."); } catch (error) { setBenchmarkGalleryError(error instanceof Error ? error.message : "Não foi possível gerar a galeria de benchmark."); } finally { if (objectUrl) { const url = objectUrl; window.setTimeout(() => URL.revokeObjectURL(url), 1_000); } } };
   const updateTrapCategoryFrequency = (key: TrapCategory, value: number) => { setParameters((current) => ({ ...current, trapCategoryWeights: redistributeFrequencies(current.trapCategoryWeights, TRAP_CATEGORY_ORDER, key, value) })); };
   const updateTreasureCategoryFrequency = (key: TreasureCategory, value: number) => { setParameters((current) => ({ ...current, treasureCategoryWeights: redistributeFrequencies(current.treasureCategoryWeights, TREASURE_CATEGORY_ORDER, key, value) })); };
   const updateRoomTypeFrequency = (key: RoomTypeCategory, value: number) => { setParameters((current) => ({ ...current, roomTypeCategoryFrequencies: redistributeFrequencies(current.roomTypeCategoryFrequencies, ROOM_TYPE_CATEGORY_ORDER, key, value) })); };
   const selectedRoomNumber = roomDetailNumber ?? focusRequest?.roomNumber;
-  const clearRoomSelection = () => {
+  const clearRoomSelection = useCallback(() => {
     setRoomDetailNumber(null);
     setFocusRequest(null);
-  };
+  }, []);
+  const toggleWaterVisibility = useCallback(() => {
+    setShowWater((visible) => !visible);
+  }, []);
+  const toggleLavaVisibility = useCallback(() => {
+    setShowLava((visible) => !visible);
+  }, []);
+  const returnTo2D = useCallback(() => {
+    setCanvasView("2d");
+  }, []);
   const rerollDungeon = () => {
     setRoomDetailNumber(null);
     setRoomDetailSection(null);
@@ -554,7 +598,7 @@ export default function App() {
             <div className="corner-mark corner-bottom-left" />
             <div className="corner-mark corner-bottom-right" />
             {canvasView === "3d" ? (
-              <CanvasViewErrorBoundary onBackTo2D={() => setCanvasView("2d")}>
+              <CanvasViewErrorBoundary onBackTo2D={returnTo2D}>
                 <Suspense fallback={<div className="canvas-loading">Carregando Three.js...</div>}>
                   <DungeonThreeCanvas
                     dungeon={dungeon}
@@ -564,9 +608,9 @@ export default function App() {
                     onClearSelection={clearRoomSelection}
                     showWater={showWater}
                     showLava={showLava}
-                    onToggleWater={() => setShowWater((visible) => !visible)}
-                    onToggleLava={() => setShowLava((visible) => !visible)}
-                    onBackTo2D={() => setCanvasView("2d")}
+                    onToggleWater={toggleWaterVisibility}
+                    onToggleLava={toggleLavaVisibility}
+                    onBackTo2D={returnTo2D}
                   />
                 </Suspense>
               </CanvasViewErrorBoundary>
@@ -581,8 +625,8 @@ export default function App() {
                 onClearSelection={clearRoomSelection}
                 showWater={showWater}
                 showLava={showLava}
-                onToggleWater={() => setShowWater((visible) => !visible)}
-                onToggleLava={() => setShowLava((visible) => !visible)}
+                onToggleWater={toggleWaterVisibility}
+                onToggleLava={toggleLavaVisibility}
               />
             )}
             <div className="map-overlay-label">NÍVEL 01 <span>/</span> PROCEDURAL</div>

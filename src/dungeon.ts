@@ -24,6 +24,15 @@ import type {
   RoomGenerationBounds,
 } from "./core/types";
 import {
+  DEFAULT_DUNGEON_DIMENSIONS,
+} from "./core/generation/roomOptions";
+import type {
+  RectangularRoomRatioFrequencies,
+  RoomShape,
+  RoomShapeFrequencies,
+  RoomSizeFrequencies,
+} from "./core/generation/roomOptions";
+import {
   WALL_TILE,
   FLOOR_TILE,
   CORRIDOR_TILE,
@@ -59,6 +68,24 @@ export type {
   RoomGenerationBounds,
   RoomDimensionChoice,
 } from "./core/types";
+
+export type {
+  RectangularRoomRatioDefinition,
+  RectangularRoomRatioFrequencies,
+  RectangularRoomRatioKey,
+  RoomShape,
+  RoomShapeDefinition,
+  RoomShapeFrequencies,
+  RoomSizeCategoryDefinition,
+  RoomSizeCategoryKey,
+  RoomSizeFrequencies,
+} from "./core/generation/roomOptions";
+
+export {
+  RECTANGULAR_ROOM_RATIO_DEFINITIONS,
+  ROOM_SHAPE_DEFINITIONS,
+  ROOM_SIZE_CATEGORIES,
+} from "./core/generation/roomOptions";
 
 export {
   DEFAULT_TREASURE_CATEGORY_WEIGHTS,
@@ -119,8 +146,9 @@ export {
 
 import { bsGenerateBsp as generateBsp } from "./core/generation/bsp";
 import { bsRoomCenter as roomCenter } from "./core/generation/bsp";
-import { bsCreateGrid as createGrid } from "./core/generation/bsp";
 import { generateHybrid, placeCaveConnectionWalls } from "./core/generation/hybrid";
+import { generateCellular } from "./core/generation/cellular";
+import { generateDrunkard } from "./core/generation/drunkard";
 
 export {
   bsGenerateBsp as generateBsp,
@@ -143,26 +171,6 @@ export type DungeonGeneratorVersion =
   | typeof DUNGEON_GENERATOR_VERSION_V1
   | typeof DUNGEON_GENERATOR_VERSION_V2;
 
-export type RoomShape =
-  | "rectangular"
-  | "square"
-  | "round"
-  | "elliptical"
-  | "octagonal"
-  | "lShaped"
-  | "tShaped"
-  | "crossShaped"
-  | "ringShaped"
-  | "irregular"
-  | "columns"
-  | "alcoves"
-  | "multiLevel";
-export type RectangularRoomRatioKey =
-  | "square"
-  | "slightlyElongated"
-  | "elongated"
-  | "veryElongated"
-  | "gallery";
 export type EntranceMode = "upper-stairs" | "exterior-entrance" | "exterior-connection";
 export type LiquidFeature = "fountain" | "stream" | "well" | "pond";
 export type LiquidType = "water" | "lava";
@@ -769,100 +777,6 @@ export interface VersionedDungeonGeneration {
   metadata: DungeonGenerationMetadata;
 }
 
-export interface RoomShapeFrequencies {
-  rectangular: number;
-  square: number;
-  round: number;
-  elliptical: number;
-  octagonal: number;
-  lShaped: number;
-  tShaped: number;
-  crossShaped: number;
-  ringShaped: number;
-  irregular: number;
-  columns: number;
-  alcoves: number;
-  multiLevel: number;
-}
-
-export interface RoomShapeDefinition {
-  key: RoomShape;
-  label: string;
-  characteristics: string;
-  applications: string;
-}
-
-export const ROOM_SHAPE_DEFINITIONS: readonly RoomShapeDefinition[] = [
-  { key: "rectangular", label: "Retangular", characteristics: "FÃ¡cil de gerar e preencher.", applications: "Quartos, depÃ³sitos e dormitÃ³rios." },
-  { key: "square", label: "Quadrado", characteristics: "ProporÃ§Ãµes equilibradas.", applications: "Salas de guarda e cÃ¢maras rituais." },
-  { key: "round", label: "Circular", characteristics: "Centro bem definido.", applications: "Templos, arenas e cÃ¢maras de chefes." },
-  { key: "elliptical", label: "ElÃ­ptico", characteristics: "Circular, mas alongado.", applications: "SalÃµes e auditÃ³rios." },
-  { key: "octagonal", label: "Octogonal", characteristics: "Geometria arquitetÃ´nica marcante.", applications: "SantuÃ¡rios e salas de enigmas." },
-  { key: "lShaped", label: "Em L", characteristics: "Dois espaÃ§os conectados.", applications: "Alojamentos e oficinas." },
-  { key: "tShaped", label: "Em T", characteristics: "Uma Ã¡rea principal com ramificaÃ§Ã£o.", applications: "Postos de controle e encruzilhadas." },
-  { key: "crossShaped", label: "Em cruz", characteristics: "Quatro eixos de circulaÃ§Ã£o.", applications: "Templos e cÃ¢maras de mecanismos." },
-  { key: "ringShaped", label: "Em anel", characteristics: "EspaÃ§o central cercado por circulaÃ§Ã£o.", applications: "Templos, prisÃµes e arenas." },
-  { key: "irregular", label: "Irregular", characteristics: "Contorno nÃ£o uniforme.", applications: "Cavernas e ruÃ­nas." },
-  { key: "columns", label: "Com colunas", characteristics: "EspaÃ§o dividido por obstÃ¡culos estruturais.", applications: "SalÃµes e templos." },
-  { key: "alcoves", label: "Com alcovas", characteristics: "Nichos nas paredes.", applications: "Bibliotecas, criptas e santuÃ¡rios." },
-  { key: "multiLevel", label: "MultinÃ­vel", characteristics: "Plataformas em alturas diferentes.", applications: "Arenas, poÃ§os e salas de mÃ¡quinas." },
-];
-
-export type RoomSizeCategoryKey =
-  | "micro"
-  | "verySmall"
-  | "small"
-  | "medium"
-  | "large"
-  | "veryLarge"
-  | "colossal";
-
-export interface RoomSizeCategoryDefinition {
-  key: RoomSizeCategoryKey;
-  label: string;
-  dimensions: string;
-  area: string;
-  usage: string;
-  minDimension: number;
-  maxDimension: number | null;
-  minArea: number;
-  maxArea: number;
-}
-
-export const ROOM_SIZE_CATEGORIES: readonly RoomSizeCategoryDefinition[] = [
-  { key: "micro", label: "Micro", dimensions: "2â€“4 m por lado", area: "4â€“16 mÂ²", usage: "Nichos, esconderijos e pequenas celas.", minDimension: 2, maxDimension: 4, minArea: 4, maxArea: 16 },
-  { key: "verySmall", label: "Muito pequena", dimensions: "3â€“6 m por lado", area: "9â€“36 mÂ²", usage: "Quartos, depÃ³sitos e criptas individuais.", minDimension: 3, maxDimension: 6, minArea: 17, maxArea: 36 },
-  { key: "small", label: "Pequena", dimensions: "5â€“8 m por lado", area: "25â€“64 mÂ²", usage: "Salas de guarda, oficinas e capelas.", minDimension: 5, maxDimension: 8, minArea: 37, maxArea: 64 },
-  { key: "medium", label: "MÃ©dia", dimensions: "8â€“12 m por lado", area: "64â€“144 mÂ²", usage: "Salas de combate, laboratÃ³rios e refeitÃ³rios.", minDimension: 8, maxDimension: 12, minArea: 65, maxArea: 144 },
-  { key: "large", label: "Grande", dimensions: "12â€“18 m por lado", area: "144â€“324 mÂ²", usage: "SalÃµes cerimoniais e arenas menores.", minDimension: 12, maxDimension: 18, minArea: 145, maxArea: 324 },
-  { key: "veryLarge", label: "Muito grande", dimensions: "18â€“30 m por lado", area: "324â€“900 mÂ²", usage: "SalÃµes do trono e cÃ¢maras de chefes.", minDimension: 18, maxDimension: 30, minArea: 325, maxArea: 900 },
-  { key: "colossal", label: "Colossal", dimensions: "30â€“50 m ou mais por lado", area: "900â€“2.500 mÂ² ou mais", usage: "Cavernas e templos monumentais.", minDimension: 30, maxDimension: null, minArea: 901, maxArea: Number.POSITIVE_INFINITY },
-];
-
-export type RoomSizeFrequencies = Record<RoomSizeCategoryKey, number>;
-
-export interface RectangularRoomRatioDefinition {
-  key: RectangularRoomRatioKey;
-  label: string;
-  characteristic: string;
-  example: string;
-  minRatio: number;
-  maxRatio: number;
-  targetRatio: number;
-}
-
-export const RECTANGULAR_ROOM_RATIO_DEFINITIONS: readonly RectangularRoomRatioDefinition[] = [
-  { key: "square", label: "1:1", characteristic: "Quadrada", example: "8 Ã— 8 m", minRatio: 1, maxRatio: 1.125, targetRatio: 1 },
-  { key: "slightlyElongated", label: "1,25:1", characteristic: "Ligeiramente alongada", example: "10 Ã— 8 m", minRatio: 1.125, maxRatio: 1.375, targetRatio: 1.25 },
-  { key: "elongated", label: "1,5:1", characteristic: "Alongada", example: "12 Ã— 8 m", minRatio: 1.375, maxRatio: 1.75, targetRatio: 1.5 },
-  { key: "veryElongated", label: "2:1", characteristic: "Muito alongada", example: "16 Ã— 8 m", minRatio: 1.75, maxRatio: 3, targetRatio: 2 },
-  { key: "gallery", label: "3:1 ou mais", characteristic: "Galeria ou corredor largo", example: "18 Ã— 6 m", minRatio: 3, maxRatio: Number.POSITIVE_INFINITY, targetRatio: 3 },
-];
-
-export type RectangularRoomRatioFrequencies = Record<RectangularRoomRatioKey, number>;
-
-
-
 export interface DungeonRoom extends Rect {
   number: number;
   centerX: number;
@@ -886,9 +800,9 @@ export interface GeneratedRoom extends Rect {
 }
 
 export const DEFAULT_DUNGEON_PARAMETERS: DungeonParameters = {
-  width: 64,
-  height: 48,
-  roomCount: 12,
+  width: DEFAULT_DUNGEON_DIMENSIONS.width,
+  height: DEFAULT_DUNGEON_DIMENSIONS.height,
+  roomCount: DEFAULT_DUNGEON_DIMENSIONS.roomCount,
   corridorWidth: 1,
   corridorCompactness: 95,
   doubleDoorsEnabled: false,
@@ -1865,110 +1779,6 @@ function placeStairs(
 
   if (downstairs) tiles[downstairs[1]][downstairs[0]] = STAIRS_DOWN;
 }
-
-function largestFloorRegion(tiles: Tile[][]): Array<[number, number]> {
-  const height = tiles.length;
-  const width = tiles[0].length;
-  const visited = createGrid(width, height, WALL);
-  let largest: Array<[number, number]> = [];
-
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      if (tiles[y][x] === WALL || visited[y][x] === FLOOR) continue;
-      const region: Array<[number, number]> = [];
-      const queue: Array<[number, number]> = [[x, y]];
-      visited[y][x] = FLOOR;
-
-      for (let cursor = 0; cursor < queue.length; cursor += 1) {
-        const [currentX, currentY] = queue[cursor];
-        region.push([currentX, currentY]);
-        for (const [nextX, nextY] of [
-          [currentX + 1, currentY],
-          [currentX - 1, currentY],
-          [currentX, currentY + 1],
-          [currentX, currentY - 1],
-        ]) {
-          if (tiles[nextY][nextX] !== WALL && visited[nextY][nextX] !== FLOOR) {
-            visited[nextY][nextX] = FLOOR;
-            queue.push([nextX, nextY]);
-          }
-        }
-      }
-      if (region.length > largest.length) largest = region;
-    }
-  }
-  return largest;
-}
-
-function generateCellular(
-  width: number,
-  height: number,
-  random: () => number,
-  fillPercent: number,
-  iterations: number,
-): Tile[][] {
-  let tiles = createGrid(width, height);
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      tiles[y][x] = random() < fillPercent / 100 ? FLOOR : WALL;
-    }
-  }
-
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
-    const next = createGrid(width, height);
-    for (let y = 1; y < height - 1; y += 1) {
-      for (let x = 1; x < width - 1; x += 1) {
-        let neighbors = 0;
-        for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-          for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-            if ((offsetX !== 0 || offsetY !== 0) && tiles[y + offsetY][x + offsetX] !== WALL) {
-              neighbors += 1;
-            }
-          }
-        }
-        const survives = tiles[y][x] === FLOOR && neighbors >= 4;
-        const isBorn = tiles[y][x] === WALL && neighbors >= 5;
-        next[y][x] = survives || isBorn ? FLOOR : WALL;
-      }
-    }
-    tiles = next;
-  }
-
-  const mainCave = largestFloorRegion(tiles);
-  const connected = createGrid(width, height);
-  for (const [x, y] of mainCave) connected[y][x] = FLOOR;
-  return connected;
-}
-
-function generateDrunkard(
-  width: number,
-  height: number,
-  random: () => number,
-  coveragePercent: number,
-): Tile[][] {
-  const tiles = createGrid(width, height);
-  let x = Math.floor(width / 2);
-  let y = Math.floor(height / 2);
-  const targetFloorCount = Math.floor(width * height * coveragePercent / 100);
-  let floorCount = 0;
-
-  for (let step = 0; step < width * height * 30 && floorCount < targetFloorCount; step += 1) {
-    if (tiles[y][x] === WALL) {
-      tiles[y][x] = FLOOR;
-      floorCount += 1;
-    }
-    const direction = Math.floor(random() * 4);
-    if (direction === 0) x += 1;
-    else if (direction === 1) x -= 1;
-    else if (direction === 2) y += 1;
-    else y -= 1;
-    x = Math.max(1, Math.min(width - 2, x));
-    y = Math.max(1, Math.min(height - 2, y));
-  }
-
-  return tiles;
-}
-
 
 function getRoomTraversalOrder(tiles: Tile[][], rooms: GeneratedRoom[]): number[] {
   if (rooms.length < 2) return rooms.map((_, index) => index);

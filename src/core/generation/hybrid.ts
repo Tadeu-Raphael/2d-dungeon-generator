@@ -1,6 +1,7 @@
 import type { Tile } from "../types";
 import { WALL_TILE, FLOOR_TILE, CORRIDOR_TILE, CAVE_TILE, CAVE_CONNECTION_WALL_TILE, CAVE_BREACH_TILE } from "../tiles";
-import { bsCreateGrid as createGrid, bsGenerateBsp as generateBsp } from "./bsp";
+import { bsGenerateBsp as generateBsp } from "./bsp";
+import { createTileGrid } from "./grid";
 import { generateCellular } from "./cellular";
 import { generateDrunkard } from "./drunkard";
 import { createRandom } from "../random";
@@ -43,7 +44,7 @@ export function generateHybrid(
       parameters.drunkardCoveragePercent,
     )
     : null;
-  const tiles = createGrid(width, height);
+  const tiles = createTileGrid(width, height);
   const queue: Array<[number, number]> = [];
   const visited = Array.from({ length: height }, () => Array<boolean>(width).fill(false));
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { memoryUsage } from "node:process";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DUNGEON_PARAMETERS,
@@ -24,6 +25,7 @@ import {
   runGenerationBenchmark,
 } from "./generationBenchmark";
 import { generationPlanToDungeon } from "./generationPlanToDungeon";
+import { validateGenerationPlan } from "./generationPlanValidation";
 import type { GenerationBenchmarkRun } from "./generationBenchmark";
 import type { TopologyStyle } from "./generationPlan";
 
@@ -249,7 +251,7 @@ describe("generation benchmark and dual connectivity audit", () => {
       ...size,
       corridorWidth: 1,
     }));
-    const runs = runGenerationBenchmark({ baselines });
+    const runs = runGenerationBenchmark({ baselines, collectStageTimings: true });
     const maximumV2 = getRun(
       runs,
       "custom-military-fortress-81004",
@@ -286,6 +288,12 @@ describe("generation benchmark and dual connectivity audit", () => {
       effective: run.effectiveVersion,
       rooms: run.metrics?.roomCount,
       elapsedMs: run.elapsedMs?.toFixed(2),
+      stagesMs: Object.fromEntries(
+        Object.entries(run.stageTimings ?? {}).map(([stage, elapsed]) => [
+          stage,
+          elapsed?.toFixed(2),
+        ]),
+      ),
       fallback: Boolean(run.fallbackReason),
     }))));
   });
@@ -341,19 +349,47 @@ describe("generation benchmark and dual connectivity audit", () => {
         roomCount: requested.roomCount,
         corridorWidth: 1,
       });
+      const heapBeforeBytes = memoryUsage().heapUsed;
       const [run] = runGenerationBenchmark({
         baselines: [baseline],
         versions: [DUNGEON_GENERATOR_VERSION_V2],
+        collectStageTimings: true,
       });
+      const heapDeltaBytes = memoryUsage().heapUsed - heapBeforeBytes;
+      if (!run.plan || !run.dungeon) {
+        throw new Error(run.fallbackReason ?? "Expected a routed V2 plan and dungeon.");
+      }
+      const validationStartedAt = globalThis.performance.now();
+      const planValidation = validateGenerationPlan(run.plan);
+      const validationMs = globalThis.performance.now() - validationStartedAt;
+      const svgStartedAt = globalThis.performance.now();
+      const benchmarkSvg = renderDungeonBenchmarkSvg(
+        run.dungeon,
+        `${run.profile}, seed ${run.seed}, ${run.requestedVersion}`,
+      );
+      const svgSerializationMs = globalThis.performance.now() - svgStartedAt;
+      const stageTimingsMs = Object.fromEntries(
+        Object.entries(run.stageTimings ?? {}).map(([stage, elapsed]) => [
+          stage,
+          elapsed?.toFixed(2),
+        ]),
+      );
       console.log("Large-map benchmark:", JSON.stringify({
         size: `${requested.width}×${requested.height}`,
         rooms: run.metrics?.roomCount,
         connections: run.metrics?.connectionCount,
         generationMs: run.elapsedMs?.toFixed(2),
+        stagesMs: stageTimingsMs,
+        validationMs: validationMs.toFixed(2),
         rasterizationMs: run.rasterizationMs?.toFixed(2),
+        svgSerializationMs: svgSerializationMs.toFixed(2),
+        heapDeltaBytes,
         routeFailures: run.audit?.issues.length,
         fallback: Boolean(run.fallbackReason),
       }));
+      expect(planValidation.valid).toBe(true);
+      expect(benchmarkSvg.length).toBeGreaterThan(0);
+      expect(Number.isFinite(heapDeltaBytes)).toBe(true);
       expect(run.effectiveVersion, run.fallbackReason).toBe(DUNGEON_GENERATOR_VERSION_V2);
       expect(run.dungeon).toMatchObject({
         width: requested.width,
@@ -364,6 +400,16 @@ describe("generation benchmark and dual connectivity audit", () => {
       expect(run.metrics?.connectionCount).toBeGreaterThan(0);
       expect(run.elapsedMs).toEqual(expect.any(Number));
       expect(run.rasterizationMs).toEqual(expect.any(Number));
+      expect(run.stageTimings).toMatchObject({
+        roomRecipe: expect.any(Number),
+        planPreparation: expect.any(Number),
+        topology: expect.any(Number),
+        layout: expect.any(Number),
+        contentTransfer: expect.any(Number),
+        routing: expect.any(Number),
+        validation: expect.any(Number),
+        rasterization: expect.any(Number),
+      });
       expect(run.audit).toMatchObject({
         planValid: true,
         topologyValid: true,

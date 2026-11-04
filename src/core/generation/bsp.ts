@@ -1,16 +1,28 @@
 ﻿import type { Tile, Rect } from "../types";
 import { WALL_TILE, FLOOR_TILE, CORRIDOR_TILE, ELEVATED_FLOOR_TILE, ROOM_STAIRS_TILE } from "../tiles";
-import type { GeneratedRoom, RoomShape, RoomShapeFrequencies, RoomSizeFrequencies, RectangularRoomRatioFrequencies, RoomDimensionChoice, RoomSizeCategoryKey, RectangularRoomRatioKey } from "../../dungeon";
-import { ROOM_SIZE_CATEGORIES, RECTANGULAR_ROOM_RATIO_DEFINITIONS, ROOM_SHAPE_DEFINITIONS } from "../../dungeon";
-import { DEFAULT_DUNGEON_PARAMETERS } from "../../dungeon";
+import { createTileGrid } from "./grid";
+import type { RoomDimensionChoice } from "../types";
+import type { GeneratedRoom } from "../../dungeon";
+import type {
+  RectangularRoomRatioFrequencies,
+  RectangularRoomRatioKey,
+  RoomShape,
+  RoomShapeFrequencies,
+  RoomSizeFrequencies,
+  RoomSizeCategoryKey,
+} from "./roomOptions";
+import {
+  DEFAULT_DUNGEON_DIMENSIONS,
+  RECTANGULAR_ROOM_RATIO_DEFINITIONS,
+  ROOM_SHAPE_DEFINITIONS,
+  ROOM_SIZE_CATEGORIES,
+} from "./roomOptions";
 
 export const BS_MIN_ROOM_SIZE = 2;
 export const BS_MAX_ROOM_SIZE = 12;
 export const BS_MAX_ROOM_ASPECT_RATIO = 1.5;
 
-export function bsCreateGrid(width: number, height: number, tile: Tile = WALL_TILE): Tile[][] {
-  return Array.from({ length: height }, () => Array<Tile>(width).fill(tile));
-}
+export { createTileGrid as bsCreateGrid } from "./grid";
 
 export function bsCarveRect(tiles: Tile[][], rect: Rect, tile: Tile): void {
   for (let y = rect.y; y < rect.y + rect.height; y += 1) {
@@ -306,9 +318,9 @@ export function bsGenerateBsp(
   roomSizeFrequencies: RoomSizeFrequencies,
   rectangularRoomRatioFrequencies: RectangularRoomRatioFrequencies,
 ): { tiles: Tile[][]; rooms: GeneratedRoom[] } {
-  const tiles = bsCreateGrid(width, height);
+  const tiles = createTileGrid(width, height);
   const compactness = Math.max(0, Math.min(1, corridorCompactness / 100));
-  const roomScale = Math.min(1.25, Math.sqrt(DEFAULT_DUNGEON_PARAMETERS.roomCount / Math.max(1, roomTarget)));
+  const roomScale = Math.min(1.25, Math.sqrt(DEFAULT_DUNGEON_DIMENSIONS.roomCount / Math.max(1, roomTarget)));
   const compactFootprintScaleX = Math.max(0.75, 1 - 0.25 * compactness * roomScale);
   const compactFootprintScaleY = Math.max(0.75, 1 - 0.18 * compactness * roomScale);
   const expandedFootprint = random() >= compactness;
@@ -321,7 +333,9 @@ export function bsGenerateBsp(
     height: layoutHeight,
   }];
   const rooms: GeneratedRoom[] = [];
-  const defaultAreaPerRoom = DEFAULT_DUNGEON_PARAMETERS.width * DEFAULT_DUNGEON_PARAMETERS.height / DEFAULT_DUNGEON_PARAMETERS.roomCount;
+  const defaultAreaPerRoom = DEFAULT_DUNGEON_DIMENSIONS.width
+    * DEFAULT_DUNGEON_DIMENSIONS.height
+    / DEFAULT_DUNGEON_DIMENSIONS.roomCount;
   const areaPerRoom = width * height / Math.max(1, roomTarget);
   const requestedMaxRoomDimension = roomSizeDistributionEnabled
     ? ROOM_SIZE_CATEGORIES.reduce(
@@ -351,7 +365,7 @@ export function bsGenerateBsp(
   };
   const targetFootprintScale = Math.min(
     0.98,
-    0.82 + 0.13 * Math.sqrt(roomTarget / DEFAULT_DUNGEON_PARAMETERS.roomCount) + 0.1 * (1 - compactness),
+    0.82 + 0.13 * Math.sqrt(roomTarget / DEFAULT_DUNGEON_DIMENSIONS.roomCount) + 0.1 * (1 - compactness),
   );
   const targetFootprintWidth = placementBounds.width * targetFootprintScale;
   const targetFootprintHeight = placementBounds.height * targetFootprintScale;

@@ -30,6 +30,7 @@ import {
   GenerationPlanValidationError,
   validateGenerationPlan,
 } from "./generationPlanValidation";
+import { createTileGrid } from "./core/generation/grid";
 
 const WALL_TILE: Tile = 0;
 
@@ -112,7 +113,7 @@ function placeConnection(
   edge: ConnectionEdge,
   roomCells: ReadonlySet<string>,
 ): void {
-  if (edge.isBlocked || edge.connectionType === "blocked-passage" || edge.connectionType === "vertical") {
+  if (edge.isBlocked || edge.connectionType === "blocked-passage") {
     return;
   }
   const tile = edge.connectionType === "open-passage" ? FLOOR_TILE : CORRIDOR_TILE;
@@ -199,6 +200,12 @@ function cloneParameters(parameters: DungeonParameters): DungeonParameters {
 }
 
 export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
+  const verticalConnection = plan.connections.find((edge) => edge.connectionType === "vertical");
+  if (verticalConnection) {
+    throw new Error(
+      `Cannot convert vertical connection "${verticalConnection.id}" to the single-floor Dungeon representation.`,
+    );
+  }
   if (plan.topology?.geometryStatus === "unrouted") {
     throw new Error("A topology-only GenerationPlan must be physically routed before conversion to Dungeon.");
   }
@@ -207,10 +214,7 @@ export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
     throw new GenerationPlanValidationError(validation.issues);
   }
 
-  const tiles = Array.from(
-    { length: plan.height },
-    () => Array<Tile>(plan.width).fill(WALL_TILE),
-  );
+  const tiles = createTileGrid(plan.width, plan.height);
   const roomCells = new Set<string>();
   for (const room of plan.rooms) {
     for (const cell of room.footprint) {

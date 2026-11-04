@@ -84,6 +84,23 @@ interface RoomPlacement {
   variant: RoomVariant;
 }
 
+interface PlacementBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+interface PlacementConflictCheck {
+  placement: RoomPlacement;
+  minimumGap: number;
+}
+
+interface PlacementScoringRelation {
+  placement: RoomPlacement;
+  pair: RoomPair;
+}
+
 interface PlacementAttemptResult {
   placements: RoomPlacement[];
   failedRoomIds: string[];
@@ -690,30 +707,15 @@ function getEffectiveMinimumGap(
 }
 
 function doesPlacementConflict(
-  room: RoomNode,
   candidate: RoomRectangle,
-  placements: readonly RoomPlacement[],
-  pairByKey: ReadonlyMap<string, RoomPair>,
-  baseGap: number,
-  corridorWidth: number,
-  importantRoomClearance: number,
+  checks: readonly PlacementConflictCheck[],
 ): boolean {
-  for (const placement of placements) {
-    const other = placement.room;
+  for (const { placement, minimumGap } of checks) {
     const existing = placement.rectangle;
     if (rectanglesOverlap(candidate, existing)) return true;
-    const pair = pairByKey.get(pairKey(room.id, other.id));
-    const requiredGap = getEffectiveMinimumGap(
-      room,
-      other,
-      pair,
-      baseGap,
-      corridorWidth,
-      importantRoomClearance,
-    );
-    if (requiredGap === 0) continue;
+    if (minimumGap === 0) continue;
     const gaps = getRectangleGaps(candidate, existing);
-    if (gaps.x < requiredGap && gaps.y < requiredGap) return true;
+    if (gaps.x < minimumGap && gaps.y < minimumGap) return true;
   }
   return false;
 }
@@ -779,8 +781,8 @@ function scoreCandidate(
   variant: RoomVariant,
   target: Point,
   sectorCenter: Point | undefined,
-  placements: readonly RoomPlacement[],
-  pairByKey: ReadonlyMap<string, RoomPair>,
+  existingBounds: PlacementBounds | undefined,
+  relatedPlacements: readonly PlacementScoringRelation[],
   baseGap: number,
   corridorWidth: number,
   maximumConnectionDistance: number,
@@ -793,12 +795,13 @@ function scoreCandidate(
   let minY = candidate.y;
   let maxX = candidate.x + candidate.width;
   let maxY = candidate.y + candidate.height;
-  for (const placement of placements) {
-    minX = Math.min(minX, placement.rectangle.x);
-    minY = Math.min(minY, placement.rectangle.y);
-    maxX = Math.max(maxX, placement.rectangle.x + placement.rectangle.width);
-    maxY = Math.max(maxY, placement.rectangle.y + placement.rectangle.height);
-    const pair = pairByKey.get(pairKey(room.id, placement.room.id));
+  if (existingBounds) {
+    minX = Math.min(minX, existingBounds.minX);
+    minY = Math.min(minY, existingBounds.minY);
+    maxX = Math.max(maxX, existingBounds.maxX);
+    maxY = Math.max(maxY, existingBounds.maxY);
+  }
+  for (const { placement, pair } of relatedPlacements) {
     const otherCenter = {
       x: placement.rectangle.x + placement.rectangle.width / 2,
       y: placement.rectangle.y + placement.rectangle.height / 2,
@@ -864,6 +867,39 @@ function buildPlacementAttempt(
 
   for (const room of order) {
     const variants = createRoomVariants(room, allowRotation, allowResize);
+    let existingBounds: PlacementBounds | undefined;
+    const conflictChecks: PlacementConflictCheck[] = [];
+    const relatedPlacements: PlacementScoringRelation[] = [];
+    for (const placement of placements) {
+      const { rectangle } = placement;
+      if (existingBounds) {
+        existingBounds.minX = Math.min(existingBounds.minX, rectangle.x);
+        existingBounds.minY = Math.min(existingBounds.minY, rectangle.y);
+        existingBounds.maxX = Math.max(existingBounds.maxX, rectangle.x + rectangle.width);
+        existingBounds.maxY = Math.max(existingBounds.maxY, rectangle.y + rectangle.height);
+      } else {
+        existingBounds = {
+          minX: rectangle.x,
+          minY: rectangle.y,
+          maxX: rectangle.x + rectangle.width,
+          maxY: rectangle.y + rectangle.height,
+        };
+      }
+
+      const pair = pairByKey.get(pairKey(room.id, placement.room.id));
+      conflictChecks.push({
+        placement,
+        minimumGap: getEffectiveMinimumGap(
+          room,
+          placement.room,
+          pair,
+          baseGap,
+          corridorWidth,
+          importantRoomClearance,
+        ),
+      });
+      if (pair?.connected || pair?.sameSector) relatedPlacements.push({ placement, pair });
+    }
     let bestPlacement: RoomPlacement | undefined;
     let bestScore = Number.POSITIVE_INFINITY;
     const placementStep = plan.width * plan.height <= 160 * 120
@@ -904,23 +940,15 @@ function buildPlacementAttempt(
           width: variant.width,
           height: variant.height,
         };
-        if (doesPlacementConflict(
-          room,
-          rectangle,
-          placements,
-          pairByKey,
-          baseGap,
-          corridorWidth,
-          importantRoomClearance,
-        )) return;
+        if (doesPlacementConflict(rectangle, conflictChecks)) return;
         const score = scoreCandidate(
           room,
           rectangle,
           variant,
           target,
           sectorCenterByRoomId.get(room.id),
-          placements,
-          pairByKey,
+          existingBounds,
+          relatedPlacements,
           baseGap,
           corridorWidth,
           maximumConnectionDistance,

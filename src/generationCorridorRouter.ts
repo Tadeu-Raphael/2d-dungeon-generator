@@ -111,6 +111,8 @@ interface RouterSearchWorkspace {
   bestCost: Float64Array;
   previous: Int32Array;
   status: Uint32Array;
+  heuristicDistance: Uint32Array;
+  heuristicGeneration: Uint32Array;
   generation: number;
 }
 
@@ -701,10 +703,20 @@ function searchRoute(
   const { bestCost, previous, status } = workspace;
   if (workspace.generation >= 0x7fffffff) {
     status.fill(0);
+    workspace.heuristicGeneration.fill(0);
     workspace.generation = 1;
   } else {
     workspace.generation += 1;
   }
+  const searchGeneration = workspace.generation;
+  const getCachedHeuristicDistance = (position: GridPosition): number => {
+    const cellIndex = positionIndex(position, plan.width);
+    if (workspace.heuristicGeneration[cellIndex] !== searchGeneration) {
+      workspace.heuristicGeneration[cellIndex] = searchGeneration;
+      workspace.heuristicDistance[cellIndex] = getDistanceToTargetExits(position, targetExits);
+    }
+    return workspace.heuristicDistance[cellIndex];
+  };
   const openStatus = workspace.generation * 2;
   const closedStatus = openStatus + 1;
   const targetExitByState = new Map<number, number>();
@@ -733,7 +745,7 @@ for (const [exitIndex, exit] of sourceExits.entries()) {
     status[state] = openStatus;
     bestCost[state] = routeCost;
     previous[state] = -2 - exitIndex;
-    const heuristicDistance = getDistanceToTargetExits(exit.position, targetExits);
+    const heuristicDistance = getCachedHeuristicDistance(exit.position);
     open.push({
       state,
       cost: routeCost,
@@ -832,7 +844,7 @@ for (const [exitIndex, exit] of sourceExits.entries()) {
       status[nextState] = openStatus;
       bestCost[nextState] = nextCost;
       previous[nextState] = entry.state;
-      const heuristicDistance = getDistanceToTargetExits(next, targetExits);
+      const heuristicDistance = getCachedHeuristicDistance(next);
       open.push({
         state: nextState,
         cost: nextCost,
@@ -1184,6 +1196,8 @@ export function routeGenerationPlanCorridors(
       bestCost: new Float64Array(searchStateCount),
       previous: new Int32Array(searchStateCount),
       status: new Uint32Array(searchStateCount),
+      heuristicDistance: new Uint32Array(sourcePlan.width * sourcePlan.height),
+      heuristicGeneration: new Uint32Array(sourcePlan.width * sourcePlan.height),
       generation: 0,
     },
   };

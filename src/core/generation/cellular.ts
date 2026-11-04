@@ -1,9 +1,8 @@
 import type { Tile } from "../types";
 import { FLOOR_TILE, WALL_TILE } from "../tiles";
+import { createTileGrid } from "./grid";
 
-export function createGrid(width: number, height: number): Tile[][] {
-  return Array.from({ length: height }, () => Array<Tile>(width).fill(WALL_TILE));
-}
+export { createTileGrid as createGrid } from "./grid";
 
 export function generateCellular(
   width: number,
@@ -12,7 +11,7 @@ export function generateCellular(
   fillPercent: number,
   iterations: number,
 ): Tile[][] {
-  let tiles = createGrid(width, height);
+  let tiles = createTileGrid(width, height);
   for (let y = 1; y < height - 1; y += 1) {
     for (let x = 1; x < width - 1; x += 1) {
       tiles[y][x] = random() < fillPercent / 100 ? FLOOR_TILE : WALL_TILE;
@@ -20,7 +19,7 @@ export function generateCellular(
   }
 
   for (let iteration = 0; iteration < iterations; iteration += 1) {
-    const next = createGrid(width, height);
+    const next = createTileGrid(width, height);
     for (let y = 1; y < height - 1; y += 1) {
       for (let x = 1; x < width - 1; x += 1) {
         let neighbors = 0;
@@ -40,7 +39,7 @@ export function generateCellular(
   }
 
   const mainCave = largestFloorRegion(tiles);
-  const connected = createGrid(width, height);
+  const connected = createTileGrid(width, height);
   for (const [x, y] of mainCave) connected[y][x] = FLOOR_TILE;
   return connected;
 }
@@ -48,7 +47,7 @@ export function generateCellular(
 function largestFloorRegion(tiles: Tile[][]): Array<[number, number]> {
   const height = tiles.length;
   const width = tiles[0].length;
-  const visited = createGrid(width, height);
+  const visited = createTileGrid(width, height);
   let largest: Array<[number, number]> = [];
 
   for (let y = 1; y < height - 1; y += 1) {
