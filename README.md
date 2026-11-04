@@ -55,7 +55,7 @@ Na interface V1, o perfil **Caverna natural** usa Cellular Automata; os demais p
 
 ### Modelo lógico GenerationPlan
 
-`GenerationPlan` é uma camada adicional e independente da renderização; nesta fase, ela não substitui nem altera os algoritmos V1. `RoomNode.roomRole` descreve a função estrutural da sala (como entrada ou objetivo), enquanto `roomType` continua usando as categorias temáticas existentes (como religiosa ou arcana). Cada sala fornece um `footprint` de tiles locais explícitos, e cada conexão geométrica fornece seu próprio caminho absoluto; a camada não calcula posicionamento nem roteamento. Caminhos duplicados são rejeitados, mas conexões paralelas intencionais podem declarar `metadata.allowParallel: true`.
+`GenerationPlan` é uma camada adicional e independente da renderização; ela não substitui nem altera os algoritmos V1. `RoomNode.roomRole` descreve a função estrutural da sala (como entrada ou objetivo), enquanto `roomType` continua usando as categorias temáticas existentes (como religiosa ou arcana). Cada sala fornece um `footprint` de tiles locais explícitos, e cada conexão geométrica fornece seu próprio caminho absoluto. O contrato permanece separado dos algoritmos de posicionamento e roteamento. Caminhos duplicados são rejeitados, mas conexões paralelas intencionais podem declarar `metadata.allowParallel: true`.
 
 O plano também registra setores, interseções, transições, recursos, versão e metadados completos da geração. `validateGenerationPlan` verifica IDs e referências, dimensões, setores, sobreposições de footprints e geometrias obrigatórias. Essa validação estrutural é distinta da análise de conectividade do grafo; ela não altera o BFS existente usado ao reposicionar salas.
 
@@ -92,7 +92,31 @@ O posicionamento combina âncoras por estilo, relaxação force-directed de atra
 
 `spatialLayout` registra `layout-v1`, estilo, contagem de tentativas, ajustes aplicados e métricas de sobreposição, distâncias, compactação, cobertura, topologia, espaço para corredores, agrupamento por setor e pontuação ponderada. A busca é limitada pela área do mapa, pelas variantes de cada sala e por até cinco tentativas; cada candidato compara no máximo 24 retângulos. Como o projeto limita a dungeon a 24 salas e 160 × 120 tiles, esse limite foi preferido a um índice espacial adicional. A divisão de zonas BSP serve apenas como âncora de clusters e não substitui o gerador legado.
 
-Esta etapa não roteia corredores: as arestas permanecem com `path` vazio e `geometryStatus: "unrouted"`. Portanto, o plano ainda não pode ser rasterizado por `generationPlanToDungeon` nem enviado aos renderizadores; a próxima fase deverá calcular as rotas físicas. Os algoritmos, perfis, posicionamento e renderizadores da V1 permanecem inalterados.
+O layout ainda não roteia corredores: as arestas ficam com `path` vazio e `geometryStatus: "unrouted"`. O roteador descrito a seguir transforma esse layout em uma planta física. O fluxo V1, seus perfis, o reposicionamento/BFS e os renderizadores existentes permanecem inalterados.
+
+### Roteamento de corredores do GenerationPlan
+
+`routeGenerationPlanCorridors` implementa uma busca A* em grade com estado de direção. Ela começa em aberturas candidatas nas bordas reais dos footprints, busca até uma abertura do cômodo de destino e não atravessa salas, recursos ou elementos de transição não relacionados. Paredes são escaváveis; corredores já roteados podem ser compartilhados quando a conexão tem uma sala em comum ou quando o grafo marca o ciclo como intencional. Cruzamentos sem essa relação são proibidos.
+
+```ts
+const topology = generateDungeonTopology(roomPlan, { profile: "ancient-temple" });
+const layout = generateGenerationSpatialLayout(topology, { style: "axis-branches" });
+const routed = routeGenerationPlanCorridors(layout);
+const dungeon = generationPlanToDungeon(routed);
+```
+
+O caminho é determinístico pela seed, pelo subfluxo independente `corridors` e pela ordem estável das conexões. Os custos padrão são: movimento `1`, escavação de parede `1.5`, reutilização `0.2`, mudança de direção `2` multiplicada pelo estilo, e junção de ciclo `4`; trajetos sinuosos recebem ainda uma atração determinística por uma curva lateral. `CorridorRoutingOptions.costs` permite ajustar esses valores, e `maxExpandedStates` limita cada busca. Uma falha ou limite de busca produz `CorridorRoutingError` com o ID da conexão; nenhuma aresta é descartada silenciosamente.
+
+O estilo da rota fica em `ConnectionEdge.metadata.routeStyle` e pode ser `straight`, `angular`, `sinuous` ou `transition`. A topologia e os perfis fornecem preferências, não regras rígidas. A largura usa `DungeonParameters.corridorWidth` como referência: caminho principal, objetivo/chefe e ligação entre setores podem receber uma tile extra; conexões opcionais ou secretas podem ficar uma tile mais estreitas. Uma largura definida explicitamente na aresta (ou marcada com `metadata.widthIsFixed`) é preservada. O limite físico atual é de três tiles; se a largura pedida não couber, o roteador tenta larguras menores até um tile e registra a solicitação original.
+
+```text
+R───R       R──┐       R─╮       R══[vestíbulo]══R
+reta        angular      sinuosa   transição/larga
+```
+
+As larguras são verificadas durante o A*, inclusive nas curvas. Aberturas de portas recebem `ConnectionEndpointGeometry` com orientação, tiles da parede e posição de entrada; transições de porta/porta secreta são colocadas nesses endpoints (a configuração de portas duplas continua respeitada). Junções compartilhadas geram `PlanIntersection` de tipo T, cruzamento ou merge; rotas `transition` podem gerar vestíbulos 3×3 quando há espaço. A validação final verifica continuidade, limites, footprints completos, obstáculos, endpoints, portas e junções antes de marcar `geometryStatus: "routed"`.
+
+O resultado informa em `corridorRouting` quantas conexões foram roteadas, o comprimento total, células de corredor compartilhadas, junções, vestíbulos e transições de porta. Conexões verticais/múltiplos andares são rejeitadas explicitamente nesta fase. A conversão mantém `Dungeon.tiles`, `roomDetails` e os elementos que os renderizadores já entendem; PixiJS, Three.js e SVG não recebem dependência de `GenerationPlan`. Essa API é aditiva e ainda não substitui o fluxo de geração V1 da interface.
 
 ## Controles e interação
 
@@ -193,6 +217,9 @@ Os arquivos de produção são gerados em `dist/`.
 | `src/generationPlanValidation.ts` | Validação estrutural do GenerationPlan |
 | `src/generationPlanToDungeon.ts` | Conversão de GenerationPlan para Dungeon |
 | `src/generationPlan.test.ts` | Testes do modelo, validador e conversor |
+| `src/generationCorridorGeometry.ts` | Footprints de largura e curvas para corredores |
+| `src/generationCorridorRouter.ts` | Roteamento A* determinístico, portas e junções |
+| `src/generationCorridorRouter.test.ts` | Testes geométricos, determinismo e integração |
 | `src/generationTopology.ts` | Geração e análise determinística de grafos de topologia |
 | `src/generationTopology.test.ts` | Testes de estilos, progressão, perfis, ciclos e acessibilidade |
 | `src/roomTypes.ts` | Categorias e funções de salas |

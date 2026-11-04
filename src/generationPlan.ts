@@ -115,6 +115,20 @@ export type ConnectionType =
   | "blocked-passage"
   | "vertical";
 
+export type CorridorRouteStyle = "straight" | "angular" | "sinuous" | "transition";
+
+export type ConnectionOrientation = "north" | "east" | "south" | "west";
+
+export interface ConnectionEndpointGeometry {
+  roomId: string;
+  position: GridPosition;
+  roomPosition: GridPosition;
+  orientation: ConnectionOrientation;
+  width: number;
+  openingPositions: readonly GridPosition[];
+  wallPositions: readonly GridPosition[];
+}
+
 export type SectorType =
   | "residential"
   | "military"
@@ -153,6 +167,12 @@ export interface ConnectionEdgeMetadata extends Readonly<Record<string, unknown>
   allowParallel?: boolean;
   accessRequirements?: readonly string[];
   lockId?: string;
+  widthIsFixed?: boolean;
+  requestedWidth?: number;
+  routeStyle?: CorridorRouteStyle;
+  sourceEndpoint?: ConnectionEndpointGeometry;
+  targetEndpoint?: ConnectionEndpointGeometry;
+  intersectionIds?: readonly string[];
 }
 
 export interface ConnectionEdge {
@@ -183,7 +203,18 @@ export interface PlanIntersection {
   position: GridPosition;
   width: number;
   connectionIds: readonly string[];
+  kind?: "t-junction" | "cross" | "merge" | "vestibule";
   metadata: Readonly<Record<string, unknown>>;
+}
+
+export interface CorridorRoutingMetadata {
+  version: "corridor-routing-v1";
+  routedConnectionCount: number;
+  totalPathLength: number;
+  sharedPathCellCount: number;
+  junctionCount: number;
+  vestibuleCount: number;
+  doorCount: number;
 }
 
 export type PlanTransitionType =
@@ -236,6 +267,7 @@ export interface GenerationPlan {
   mainPathRoomIds?: readonly string[];
   topology?: GenerationTopologyMetadata;
   spatialLayout?: SpatialLayoutMetadata;
+  corridorRouting?: CorridorRoutingMetadata;
   intersections: readonly PlanIntersection[];
   transitions: readonly PlanTransition[];
   features: readonly PlanFeature[];

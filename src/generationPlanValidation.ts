@@ -3,7 +3,14 @@ import {
   MAX_DUNGEON_WIDTH,
   MIN_DUNGEON_DIMENSION,
 } from "./dungeon";
-import type { ConnectionEdge, GenerationPlan, GridPosition, RoomNode } from "./generationPlan";
+import { getCorridorPathBrush } from "./generationCorridorGeometry";
+import type {
+  ConnectionEdge,
+  ConnectionEndpointGeometry,
+  GenerationPlan,
+  GridPosition,
+  RoomNode,
+} from "./generationPlan";
 
 export type GenerationPlanValidationIssueCode =
   | "invalid-plan-id"
@@ -32,10 +39,15 @@ export type GenerationPlanValidationIssueCode =
   | "discontinuous-connection-path"
   | "connection-does-not-touch-room"
   | "connection-door-placement-unavailable"
+  | "connection-door-endpoint-missing"
+  | "connection-path-overlaps-room"
+  | "connection-path-crosses-feature"
+  | "invalid-connection-endpoint"
   | "required-room-unconnected"
   | "plan-room-not-found"
   | "invalid-intersection"
   | "intersection-connection-not-found"
+  | "intersection-not-on-connection"
   | "invalid-transition"
   | "transition-reference-not-found"
   | "transition-not-on-connection"
@@ -125,25 +137,93 @@ function validatePathWidth(
     message: string,
   ) => void,
 ): void {
-  const halfWidth = Math.floor((edge.width - 1) / 2);
-  for (let index = 0; index < path.length; index += 1) {
-    const position = path[index];
-    const neighbor = path[index + 1] ?? path[index - 1];
-    const horizontal = neighbor === undefined || neighbor.y === position.y;
-    for (let offset = 0; offset < edge.width; offset += 1) {
-      const shift = offset - halfWidth;
-      const brushPosition = {
-        x: position.x + (horizontal ? 0 : shift),
-        y: position.y + (horizontal ? shift : 0),
-      };
-      if (!isPositionInsidePlan(brushPosition, plan)) {
-        addIssue(
-          "invalid-connection-path",
-          `connections.${edge.id}.path[${index}]`,
-          "The connection width extends outside the GenerationPlan bounds.",
-        );
-        return;
-      }
+  for (const brushPosition of getCorridorPathBrush(path, edge.width)) {
+    if (!isPositionInsidePlan(brushPosition, plan)) {
+      addIssue(
+        "invalid-connection-path",
+        `connections.${edge.id}.path`,
+        "The connection width extends outside the GenerationPlan bounds.",
+      );
+      return;
+    }
+  }
+}
+
+function validateEndpointGeometry(
+  endpoint: ConnectionEndpointGeometry | undefined,
+  edge: ConnectionEdge,
+  room: RoomNode,
+  pathPosition: GridPosition | undefined,
+  plan: GenerationPlan,
+  brushCells: ReadonlySet<string>,
+  addIssue: (
+    code: GenerationPlanValidationIssueCode,
+    path: string,
+    message: string,
+  ) => void,
+): void {
+  const endpointPath = `connections.${edge.id}.metadata`;
+  if (
+    !endpoint
+    || endpoint.roomId !== room.id
+    || !pathPosition
+    || endpoint.position.x !== pathPosition.x
+    || endpoint.position.y !== pathPosition.y
+    || endpoint.width !== edge.width
+    || endpoint.openingPositions.length !== endpoint.width
+    || endpoint.wallPositions.length !== endpoint.width
+  ) {
+    addIssue(
+      "invalid-connection-endpoint",
+      endpointPath,
+      "Routed connections must identify a matching room endpoint, wall opening, and width.",
+    );
+    return;
+  }
+  const direction = {
+    north: { x: 0, y: -1 },
+    east: { x: 1, y: 0 },
+    south: { x: 0, y: 1 },
+    west: { x: -1, y: 0 },
+  }[endpoint.orientation];
+  if (!direction) {
+    addIssue(
+      "invalid-connection-endpoint",
+      endpointPath,
+      "Connection endpoint orientation must be cardinal.",
+    );
+    return;
+  }
+  const roomCells = getRoomCells(room);
+  const centerPosition = endpoint.openingPositions[Math.floor((endpoint.width - 1) / 2)];
+  if (
+    !centerPosition
+    || centerPosition.x !== endpoint.position.x
+    || centerPosition.y !== endpoint.position.y
+  ) {
+    addIssue(
+      "invalid-connection-endpoint",
+      endpointPath,
+      "The endpoint path position must be the center of its wall opening.",
+    );
+  }
+  for (let index = 0; index < endpoint.width; index += 1) {
+    const openingPosition = endpoint.openingPositions[index];
+    const wallPosition = endpoint.wallPositions[index];
+    if (
+      !isPositionInsidePlan(openingPosition, plan)
+      || !isPositionInsidePlan(wallPosition, plan)
+      || !brushCells.has(positionKey(openingPosition))
+      || !roomCells.has(positionKey(wallPosition))
+      || openingPosition.x !== wallPosition.x + direction.x
+      || openingPosition.y !== wallPosition.y + direction.y
+    ) {
+      addIssue(
+        "invalid-connection-endpoint",
+        `${endpointPath}.${endpoint.roomId}.openingPositions[${index}]`,
+        "Each opening tile must be routed, inside bounds, and directly outside its matching room wall.",
+      );
+      return;
     }
   }
 }
@@ -365,6 +445,9 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
     }
   }
 
+  const allRoomCells = new Set(
+    plan.rooms.flatMap((room) => [...getRoomCells(room)]),
+  );
   const connectionsById = new Map<string, ConnectionEdge>();
   const connectionSignatures = new Set<string>();
   const incidentRoomIds = new Set<string>();
@@ -458,6 +541,48 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
       if (Number.isSafeInteger(edge.width) && edge.width > 0) {
         validatePathWidth(edge, path, plan, addIssue);
       }
+      const hasRoutedGeometry = plan.topology?.geometryStatus === "routed"
+        || Boolean(edge.metadata.sourceEndpoint || edge.metadata.targetEndpoint);
+      if (hasRoutedGeometry) {
+        const brushPositions = getCorridorPathBrush(path, edge.width);
+        const brushCells = new Set(brushPositions.map(positionKey));
+        for (const position of brushPositions) {
+          if (allRoomCells.has(positionKey(position))) {
+            addIssue(
+              "connection-path-overlaps-room",
+              `${edgePath}.path`,
+              "A routed corridor footprint cannot pass through any room interior.",
+            );
+            break;
+          }
+        }
+        const featureCells = new Set(plan.features.map((feature) => positionKey(feature.position)));
+        if (brushPositions.some((position) => featureCells.has(positionKey(position)))) {
+          addIssue(
+            "connection-path-crosses-feature",
+            `${edgePath}.path`,
+            "A routed corridor footprint cannot overlap a planned obstacle or feature.",
+          );
+        }
+        validateEndpointGeometry(
+          edge.metadata.sourceEndpoint,
+          edge,
+          sourceRoom,
+          path[0],
+          plan,
+          brushCells,
+          addIssue,
+        );
+        validateEndpointGeometry(
+          edge.metadata.targetEndpoint,
+          edge,
+          targetRoom,
+          path[path.length - 1],
+          plan,
+          brushCells,
+          addIssue,
+        );
+      }
       if (isDoorConnection(edge) && !isDoorBlocked(edge)) {
         const sourceCells = getRoomCells(sourceRoom);
         const targetCells = getRoomCells(targetRoom);
@@ -471,6 +596,34 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
             `${edgePath}.path`,
             "A door connection needs at least one path tile outside both rooms.",
           );
+        }
+        if (hasRoutedGeometry) {
+          for (const endpoint of [
+            edge.metadata.sourceEndpoint,
+            edge.metadata.targetEndpoint,
+          ]) {
+            if (!endpoint) continue;
+            const openingPositions = endpoint.width === 2
+              && !plan.generation.parameters.doubleDoorsEnabled
+              ? [endpoint.openingPositions[Math.floor((endpoint.width - 1) / 2)]]
+              : endpoint.openingPositions;
+            const expectedTransitionType = edge.isSecret || edge.connectionType === "secret-door"
+              ? "secret-door"
+              : "doorway";
+            if (openingPositions.some((position) => !plan.transitions.some((transition) => (
+              transition.connectionId === edge.id
+              && transition.roomId === endpoint.roomId
+              && transition.type === expectedTransitionType
+              && transition.position.x === position.x
+              && transition.position.y === position.y
+            )))) {
+              addIssue(
+                "connection-door-endpoint-missing",
+                `${edgePath}.metadata`,
+                "Each routed door connection must place a matching door transition at its endpoint opening.",
+              );
+            }
+          }
         }
       }
     }
@@ -518,11 +671,13 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
   for (const [index, intersection] of plan.intersections.entries()) {
     const intersectionPath = `intersections[${index}]`;
     registerId(intersection.id, `${intersectionPath}.id`);
+    const minimumConnections = intersection.kind === "vestibule" ? 1 : 2;
     if (
       !isPositionInsidePlan(intersection.position, plan)
       || !Number.isSafeInteger(intersection.width)
       || intersection.width < 1
-      || intersection.connectionIds.length < 3
+      || intersection.connectionIds.length < minimumConnections
+      || (intersection.kind === "vestibule" && intersection.width < 3)
       || intersection.position.x - Math.floor((intersection.width - 1) / 2) < 0
       || intersection.position.y - Math.floor((intersection.width - 1) / 2) < 0
       || intersection.position.x + Math.ceil((intersection.width - 1) / 2) >= plan.width
@@ -531,15 +686,34 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
       addIssue(
         "invalid-intersection",
         intersectionPath,
-        "Intersections need an in-bounds position, positive width, and at least three connections.",
+        "Junctions need an in-bounds position and at least two connections; vestibules need one connection and width three or greater.",
       );
     }
     for (const connectionId of intersection.connectionIds) {
-      if (!connectionsById.has(connectionId)) {
+      const connection = connectionsById.get(connectionId);
+      if (!connection) {
         addIssue(
           "intersection-connection-not-found",
           `${intersectionPath}.connectionIds`,
           `Connection ${connectionId} does not exist.`,
+        );
+      } else if (
+        plan.topology?.geometryStatus === "routed"
+        && !getCorridorPathBrush(connection.path, connection.width).some((position) => {
+          const left = intersection.position.x - Math.floor((intersection.width - 1) / 2);
+          const top = intersection.position.y - Math.floor((intersection.width - 1) / 2);
+          const right = intersection.position.x + Math.ceil((intersection.width - 1) / 2);
+          const bottom = intersection.position.y + Math.ceil((intersection.width - 1) / 2);
+          return position.x >= left
+            && position.x <= right
+            && position.y >= top
+            && position.y <= bottom;
+        })
+      ) {
+        addIssue(
+          "intersection-not-on-connection",
+          `${intersectionPath}.connectionIds`,
+          `Connection ${connectionId} does not touch this junction or vestibule footprint.`,
         );
       }
     }
@@ -578,11 +752,38 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
       && !connection.path.some((position) => (
         position.x === transition.position.x && position.y === transition.position.y
       ))
+      && ![
+        ...(connection.metadata.sourceEndpoint?.openingPositions ?? []),
+        ...(connection.metadata.targetEndpoint?.openingPositions ?? []),
+      ].some((position) => (
+        position.x === transition.position.x && position.y === transition.position.y
+      ))
     ) {
       addIssue(
         "transition-not-on-connection",
         `${transitionPath}.position`,
         "Door transitions must lie on their connection path.",
+      );
+    }
+    if (
+      connection
+      && plan.topology?.geometryStatus === "routed"
+      && (transition.type === "doorway" || transition.type === "secret-door")
+      && ![
+        connection.metadata.sourceEndpoint,
+        connection.metadata.targetEndpoint,
+      ].some((endpoint) => (
+        endpoint !== undefined
+        && endpoint.roomId === transition.roomId
+        && endpoint.openingPositions.some((position) => (
+          position.x === transition.position.x && position.y === transition.position.y
+        ))
+      ))
+    ) {
+      addIssue(
+        "invalid-transition",
+        `${transitionPath}.position`,
+        "Routed door transitions must belong to a room opening on the referenced connection.",
       );
     }
     if (!transition.roomId && !transition.connectionId) {

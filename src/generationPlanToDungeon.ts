@@ -18,6 +18,7 @@ import {
 import type { Dungeon, DungeonParameters, DungeonRoom, Tile } from "./dungeon";
 import { ROOM_TYPE_CATEGORIES, ROOM_TYPE_DEFINITIONS } from "./roomTypes";
 import type { RoomTypeDefinition } from "./roomTypes";
+import { getCorridorPathBrush } from "./generationCorridorGeometry";
 import type {
   ConnectionEdge,
   GenerationPlan,
@@ -73,18 +74,9 @@ function carvePath(
   tile: Tile,
   roomCells: ReadonlySet<string>,
 ): void {
-  const halfWidth = Math.floor((width - 1) / 2);
-  for (let index = 0; index < path.length; index += 1) {
-    const position = path[index];
-    const neighbor = path[index + 1] ?? path[index - 1];
-    const horizontal = neighbor === undefined || neighbor.y === position.y;
-    for (let offset = 0; offset < width; offset += 1) {
-      const shift = offset - halfWidth;
-      const x = position.x + (horizontal ? 0 : shift);
-      const y = position.y + (horizontal ? shift : 0);
-      if (roomCells.has(cellKey({ x, y }))) continue;
-      tiles[y][x] = tile;
-    }
+  for (const position of getCorridorPathBrush(path, width)) {
+    if (roomCells.has(cellKey(position))) continue;
+    tiles[position.y][position.x] = tile;
   }
 }
 
@@ -125,7 +117,11 @@ function placeConnection(
   }
   const tile = edge.connectionType === "open-passage" ? FLOOR_TILE : CORRIDOR_TILE;
   carvePath(tiles, edge.path, edge.width, tile, roomCells);
-  if (edge.isSecret || edge.connectionType === "door" || edge.connectionType === "secret-door") {
+  const hasRoutedEndpoints = Boolean(edge.metadata.sourceEndpoint && edge.metadata.targetEndpoint);
+  if (
+    !hasRoutedEndpoints
+    && (edge.isSecret || edge.connectionType === "door" || edge.connectionType === "secret-door")
+  ) {
     const doorPosition = getDoorPosition(edge, roomCells);
     if (doorPosition) {
       tiles[doorPosition.y][doorPosition.x] = (
