@@ -45,6 +45,14 @@ Cada perfil aplica pesos próprios às categorias de salas, armadilhas e tesouro
 
 Os métodos podem ser combinados para criar mapas com salas, túneis e cavernas. A seed permite reproduzir o mapa; o botão **Reroll masmorra** gera outro usando uma nova seed.
 
+### Versionamento e compatibilidade da geração
+
+A geração existente é a **V1**. `generateDungeon` permanece como entrada legada, e `generateDungeonV1` é um alias explícito para comparação futura. `generateDungeonVersioned` retorna a dungeon no contrato atual e, separadamente, metadados com versão do gerador, seed, perfil, algoritmo efetivo, parâmetros completos, configurações adicionais e horário da execução. O horário é apenas informativo; não participa do resultado determinístico.
+
+A V1 continua usando o fluxo aleatório original. `createGenerationRandomStreams` oferece fluxos independentes para topologia, posicionamento, corredores, conteúdo e decoração para versões futuras, sem alterar a sequência aleatória da V1.
+
+Na interface V1, o perfil **Caverna natural** usa Cellular Automata; os demais perfis usam BSP e o controle **Incluir cavernas** alterna entre BSP e BSP + Cellular Automata. Embora os perfis também declarem `bsp-drunkard` e `hybrid`, esse encaminhamento não chega à interface atualmente; `generateDungeon` ainda oferece esses algoritmos para chamadas diretas. O histórico simplificou o despacho, mas não registra uma justificativa, e o gerador não tem uma limitação técnica que impeça essas combinações. Para preservar mapas V1, o despacho atual é mantido; recomenda-se revisar o encaminhamento dos perfis como uma mudança explícita da futura V2.
+
 ## Controles e interação
 
 As configurações estão organizadas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Elas permitem ajustar o conceito, as dimensões, a compactação do mapa, as proporções e os formatos das salas, as categorias funcionais e as chances de geração.
@@ -115,6 +123,7 @@ O Vite informa o endereço local ao iniciar; por padrão, é `http://localhost:5
 Para validar e gerar a versão de produção:
 
 ```bash
+npm test
 npm run build
 npm run preview
 ```
@@ -128,6 +137,7 @@ Os arquivos de produção são gerados em `dist/`.
 - Vite
 - PixiJS
 - Three.js
+- Vitest
 
 ## Estrutura do projeto
 
@@ -136,6 +146,8 @@ Os arquivos de produção são gerados em `dist/`.
 | `src/App.tsx` | Interface, configurações e guia |
 | `src/dungeon.ts` | Algoritmos, mapa e elementos gerados |
 | `src/dungeonProfiles.ts` | Conceitos e perfis de geração |
+| `src/generationBaselines.ts` | Casos V1 de referência e gerador da coleção |
+| `src/dungeon.test.ts` | Testes de regressão e contrato da geração |
 | `src/roomTypes.ts` | Categorias e funções de salas |
 | `src/treasures.ts` | Categorias e catálogo de tesouros |
 | `src/DungeonCanvas.tsx` | Renderização do mapa e exportação |

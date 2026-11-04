@@ -25,6 +25,17 @@ export type Algorithm =
   | "hybrid"
   | "bsp-cellular"
   | "bsp-drunkard";
+export const DUNGEON_GENERATOR_VERSION_V1 = "v1" as const;
+export type DungeonGeneratorVersion = typeof DUNGEON_GENERATOR_VERSION_V1;
+export type GenerationRandomStreamName =
+  | "topology"
+  | "placement"
+  | "corridors"
+  | "content"
+  | "decoration";
+export type GenerationRandomStreams = {
+  [Name in GenerationRandomStreamName]: () => number;
+};
 export type Tile =
   | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
   | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29
@@ -629,6 +640,30 @@ export interface DungeonParameters {
   treasureConsumablesEnabled: boolean;
 }
 
+export interface DungeonGenerationRequest {
+  generatorVersion: DungeonGeneratorVersion;
+  algorithm: Algorithm;
+  seed: number;
+  profile?: string;
+  parameters?: DungeonParameters;
+  settings?: Readonly<Record<string, string | number | boolean>>;
+}
+
+export interface DungeonGenerationMetadata {
+  generatorVersion: DungeonGeneratorVersion;
+  seed: number;
+  profile: string;
+  algorithm: Algorithm;
+  parameters: DungeonParameters;
+  settings: Readonly<Record<string, string | number | boolean>>;
+  generatedAt: string;
+}
+
+export interface VersionedDungeonGeneration {
+  dungeon: Dungeon;
+  metadata: DungeonGenerationMetadata;
+}
+
 export interface RoomShapeFrequencies {
   rectangular: number;
   square: number;
@@ -867,6 +902,25 @@ function createRandom(seed: number): () => number {
     value = Math.imul(value ^ (value >>> 15), value | 1);
     value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
     return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function deriveRandomStreamSeed(seed: number, streamName: GenerationRandomStreamName): number {
+  let hash = (seed >>> 0) ^ 0x811c9dc5;
+  for (let index = 0; index < streamName.length; index += 1) {
+    hash ^= streamName.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+export function createGenerationRandomStreams(seed: number): GenerationRandomStreams {
+  return {
+    topology: createRandom(deriveRandomStreamSeed(seed, "topology")),
+    placement: createRandom(deriveRandomStreamSeed(seed, "placement")),
+    corridors: createRandom(deriveRandomStreamSeed(seed, "corridors")),
+    content: createRandom(deriveRandomStreamSeed(seed, "content")),
+    decoration: createRandom(deriveRandomStreamSeed(seed, "decoration")),
   };
 }
 
@@ -3027,6 +3081,49 @@ export function generateDungeon(
     treasureRarityWeights: parameters.treasureRarityWeights,
     treasureChancePercent: parameters.treasureChancePercent,
     treasureConsumablesEnabled: parameters.treasureConsumablesEnabled,
+  };
+}
+
+export const generateDungeonV1 = generateDungeon;
+
+function snapshotDungeonParameters(parameters: DungeonParameters): DungeonParameters {
+  return {
+    ...parameters,
+    roomSizeFrequencies: { ...parameters.roomSizeFrequencies },
+    roomShapeFrequencies: { ...parameters.roomShapeFrequencies },
+    rectangularRoomRatioFrequencies: { ...parameters.rectangularRoomRatioFrequencies },
+    roomTypeCategoryFrequencies: { ...parameters.roomTypeCategoryFrequencies },
+    trapCategoryWeights: { ...parameters.trapCategoryWeights },
+    treasureCategoryWeights: { ...parameters.treasureCategoryWeights },
+    treasureRarityWeights: { ...parameters.treasureRarityWeights },
+  };
+}
+
+export function generateDungeonVersioned(
+  request: DungeonGenerationRequest,
+): VersionedDungeonGeneration {
+  const parameters = snapshotDungeonParameters(request.parameters ?? DEFAULT_DUNGEON_PARAMETERS);
+  let dungeon: Dungeon;
+
+  switch (request.generatorVersion) {
+    case DUNGEON_GENERATOR_VERSION_V1:
+      dungeon = generateDungeonV1(request.algorithm, request.seed, parameters);
+      break;
+    default:
+      throw new Error(`Unsupported dungeon generator version: ${String(request.generatorVersion)}`);
+  }
+
+  return {
+    dungeon,
+    metadata: {
+      generatorVersion: request.generatorVersion,
+      seed: dungeon.seed,
+      profile: request.profile ?? "custom",
+      algorithm: dungeon.algorithm,
+      parameters,
+      settings: { ...request.settings },
+      generatedAt: new Date().toISOString(),
+    },
   };
 }
 

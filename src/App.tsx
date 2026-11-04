@@ -14,12 +14,13 @@ import {
   CAVE_WATERFALL_TILE,
   CAVE_WATER_TILE,
   CORRIDOR_TILE,
+  DUNGEON_GENERATOR_VERSION_V1,
   DOOR_TILE,
   ELEVATED_FLOOR_TILE,
   EXTERIOR_CONNECTION_TILE,
   EXTERIOR_ENTRANCE_TILE,
   FLOOR_TILE,
-  generateDungeon,
+  generateDungeonVersioned,
   getNumberedCorridorTraps,
   LAVA_TILE,
   MAX_DUNGEON_HEIGHT,
@@ -869,10 +870,18 @@ export default function App() {
       ? parameters.treasureRarityWeights
       : DEFAULT_TREASURE_RARITY_WEIGHTS,
   }), [conceptProfile, parameters]);
-  const generatedDungeon = useMemo(
-    () => generateDungeon(algorithm, seed, generationParameters),
-    [algorithm, generationParameters, seed],
+  const generationRun = useMemo(
+    () => generateDungeonVersioned({
+      generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
+      algorithm,
+      seed,
+      profile: concept,
+      parameters: generationParameters,
+      settings: { cavesEnabled: cavesEnabled || cavesRequired },
+    }),
+    [algorithm, cavesEnabled, cavesRequired, concept, generationParameters, seed],
   );
+  const generatedDungeon = generationRun.dungeon;
   const dungeon = roomPositionEdit?.baseDungeon === generatedDungeon
     ? roomPositionEdit.dungeon
     : generatedDungeon;
@@ -1947,7 +1956,12 @@ export default function App() {
             </div>
           </div>
 
-          <div className="map-frame">
+          <div
+            className="map-frame"
+            data-generator-version={generationRun.metadata.generatorVersion}
+            data-generation-profile={generationRun.metadata.profile}
+            data-generation-seed={generationRun.metadata.seed}
+          >
             <div className="corner-mark corner-top-left" />
             <div className="corner-mark corner-top-right" />
             <div className="corner-mark corner-bottom-left" />
