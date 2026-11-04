@@ -8,7 +8,10 @@ import type { DungeonParameters } from "./dungeon";
 import type { GenerationPlan, GridPosition, RoomNode } from "./generationPlan";
 import { generationPlanToDungeon } from "./generationPlanToDungeon";
 import { validateGenerationPlan } from "./generationPlanValidation";
-import { routeGenerationPlanCorridors } from "./generationCorridorRouter";
+import {
+  MAX_CORRIDOR_ROUTE_EXPANDED_STATES,
+  routeGenerationPlanCorridors,
+} from "./generationCorridorRouter";
 import { generateGenerationSpatialLayout } from "./generationSpatialLayout";
 import { generateDungeonTopology, validateDungeonTopology } from "./generationTopology";
 
@@ -195,6 +198,21 @@ describe("GenerationPlan corridor routing", () => {
     const layout = createSpatialPlan(39211);
 
     expect(() => routeGenerationPlanCorridors(layout, { maxExpandedStates: 1 }))
-      .toThrow(expect.objectContaining({ code: "search-limit" }));
+      .toThrow(expect.objectContaining({
+        code: "search-limit",
+        details: expect.arrayContaining([
+          "A* expanded 5 of 5 allowed states for this connection.",
+        ]),
+      }));
+  });
+
+  it("rejects A* expansion budgets above the per-route safety limit", () => {
+    const layout = createSpatialPlan(39212);
+
+    expect(() => routeGenerationPlanCorridors(layout, {
+      maxExpandedStates: MAX_CORRIDOR_ROUTE_EXPANDED_STATES + 1,
+    })).toThrow(new RangeError(
+      `maxExpandedStates must be a positive safe integer no greater than ${MAX_CORRIDOR_ROUTE_EXPANDED_STATES}.`,
+    ));
   });
 });

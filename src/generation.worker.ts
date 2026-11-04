@@ -15,8 +15,8 @@ self.addEventListener("message", (event: MessageEvent<GenerationWorkerRequestMes
   self.postMessage(progress);
 
   try {
-    const { message, transferBuffer } = runGenerationWorkerRequest(requestId, request);
-    self.postMessage(message, { transfer: [transferBuffer] });
+    const { message, transferBuffers } = runGenerationWorkerRequest(requestId, request);
+    self.postMessage(message, { transfer: transferBuffers });
   } catch (error) {
     self.postMessage(createGenerationWorkerErrorMessage(requestId, error));
   }

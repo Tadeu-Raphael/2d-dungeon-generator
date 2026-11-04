@@ -15,7 +15,8 @@ export type GenerationRandomStreamName =
   | "placement"
   | "corridors"
   | "content"
-  | "decoration";
+  | "decoration"
+  | "caverns";
 
 export type GenerationRandomStreams = {
   [Name in GenerationRandomStreamName]: () => number;
@@ -53,4 +54,3 @@ export interface RoomDimensionChoice extends RoomGenerationBounds {
 }
 
 export type PointTuple = [number, number];
-

@@ -1,5 +1,4 @@
 import {
-  MAX_DUNGEON_TILE_COUNT,
   createGenerationRandomStreams,
   isSupportedDungeonDimensions,
 } from "./dungeon";
@@ -33,6 +32,7 @@ export interface CorridorRoutingCosts {
 
 export interface CorridorRoutingOptions {
   costs?: Partial<CorridorRoutingCosts>;
+  /** Maximum A* states expanded per connection across bounds and width attempts. */
   maxExpandedStates?: number;
   prioritizedConnectionIds?: readonly string[];
 }
@@ -104,6 +104,7 @@ interface RouteSearchResult {
     targetExit: RoomExitCandidate;
   };
   reachedLimit: boolean;
+  expandedStates: number;
   diagnostics?: readonly string[];
 }
 
@@ -146,7 +147,8 @@ const ROUTE_ORIENTATIONS: readonly ConnectionEndpointGeometry["orientation"][] =
   "west",
 ];
 const MAX_CORRIDOR_WIDTH = 3;
-const MAX_ROUTING_TILE_COUNT = MAX_DUNGEON_TILE_COUNT;
+export const MAX_CORRIDOR_ROUTE_EXPANDED_STATES = 100_000;
+const MAX_CORRIDOR_ROUTE_RETRY_EXPANDED_STATES = 250_000;
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
@@ -261,13 +263,16 @@ function validateOptions(
     }
   }
   const maximumStateCount = plan.width * plan.height * CORRIDOR_DIRECTIONS.length;
-  const maxExpandedStates = options.maxExpandedStates ?? maximumStateCount;
+  const maxExpandedStates = options.maxExpandedStates
+    ?? Math.min(maximumStateCount, MAX_CORRIDOR_ROUTE_EXPANDED_STATES);
   if (
     !Number.isSafeInteger(maxExpandedStates)
     || maxExpandedStates < 1
-    || maxExpandedStates > MAX_ROUTING_TILE_COUNT * CORRIDOR_DIRECTIONS.length
+    || maxExpandedStates > MAX_CORRIDOR_ROUTE_EXPANDED_STATES
   ) {
-    throw new RangeError("maxExpandedStates must be a positive safe integer within the supported map state limit.");
+    throw new RangeError(
+      `maxExpandedStates must be a positive safe integer no greater than ${MAX_CORRIDOR_ROUTE_EXPANDED_STATES}.`,
+    );
   }
   return { costs, maxExpandedStates: Math.min(maxExpandedStates, maximumStateCount) };
 }
@@ -697,7 +702,7 @@ function searchRoute(
   maxExpandedStates: number,
 ): RouteSearchResult {
   if (sourceExits.length === 0 || targetExits.length === 0) {
-    return { reachedLimit: false };
+    return { reachedLimit: false, expandedStates: 0 };
   }
   const workspace = context.searchWorkspace;
   const { bestCost, previous, status } = workspace;
@@ -772,6 +777,7 @@ for (const [exitIndex, exit] of sourceExits.entries()) {
     if (expandedStates >= maxExpandedStates) {
       return {
         reachedLimit: true,
+        expandedStates,
         diagnostics: [
           `A* expanded ${expandedStates} states inside ${bounds.minX},${bounds.minY}–${bounds.maxX},${bounds.maxY}.`,
         ],
@@ -791,6 +797,7 @@ for (const [exitIndex, exit] of sourceExits.entries()) {
           targetExit: targetExits[targetExitIndex],
         },
         reachedLimit: false,
+        expandedStates,
       };
     }
 
@@ -856,6 +863,7 @@ for (const [exitIndex, exit] of sourceExits.entries()) {
   }
 return {
   reachedLimit: false,
+  expandedStates,
   diagnostics: [
     `A* exhausted ${expandedStates} states inside ${bounds.minX},${bounds.minY}–${bounds.maxX},${bounds.maxY}.`,
   ],
@@ -876,13 +884,25 @@ function searchRouteWithExpandingBounds(
   maxExpandedStates: number,
 ): RouteSearchResult {
   if (sourceExits.length === 0 || targetExits.length === 0) {
-    return { reachedLimit: false };
+    return { reachedLimit: false, expandedStates: 0 };
   }
   // Retry with progressively wider bounds so local routes avoid scanning distant empty tiles.
   let margin = 12;
+  let expandedStates = 0;
   const diagnostics: string[] = [];
   while (true) {
     const bounds = getRouteSearchBounds(plan, sourceExits, targetExits, margin);
+    const remainingStateBudget = maxExpandedStates - expandedStates;
+    if (remainingStateBudget <= 0) {
+      return {
+        reachedLimit: true,
+        expandedStates,
+        diagnostics: [
+          ...diagnostics,
+          `A* reached its ${maxExpandedStates}-state connection budget across expanding bounds.`,
+        ],
+      };
+    }
     const result = searchRoute(
       plan,
       edge,
@@ -895,8 +915,9 @@ function searchRouteWithExpandingBounds(
       context,
       bounds,
       costs,
-      maxExpandedStates,
+      remainingStateBudget,
     );
+    expandedStates += result.expandedStates;
     diagnostics.push(...(result.diagnostics ?? []));
     if (
       result.route
@@ -907,7 +928,7 @@ function searchRouteWithExpandingBounds(
         && bounds.maxX === plan.width - 2
         && bounds.maxY === plan.height - 2
       )
-    ) return { ...result, diagnostics };
+    ) return { ...result, expandedStates, diagnostics };
     margin = Math.min(Math.max(plan.width, plan.height), margin * 2);
   }
 }
@@ -1229,10 +1250,20 @@ export function routeGenerationPlanCorridors(
     const minimumWidth = originalEdge.metadata.widthIsFixed ? requestedWidth : 1;
     let routed: RoutedConnection | undefined;
     let edgeSearchLimitHit = false;
+    let connectionExpandedStates = 0;
+    let connectionExpansionBudget = maxExpandedStates;
     const attemptedWidths: number[] = [];
     const exitDiagnostics: string[] = [];
 
     for (let width = requestedWidth; width >= minimumWidth; width -= 1) {
+      const remainingStateBudget = connectionExpansionBudget - connectionExpandedStates;
+      if (remainingStateBudget <= 0) {
+        edgeSearchLimitHit = true;
+        exitDiagnostics.push(
+          `A* reached its ${connectionExpansionBudget}-state connection budget before width ${width}.`,
+        );
+        break;
+      }
       attemptedWidths.push(width);
       const sourceExits = getRoomExits(
         sourcePlan,
@@ -1261,34 +1292,44 @@ export function routeGenerationPlanCorridors(
         targetExits,
         context,
         costs,
-        maxExpandedStates,
+        remainingStateBudget,
       );
       if (search.reachedLimit) {
+        const initialSearch = search;
         const retryStateLimit = Math.min(
-          Math.ceil(maxExpandedStates * 1.5),
-          sourcePlan.width * sourcePlan.height * CORRIDOR_DIRECTIONS.length,
+          Math.ceil(maxExpandedStates * 4),
+          MAX_CORRIDOR_ROUTE_RETRY_EXPANDED_STATES,
         );
-        if (retryStateLimit > maxExpandedStates) {
-          search = searchRouteWithExpandingBounds(
-            sourcePlan,
-            originalEdge,
-            routeStyle,
-            width,
-            sourceRoom,
-            targetRoom,
-            sourceExits,
-            targetExits,
-            context,
-            costs,
-            retryStateLimit,
-          );
-        }
+        connectionExpansionBudget += retryStateLimit;
+        const retry = searchRouteWithExpandingBounds(
+          sourcePlan,
+          originalEdge,
+          routeStyle,
+          width,
+          sourceRoom,
+          targetRoom,
+          sourceExits,
+          targetExits,
+          context,
+          costs,
+          retryStateLimit,
+        );
+        search = {
+          ...retry,
+          expandedStates: initialSearch.expandedStates + retry.expandedStates,
+          diagnostics: [
+            ...(initialSearch.diagnostics ?? []),
+            ...(retry.diagnostics ?? []),
+          ],
+        };
       }
+      connectionExpandedStates += search.expandedStates;
       exitDiagnostics.push(
-        `width ${width}: ${sourceExits.length} source exits, ${targetExits.length} target exits${search.reachedLimit ? ", state limit reached" : ""}`,
+        `width ${width}: ${sourceExits.length} source exits, ${targetExits.length} target exits${search.reachedLimit ? ", state limit reached after one bounded retry" : ""}`,
         ...(search.diagnostics ?? []),
       );
       edgeSearchLimitHit ||= search.reachedLimit;
+      if (search.reachedLimit) break;
       if (!search.route) continue;
       routed = {
         edge: {
@@ -1315,13 +1356,14 @@ export function routeGenerationPlanCorridors(
       throw new CorridorRoutingError(
         edgeSearchLimitHit ? "search-limit" : "no-route",
         edgeSearchLimitHit
-          ? `The A* state limit was reached while routing ${originalEdge.id}.`
+          ? `The A* connection expansion limit of ${connectionExpansionBudget} total states was reached while routing ${originalEdge.id}.`
           : `No obstacle-free corridor path was found for ${originalEdge.id}.`,
         originalEdge.id,
         [
           `Source room ${sourceRoom.id} at ${sourceRoom.position.x},${sourceRoom.position.y}; target room ${targetRoom.id} at ${targetRoom.position.x},${targetRoom.position.y}.`,
           `Requested width: ${requestedWidth}.`,
           `Attempted widths: ${attemptedWidths.join(", ")}.`,
+          `A* expanded ${connectionExpandedStates} of ${connectionExpansionBudget} allowed states for this connection.`,
           ...exitDiagnostics,
         ],
       );

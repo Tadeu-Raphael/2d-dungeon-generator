@@ -1,46 +1,103 @@
 import { generateDungeonPipeline } from "./generationPipeline";
-import type { DungeonGenerationPipelineRequest } from "./generationPipeline";
 import {
+  generateDungeonStructure,
+} from "./dungeonStructureGeneration";
+import {
+  packDungeonStructureResult,
   packGenerationResult,
+  withoutDungeonStructurePlans,
+  withoutGenerationPlan,
 } from "./generationWorkerProtocol";
 import type {
   GenerationWorkerErrorMessage,
   GenerationWorkerMetrics,
+  GenerationWorkerOutput,
   GenerationWorkerResultMessage,
+  DungeonGenerationWorkRequest,
 } from "./generationWorkerProtocol";
 import { CorridorRoutingError } from "./generationCorridorRouter";
 import { GenerationPlanValidationError } from "./generationPlanValidation";
+import { DungeonStructureValidationError } from "./dungeonStructureValidation";
 
 export function runGenerationWorkerRequest(
   requestId: number,
-  request: DungeonGenerationPipelineRequest,
-): { message: GenerationWorkerResultMessage; transferBuffer: ArrayBuffer } {
+  request: DungeonGenerationWorkRequest,
+): { message: GenerationWorkerResultMessage; transferBuffers: ArrayBuffer[] } {
   const startedAt = performance.now();
-  const generation = generateDungeonPipeline(request);
+  let output: GenerationWorkerOutput;
+  let transferBuffers: ArrayBuffer[];
+  let roomCount: number;
+  let tileCount: number;
+  let levelCount: number;
+  let warnings: string[];
+  let packagingMs = 0;
+  if (request.kind === "single") {
+    const generated = generateDungeonPipeline(request.request);
+    const generationMs = performance.now() - startedAt;
+    const packagingStartedAt = performance.now();
+    const packed = packGenerationResult(withoutGenerationPlan(generated));
+    packagingMs = performance.now() - packagingStartedAt;
+    output = { kind: "single", result: packed.result };
+    transferBuffers = [packed.transferBuffer];
+    roomCount = generated.dungeon.roomDetails.length;
+    tileCount = generated.dungeon.width * generated.dungeon.height;
+    levelCount = 1;
+    warnings = [...new Set([
+      generated.fallbackReason,
+      generated.algorithmNote,
+    ].filter((warning): warning is string => Boolean(warning)))];
+    const metrics: GenerationWorkerMetrics = {
+      generationMs,
+      packagingMs,
+      totalMs: performance.now() - startedAt,
+      roomCount,
+      tileCount,
+      levelCount,
+    };
+    return {
+      message: { type: "result", requestId, result: output, metrics, warnings },
+      transferBuffers,
+    };
+  }
+
+  const generated = generateDungeonStructure(request.request);
   const generationMs = performance.now() - startedAt;
   const packagingStartedAt = performance.now();
-  const packed = packGenerationResult(generation);
-  const packagingMs = performance.now() - packagingStartedAt;
+  const uiResult = withoutDungeonStructurePlans(generated);
+  const packed = packDungeonStructureResult(uiResult);
+  packagingMs = performance.now() - packagingStartedAt;
+  output = { kind: "multilevel", result: packed.result };
+  transferBuffers = packed.transferBuffers;
+  roomCount = generated.levels.reduce(
+    (total, level) => total + level.generation.dungeon.roomDetails.length,
+    0,
+  );
+  tileCount = generated.levels.reduce(
+    (total, level) => total + level.generation.dungeon.width * level.generation.dungeon.height,
+    0,
+  );
+  levelCount = generated.levels.length;
+  warnings = [...new Set(generated.levels.flatMap(({ generation }) => [
+    generation.fallbackReason,
+    generation.algorithmNote,
+  ].filter((warning): warning is string => Boolean(warning))))];
   const metrics: GenerationWorkerMetrics = {
     generationMs,
     packagingMs,
     totalMs: performance.now() - startedAt,
-    roomCount: generation.dungeon.roomDetails.length,
-    tileCount: generation.dungeon.width * generation.dungeon.height,
+    roomCount,
+    tileCount,
+    levelCount,
   };
-  const warnings = [...new Set([
-    generation.fallbackReason,
-    generation.algorithmNote,
-  ].filter((warning): warning is string => Boolean(warning)))];
   return {
     message: {
       type: "result",
       requestId,
-      result: packed.result,
+      result: output,
       metrics,
       warnings,
     },
-    transferBuffer: packed.transferBuffer,
+    transferBuffers,
   };
 }
 
@@ -53,6 +110,8 @@ export function createGenerationWorkerErrorMessage(
     ? [...error.details]
     : error instanceof GenerationPlanValidationError
       ? error.issues.map((issue) => `${issue.path}: ${issue.message}`)
+      : error instanceof DungeonStructureValidationError
+        ? error.issues.map((issue) => `${issue.path}: ${issue.message}`)
       : undefined;
   return {
     type: "error",

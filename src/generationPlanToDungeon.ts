@@ -1,6 +1,7 @@
 import {
   CAVE_CONNECTION_WALL_TILE,
   CAVE_BREACH_TILE,
+  CAVE_TILE,
   CORRIDOR_TILE,
   DOOR_TILE,
   EXTERIOR_CONNECTION_TILE,
@@ -233,6 +234,18 @@ export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
   for (const intersection of plan.intersections) {
     carveIntersection(tiles, intersection, roomCells);
   }
+  for (const region of plan.naturalRegions ?? []) {
+    for (const span of region.rowSpans) {
+      for (let x = span.xStart; x < span.xEnd; x += 1) {
+        tiles[span.y][x] = CAVE_TILE;
+      }
+    }
+  }
+  for (const caveConnection of plan.caveConnections ?? []) {
+    for (const position of caveConnection.path) {
+      tiles[position.y][position.x] = CAVE_TILE;
+    }
+  }
   for (const transition of plan.transitions) {
     const transitionTiles: Record<typeof transition.type, Tile> = {
       doorway: DOOR_TILE,
@@ -240,6 +253,7 @@ export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
       "stairs-up": STAIRS_UP_TILE,
       "stairs-down": STAIRS_DOWN_TILE,
       "room-stairs": ROOM_STAIRS_TILE,
+      "vertical-connection": ROOM_STAIRS_TILE,
       "exterior-entrance": EXTERIOR_ENTRANCE_TILE,
       "exterior-connection": EXTERIOR_CONNECTION_TILE,
       "cave-breach": CAVE_BREACH_TILE,

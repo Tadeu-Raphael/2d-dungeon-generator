@@ -126,6 +126,23 @@ h1 {
 .generation-worker-status button { flex: 0 0 auto; padding: 5px 9px; border: 1px solid #8c7655; background: transparent; color: #e7d2ab; font: inherit; cursor: pointer; }
 .generation-worker-status button:hover { background: rgba(215, 183, 127, 0.12); }
 .generation-advanced { margin-top: 12px; }
+.multilevel-control { margin-top: 12px; display: grid; gap: 7px; }
+.multilevel-control > small { color: #78818d; font-size: 8px; line-height: 1.4; }
+.multilevel-toggle-button { min-height: 36px; padding: 8px 10px; border: 1px solid #725b3b; border-radius: 3px; background: rgba(105, 78, 42, 0.2); color: #e7c68e; display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 9px "DM Mono", monospace; cursor: pointer; }
+.multilevel-toggle-button[aria-pressed="true"] { border-color: #9c7d4d; background: rgba(105, 78, 42, 0.36); }
+.multilevel-toggle-button:disabled { opacity: 0.55; cursor: not-allowed; }
+.multilevel-toggle-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.multilevel-config > summary { padding: 9px 0; color: #c8b083; cursor: pointer; font-size: 9px; line-height: 1.5; }
+.vertical-connection-types { margin: 12px 0 0; padding: 9px; border: 1px solid #2a313b; border-radius: 3px; display: grid; gap: 7px; }
+.vertical-connection-types legend { padding: 0 4px; color: #aeb4bb; font-size: 8px; }
+.vertical-connection-types label { color: #9299a2; display: flex; align-items: center; gap: 7px; font-size: 8px; }
+.vertical-connection-types input { accent-color: var(--accent); }
+.multilevel-level-list { margin-top: 12px; display: grid; gap: 7px; }
+.multilevel-level-config { padding: 0 8px 8px; border: 1px solid #2a313b; border-radius: 3px; }
+.multilevel-level-config > summary { padding: 9px 0; color: #c8b083; cursor: pointer; font-size: 8px; line-height: 1.5; }
+.multilevel-level-config input[type="number"] { width: 100%; padding: 7px 8px; border: 1px solid #3a414b; border-radius: 3px; background: #191e26; color: #e7d2ab; font: 10px "DM Mono", monospace; }
+.custom-profile-editor textarea { width: 100%; padding: 9px; border: 1px solid #3a414b; border-radius: 3px; background: #191e26; color: #e7d2ab; font: 10px/1.5 "DM Mono", monospace; resize: vertical; }
+.custom-profile-errors { margin: 8px 0 0; padding: 10px 10px 10px 26px; border: 1px solid #8a483b; border-radius: 3px; color: #ffb39e; font-size: 11px; }
 .parameter-list { display: grid; gap: 13px; }
 .entrance-control { margin-top: 16px; display: grid; gap: 7px; color: #aeb4bb; }
 .entrance-control > span { font-size: 8px; letter-spacing: 0.8px; }
@@ -391,6 +408,10 @@ h1 {
 .map-title small { color: #858e99; font-size: 10px; }
 .map-coordinate { color: #e0dfd9; font-size: 10px; }
 .map-coordinate span { margin-left: 4px; color: #727c88; font-size: 8px; }
+.level-navigation { margin: 8px 0 12px; padding: 9px 10px; border: 1px solid #303844; border-radius: 3px; display: grid; grid-template-columns: auto minmax(150px, 250px); align-items: center; gap: 8px 12px; }
+.level-navigation > label { color: #c8b083; font-size: 8px; letter-spacing: 0.8px; }
+.level-navigation select { min-width: 0; padding: 7px 9px; border: 1px solid #3a414b; border-radius: 3px; background: #191e26; color: #e7d2ab; font: 9px "DM Mono", monospace; }
+.level-connection-list { grid-column: 1 / -1; display: grid; gap: 4px; color: #9299a2; font-size: 8px; line-height: 1.5; }
 
 .map-frame {
   position: relative;

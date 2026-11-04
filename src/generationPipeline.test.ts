@@ -202,7 +202,7 @@ describe("GenerationPlan application pipeline", () => {
     expect(result.dungeon.roomDetails).toHaveLength(12);
   });
 
-  it("integrates every profile while preserving the explicit natural-cavern fallback", () => {
+  it("integrates every profile, including a logical natural-cavern plan", () => {
     for (const [index, profile] of DUNGEON_CONCEPT_ORDER.entries()) {
       const result = generate(profile, { seed: 97531000 + index });
       expect(result.metadata.parameters.roomTypeDistributionEnabled).toBe(true);
@@ -214,9 +214,12 @@ describe("GenerationPlan application pipeline", () => {
         .toEqual(DUNGEON_CONCEPTS[profile].treasureCategoryWeights);
       if (profile === "natural-cavern") {
         expect(result.requestedGeneratorVersion).toBe(DUNGEON_GENERATOR_VERSION_V2);
-        expect(result.metadata.generatorVersion).toBe(DUNGEON_GENERATOR_VERSION_V1);
-        expect(result.plan).toBeUndefined();
-        expect(result.fallbackReason).toMatch(/Caverna natural/);
+        expect(result.metadata.generatorVersion).toBe(DUNGEON_GENERATOR_VERSION_V2);
+        expect(result.plan?.generationMode).toBe("natural-cavern");
+        expect(result.plan?.rooms).toHaveLength(0);
+        expect(result.plan?.naturalRegions).toHaveLength(1);
+        expect(validateGenerationPlan(result.plan!).valid).toBe(true);
+        expect(result.fallbackReason).toBeUndefined();
         continue;
       }
 
@@ -318,12 +321,15 @@ describe("GenerationPlan application pipeline", () => {
     expect(result.plan).toBeUndefined();
   });
 
-  it("reports a visible V1 fallback when cavern features are requested in V2", () => {
+  it("adds a connected organic cavern to a constructed V2 plan when requested", () => {
     const result = generate("military-fortress", { cavesEnabled: true });
 
     expect(result.requestedGeneratorVersion).toBe(DUNGEON_GENERATOR_VERSION_V2);
-    expect(result.metadata.generatorVersion).toBe(DUNGEON_GENERATOR_VERSION_V1);
-    expect(result.fallbackReason).toMatch(/cavernas híbridas/i);
+    expect(result.metadata.generatorVersion).toBe(DUNGEON_GENERATOR_VERSION_V2);
+    expect(result.plan?.naturalRegions).toHaveLength(1);
+    expect(result.plan?.caveConnections).toHaveLength(1);
+    expect(validateGenerationPlan(result.plan!).valid).toBe(true);
+    expect(result.fallbackReason).toBeUndefined();
   });
 
   it("preserves exterior entrances through an explicit V1 fallback", () => {

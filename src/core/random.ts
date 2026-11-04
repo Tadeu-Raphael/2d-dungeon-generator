@@ -11,16 +11,20 @@ export function createRandom(seed: number): () => number {
   };
 }
 
+export function deriveRandomSeed(seed: number, label: string): number {
+  let hash = (seed >>> 0) ^ 0x811c9dc5;
+  for (let index = 0; index < label.length; index += 1) {
+    hash ^= label.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
 export function deriveRandomStreamSeed(
   seed: number,
   streamName: GenerationRandomStreamName,
 ): number {
-  let hash = (seed >>> 0) ^ 0x811c9dc5;
-  for (let index = 0; index < streamName.length; index += 1) {
-    hash ^= streamName.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
+  return deriveRandomSeed(seed, streamName);
 }
 
 export function createGenerationRandomStreams(
@@ -32,5 +36,6 @@ export function createGenerationRandomStreams(
     corridors: createRandom(deriveRandomStreamSeed(seed, "corridors")),
     content: createRandom(deriveRandomStreamSeed(seed, "content")),
     decoration: createRandom(deriveRandomStreamSeed(seed, "decoration")),
+    caverns: createRandom(deriveRandomStreamSeed(seed, "caverns")),
   };
 }

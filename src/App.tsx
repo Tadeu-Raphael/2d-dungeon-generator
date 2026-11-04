@@ -25,6 +25,10 @@ import {
   CORRIDOR_TILE,
   DUNGEON_GENERATOR_VERSION_V1,
   DUNGEON_GENERATOR_VERSION_V2,
+  MAX_DUNGEON_HEIGHT,
+  MAX_DUNGEON_ROOM_COUNT,
+  MAX_DUNGEON_WIDTH,
+  MIN_DUNGEON_DIMENSION,
   DOOR_TILE,
   ELEVATED_FLOOR_TILE,
   EXTERIOR_CONNECTION_TILE,
@@ -60,9 +64,21 @@ import type { TreasureCategory } from "./treasures";
 import {
   DUNGEON_CONCEPTS,
   DUNGEON_CONCEPT_ORDER,
+  type CustomDungeonProfile,
   type DungeonConcept,
+  type DungeonProfileSelection,
 } from "./dungeonProfiles";
 import type { DungeonGenerationPipelineRequest } from "./generationPipeline";
+import {
+  resolveDungeonProfile,
+  validateCustomDungeonProfile,
+} from "./customDungeonProfile";
+import {
+  MAX_DUNGEON_LEVEL_COUNT,
+  type DungeonLevelGenerationConfig,
+} from "./dungeonStructureGeneration";
+import type { VerticalConnectionKind } from "./dungeonStructure";
+import type { DungeonGenerationWorkRequest } from "./generationWorkerProtocol";
 import { useDungeonGeneration } from "./useDungeonGeneration";
 import { useDungeonParameters } from "./ui/hooks/useDungeonParameters";
 import { ParameterPanel } from "./ui/components/ParameterPanel";
@@ -73,7 +89,7 @@ import { TreasuresPanel } from "./ui/components/TreasuresPanel";
 import { AccessPanel } from "./ui/components/AccessPanel";
 import {
   createGenerationBenchmarkGalleryHtml,
-  runGenerationBenchmark,
+  runGenerationBenchmarkGalleryScenarios,
 } from "./generationBenchmark";
 import type { SpatialLayoutStyle, TopologyStyle } from "./generationPlan";
 import { ROOM_TYPE_CATEGORIES, ROOM_TYPE_CATEGORY_ORDER } from "./roomTypes";
@@ -103,6 +119,10 @@ interface GeneratedTrap extends DungeonTrap {
   corridorRoomNumbers: number[];
   corridorNumber?: number;
 }
+type DungeonLevelOverride = Partial<Pick<
+  DungeonLevelGenerationConfig,
+  "width" | "height" | "roomCount" | "topologyStyle" | "spatialLayoutStyle" | "isSecret" | "isOptional"
+>>;
 
 const DungeonThreeCanvas = lazy(() => import("./rendering/DungeonThreeCanvas"));
 
@@ -222,9 +242,43 @@ const spatialStyleOptions: Array<{ id: SpatialLayoutStyle; label: string }> = [
   { id: "ring", label: "Anel" },
   { id: "clusters", label: "Clusters" },
 ];
+const verticalConnectionOptions: Array<{ id: VerticalConnectionKind; label: string }> = [
+  { id: "stairs", label: "Escadas" },
+  { id: "spiral-stairs", label: "Escadas em espiral" },
+  { id: "elevator", label: "Elevadores" },
+  { id: "trapdoor", label: "Alçapões" },
+  { id: "secret-passage", label: "Passagens secretas" },
+  { id: "vertical-shaft", label: "Poços verticais" },
+  { id: "drop", label: "Quedas" },
+  { id: "ramp", label: "Rampas" },
+  { id: "portal", label: "Portais" },
+  { id: "other", label: "Outros" },
+];
+const DEFAULT_CUSTOM_PROFILE_JSON = `{
+  "id": "custom-fortress",
+  "name": "Fortaleza personalizada",
+  "baseProfile": "military-fortress",
+  "topology": {
+    "style": "sectorized",
+    "parameters": {
+      "branchCount": 3,
+      "cycleCount": 1
+    }
+  },
+  "v2Preferences": {
+    "spatialLayoutWeights": {
+      "clusters": 100
+    },
+    "roomSizeBias": "compact",
+    "defaultDensity": 72,
+    "corridorWidthBias": 1
+  }
+}`;
+
 export default function App() {
   const { parameters, setParameters, seed, setSeed, seedDraft, setSeedDraft, widthDraft, heightDraft, dimensionDraftError, updateDimensionDraft, updateSeedDraft, commitSeedDraft, commitDimension } = useDungeonParameters();
-  const [concept, setConcept] = useState<DungeonConcept>("military-fortress");
+  const [concept, setConcept] = useState<DungeonProfileSelection>("military-fortress");
+  const [customProfileJson, setCustomProfileJson] = useState(DEFAULT_CUSTOM_PROFILE_JSON);
   const [generatorVersion, setGeneratorVersion] = useState<typeof DUNGEON_GENERATOR_VERSION_V1 | typeof DUNGEON_GENERATOR_VERSION_V2>(DUNGEON_GENERATOR_VERSION_V1);
   const [canvasView, setCanvasView] = useState<CanvasView>("2d");
   const [topologyStyleSelection, setTopologyStyleSelection] = useState<TopologyStyle | "profile">("profile");
@@ -232,6 +286,15 @@ export default function App() {
   const [cycleCountOverride, setCycleCountOverride] = useState<number | null>(null);
   const [spatialDensityOverride, setSpatialDensityOverride] = useState<number | null>(null);
   const [varyCorridorWidths, setVaryCorridorWidths] = useState(true);
+  const [multilevelEnabled, setMultilevelEnabled] = useState(false);
+  const [levelCount, setLevelCount] = useState(2);
+  const [levelsAboveReference, setLevelsAboveReference] = useState(0);
+  const [levelOverrides, setLevelOverrides] = useState<Record<number, DungeonLevelOverride>>({});
+  const [verticalConnectionCountOverride, setVerticalConnectionCountOverride] = useState<number | null>(null);
+  const [allowedVerticalConnectionKinds, setAllowedVerticalConnectionKinds] = useState<VerticalConnectionKind[]>(["stairs"]);
+  const [requireGlobalConnectivity, setRequireGlobalConnectivity] = useState(true);
+  const [allowVerticalCycles, setAllowVerticalCycles] = useState(false);
+  const [selectedLevelId, setSelectedLevelId] = useState<string | undefined>();
   const [focusRequest, setFocusRequest] = useState<MapFocusRequest | null>(null);
   const [roomDetailNumber, setRoomDetailNumber] = useState<number | null>(null);
   const [roomDetailSection, setRoomDetailSection] = useState<RoomMetadataSection | null>(null);
@@ -245,25 +308,164 @@ export default function App() {
   const [cavesEnabled, setCavesEnabled] = useState(false);
   const [benchmarkGalleryError, setBenchmarkGalleryError] = useState<string | null>(null);
   const [benchmarkGalleryStatus, setBenchmarkGalleryStatus] = useState<string | null>(null);
-  const conceptProfile = DUNGEON_CONCEPTS[concept];
-  const cavesRequired = concept === "natural-cavern";
+  const customProfileValidation = useMemo(() => {
+    try {
+      const input: unknown = JSON.parse(customProfileJson);
+      return validateCustomDungeonProfile(input);
+    } catch (error) {
+      return {
+        valid: false,
+        errors: [`JSON inválido: ${error instanceof Error ? error.message : String(error)}`],
+      };
+    }
+  }, [customProfileJson]);
+  const activeCustomProfile: CustomDungeonProfile | undefined = concept === "custom"
+    ? customProfileValidation.profile
+    : undefined;
+  const selectedBaseProfile: DungeonConcept = concept === "custom"
+    ? activeCustomProfile?.baseProfile ?? "military-fortress"
+    : concept;
+  const conceptProfile = concept === "custom" && activeCustomProfile
+    ? resolveDungeonProfile("custom", activeCustomProfile).profile
+    : DUNGEON_CONCEPTS[selectedBaseProfile];
+  const cavesRequired = concept === "natural-cavern"
+    || (concept === "custom" && (
+      activeCustomProfile?.mode === "natural-cavern"
+      || (!activeCustomProfile?.mode && activeCustomProfile?.baseProfile === "natural-cavern")
+    ));
+  const profileCavesEnabled = Boolean(activeCustomProfile?.cavesEnabled);
+  const multilevelUnavailable = cavesRequired || cavesEnabled || profileCavesEnabled;
   const defaultCycleCount = conceptProfile.topology.parameters.cycleCount ?? 0;
   const spatialDensity = spatialDensityOverride ?? conceptProfile.v2Preferences.defaultDensity;
-  const generationRequest = useMemo<DungeonGenerationPipelineRequest>(() => ({
+  const singleGenerationRequest = useMemo<DungeonGenerationPipelineRequest>(() => ({
     generatorVersion,
     profile: concept,
+    ...(activeCustomProfile ? { customProfile: activeCustomProfile } : {}),
     seed,
     parameters,
-    cavesEnabled: cavesEnabled || cavesRequired,
+    cavesEnabled: cavesEnabled || cavesRequired || profileCavesEnabled,
     topologyStyle: topologyStyleSelection === "profile" ? undefined : topologyStyleSelection,
     spatialLayoutStyle: spatialStyleSelection === "profile" ? undefined : spatialStyleSelection,
     cycleCount: cycleCountOverride ?? undefined,
     spatialDensity,
     varyCorridorWidths,
-  }), [cavesEnabled, cavesRequired, concept, cycleCountOverride, generatorVersion, parameters, seed, spatialDensity, spatialStyleSelection, topologyStyleSelection, varyCorridorWidths]);
-  const { generationRun, status: generationStatus, isWorker: isWorkerGeneration, progress: generationProgress, error: generationError, metrics: generationMetrics, cancel: cancelGeneration } = useDungeonGeneration(generationRequest);
-
+  }), [activeCustomProfile, cavesEnabled, cavesRequired, concept, cycleCountOverride, generatorVersion, parameters, seed, spatialDensity, spatialStyleSelection, topologyStyleSelection, varyCorridorWidths]);
+  const effectiveLevelCount = Math.max(2, Math.min(MAX_DUNGEON_LEVEL_COUNT, levelCount));
+  const effectiveLevelsAboveReference = Math.min(levelsAboveReference, effectiveLevelCount - 1);
+  const levelsBelowReference = effectiveLevelCount - 1 - effectiveLevelsAboveReference;
+  const profileSpatialStyle = spatialStyleOptions.reduce((best, option) => (
+    conceptProfile.v2Preferences.spatialLayoutWeights[option.id]
+      > conceptProfile.v2Preferences.spatialLayoutWeights[best.id]
+      ? option
+      : best
+  ), spatialStyleOptions[0]!).id;
+  const levelConfigs = useMemo<DungeonLevelGenerationConfig[]>(() => (
+    Array.from({ length: effectiveLevelCount }, (_, index) => {
+      const verticalIndex = index - levelsBelowReference;
+      const override = levelOverrides[index] ?? {};
+      return {
+        name: verticalIndex === 0
+          ? "Nível principal"
+          : verticalIndex < 0
+            ? `Subsolo ${Math.abs(verticalIndex)}`
+            : `Piso superior ${verticalIndex}`,
+        verticalIndex,
+        width: override.width ?? parameters.width,
+        height: override.height ?? parameters.height,
+        roomCount: override.roomCount ?? (
+          multilevelEnabled ? Math.min(parameters.roomCount, 6) : parameters.roomCount
+        ),
+        topologyStyle: override.topologyStyle
+          ?? (topologyStyleSelection === "profile" ? conceptProfile.topology.style : topologyStyleSelection),
+        spatialLayoutStyle: override.spatialLayoutStyle
+          ?? (spatialStyleSelection === "profile" ? profileSpatialStyle : spatialStyleSelection),
+        ...(override.isSecret ? { isSecret: true } : {}),
+        ...(override.isOptional ? { isOptional: true } : {}),
+      };
+    })
+  ), [
+    conceptProfile.topology.style,
+    effectiveLevelCount,
+    levelOverrides,
+    levelsBelowReference,
+    multilevelEnabled,
+    parameters.height,
+    parameters.roomCount,
+    parameters.width,
+    profileSpatialStyle,
+    spatialStyleSelection,
+    topologyStyleSelection,
+  ]);
+  const maximumVerticalConnectionCount = allowVerticalCycles
+    ? (effectiveLevelCount - 1) * 2
+    : effectiveLevelCount - 1;
+  const verticalConnectionCount = Math.min(
+    verticalConnectionCountOverride ?? effectiveLevelCount - 1,
+    maximumVerticalConnectionCount,
+  );
+  const generationRequest = useMemo<DungeonGenerationWorkRequest>(() => (
+    multilevelEnabled
+      ? {
+        kind: "multilevel",
+        request: {
+          seed,
+          profile: concept,
+          ...(activeCustomProfile ? { customProfile: activeCustomProfile } : {}),
+          parameters: { ...parameters, entranceMode: "upper-stairs" },
+          levels: levelConfigs,
+          entryLevelIndex: levelsBelowReference,
+          verticalConnectionCount,
+          allowedVerticalConnectionKinds,
+          requireGlobalConnectivity,
+          allowVerticalCycles,
+          cycleCount: cycleCountOverride ?? defaultCycleCount,
+          spatialDensity,
+          varyCorridorWidths,
+        },
+      }
+      : { kind: "single", request: singleGenerationRequest }
+  ), [
+    allowVerticalCycles,
+    allowedVerticalConnectionKinds,
+    activeCustomProfile,
+    concept,
+    cycleCountOverride,
+    defaultCycleCount,
+    levelConfigs,
+    levelsBelowReference,
+    multilevelEnabled,
+    parameters,
+    requireGlobalConnectivity,
+    seed,
+    singleGenerationRequest,
+    spatialDensity,
+    varyCorridorWidths,
+    verticalConnectionCount,
+  ]);
+  const {
+    generationRun: primaryGenerationRun,
+    structureRun,
+    status: generationStatus,
+    isWorker: isWorkerGeneration,
+    hasGenerationResult,
+    progress: generationProgress,
+    error: generationError,
+    metrics: generationMetrics,
+    cancel: cancelGeneration,
+  } = useDungeonGeneration(generationRequest);
+  const selectedLevel = structureRun?.structure.levels.find((level) => level.id === selectedLevelId)
+    ?? structureRun?.structure.levels.find((level) => level.id === structureRun.structure.connectivity.entryLevelId)
+    ?? structureRun?.structure.levels[0];
+  const generationRun = structureRun?.levels.find((level) => level.levelId === selectedLevel?.id)?.generation
+    ?? primaryGenerationRun;
   const generatedDungeon = generationRun.dungeon;
+  const requestedLevelConfig = generationRequest.kind === "multilevel"
+    ? generationRequest.request.levels[generationRequest.request.entryLevelIndex]
+    : undefined;
+  const selectedVerticalConnections = structureRun?.structure.verticalConnections.filter(
+    (connection) => connection.sourceLevelId === selectedLevel?.id
+      || connection.targetLevelId === selectedLevel?.id,
+  ) ?? [];
   const dungeon = roomPositionEdit?.baseDungeon === generatedDungeon ? roomPositionEdit.dungeon : generatedDungeon;
   const algorithm = generatedDungeon.algorithm;
   const hasBspRooms = dungeon.roomDetails.length > 0;
@@ -377,7 +579,7 @@ export default function App() {
       shouldFocus: false,
     }));
   }, []);
-  const downloadBenchmarkGallery = () => { setBenchmarkGalleryError(null); let objectUrl: string | undefined; try { const html = createGenerationBenchmarkGalleryHtml(runGenerationBenchmark()); objectUrl = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" })); const link = document.createElement("a"); link.href = objectUrl; link.download = "generation-benchmark.html"; document.body.appendChild(link); link.click(); link.remove(); setBenchmarkGalleryStatus("Galeria V1 × V2 gerada para download."); } catch (error) { setBenchmarkGalleryError(error instanceof Error ? error.message : "Não foi possível gerar a galeria de benchmark."); } finally { if (objectUrl) { const url = objectUrl; window.setTimeout(() => URL.revokeObjectURL(url), 1_000); } } };
+  const downloadBenchmarkGallery = () => { setBenchmarkGalleryError(null); let objectUrl: string | undefined; try { const scenarios = runGenerationBenchmarkGalleryScenarios(); const html = createGenerationBenchmarkGalleryHtml(scenarios.runs, scenarios.structures); objectUrl = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" })); const link = document.createElement("a"); link.href = objectUrl; link.download = "generation-audit-gallery.html"; document.body.appendChild(link); link.click(); link.remove(); setBenchmarkGalleryStatus("Galeria de auditoria V1 × V2, cavernas e dungeons multinível gerada para download."); } catch (error) { setBenchmarkGalleryError(error instanceof Error ? error.message : "Não foi possível gerar a galeria de auditoria."); } finally { if (objectUrl) { const url = objectUrl; window.setTimeout(() => URL.revokeObjectURL(url), 1_000); } } };
   const updateTrapCategoryFrequency = (key: TrapCategory, value: number) => { setParameters((current) => ({ ...current, trapCategoryWeights: redistributeFrequencies(current.trapCategoryWeights, TRAP_CATEGORY_ORDER, key, value) })); };
   const updateTreasureCategoryFrequency = (key: TreasureCategory, value: number) => { setParameters((current) => ({ ...current, treasureCategoryWeights: redistributeFrequencies(current.treasureCategoryWeights, TREASURE_CATEGORY_ORDER, key, value) })); };
   const updateRoomTypeFrequency = (key: RoomTypeCategory, value: number) => { setParameters((current) => ({ ...current, roomTypeCategoryFrequencies: redistributeFrequencies(current.roomTypeCategoryFrequencies, ROOM_TYPE_CATEGORY_ORDER, key, value) })); };
@@ -404,6 +606,19 @@ export default function App() {
     setSeedDraft(String(nextSeed));
     window.scrollTo({ top: 0, behavior: "auto" });
   };
+  const updateLevelOverride = <K extends keyof DungeonLevelOverride>(
+    index: number,
+    key: K,
+    value: DungeonLevelOverride[K],
+  ) => {
+    setLevelOverrides((current) => ({
+      ...current,
+      [index]: {
+        ...current[index],
+        [key]: value,
+      },
+    }));
+  };
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -428,29 +643,79 @@ export default function App() {
               <>
                 <div className="section-heading settings-section-heading"><span>VERSÃO DO GERADOR</span></div>
                 <label className="entrance-control" htmlFor="generator-version"><span>PIPELINE</span>
-                  <select id="generator-version" value={generatorVersion} onChange={(event) => setGeneratorVersion(event.currentTarget.value === DUNGEON_GENERATOR_VERSION_V2 ? DUNGEON_GENERATOR_VERSION_V2 : DUNGEON_GENERATOR_VERSION_V1)}>
-                    <option value={DUNGEON_GENERATOR_VERSION_V1}>V1 · compatível</option>
+                  <select id="generator-version" value={generatorVersion} disabled={multilevelEnabled} onChange={(event) => setGeneratorVersion(event.currentTarget.value === DUNGEON_GENERATOR_VERSION_V2 ? DUNGEON_GENERATOR_VERSION_V2 : DUNGEON_GENERATOR_VERSION_V1)}>
+                    <option value={DUNGEON_GENERATOR_VERSION_V1} disabled={multilevelEnabled}>V1 · compatível</option>
                     <option value={DUNGEON_GENERATOR_VERSION_V2}>V2 · GenerationPlan</option>
                   </select>
-                  <small>{generatorVersion === DUNGEON_GENERATOR_VERSION_V1 ? "Geração legada, mantida como padrão." : "Topologia, layout espacial e roteamento de corredores."}</small>
+                  <small>{multilevelEnabled ? "Dungeons multinível sempre usam o pipeline V2 em cada andar." : generatorVersion === DUNGEON_GENERATOR_VERSION_V1 ? "Geração legada, mantida como padrão." : "Topologia, layout espacial e roteamento de corredores."}</small>
                 </label>
+                <div className="multilevel-control">
+                  <button
+                    className="multilevel-toggle-button"
+                    type="button"
+                    aria-pressed={multilevelEnabled}
+                    disabled={multilevelUnavailable}
+                    onClick={() => {
+                      const enabled = !multilevelEnabled;
+                      if (enabled) setGeneratorVersion(DUNGEON_GENERATOR_VERSION_V2);
+                      setMultilevelEnabled(enabled);
+                    }}
+                  >
+                    <span>Gerar vários níveis</span>
+                    <strong>{multilevelEnabled ? "Ativado" : "Ativar"}</strong>
+                  </button>
+                  <small>{multilevelUnavailable
+                    ? "A geração multinível V2 não oferece cavernas neste estágio."
+                    : "Cada nível é gerado separadamente pelo pipeline V2."}</small>
+                </div>
                 <div className="benchmark-gallery-action">
-                  <button className="benchmark-gallery-button" type="button" onClick={downloadBenchmarkGallery}>Baixar galeria V1 × V2</button>
-                  <small>Compara os seis seeds congelados da Fase 1, com mapas e métricas.</small>
+                  <button className="benchmark-gallery-button" type="button" onClick={downloadBenchmarkGallery}>Baixar galeria de auditoria</button>
+                  <small>Compara V1/V2, perfis, escalas, topologias, cavernas e dungeons multinível.</small>
                   {benchmarkGalleryError && <p className="benchmark-notice" role="alert">{benchmarkGalleryError}</p>}
                   {benchmarkGalleryStatus && <p className="benchmark-notice" role="status">{benchmarkGalleryStatus}</p>}
                 </div>
                 <label className="entrance-control" htmlFor="dungeon-concept"><span>PERFIL</span>
                   <select id="dungeon-concept" value={concept} onChange={(event) => {
+                    if (event.currentTarget.value === "custom") {
+                      setConcept("custom");
+                      return;
+                    }
                     const selectedConcept = DUNGEON_CONCEPT_ORDER.find((id) => id === event.currentTarget.value);
-                    if (selectedConcept) setConcept(selectedConcept);
+                    if (selectedConcept) {
+                      setConcept(selectedConcept);
+                      if (selectedConcept === "natural-cavern") setMultilevelEnabled(false);
+                    }
                   }}>
                     {DUNGEON_CONCEPT_ORDER.map((conceptId) => (
                       <option key={conceptId} value={conceptId}>{DUNGEON_CONCEPTS[conceptId].name}</option>
                     ))}
+                    <option value="custom">Personalizado (JSON)</option>
                   </select>
                   <small>{conceptProfile.description}</small>
                 </label>
+                {concept === "custom" && (
+                  <div className="custom-profile-editor">
+                    <label className="entrance-control" htmlFor="custom-profile-json">
+                      <span>PERFIL PERSONALIZADO · JSON</span>
+                      <textarea
+                        id="custom-profile-json"
+                        value={customProfileJson}
+                        rows={15}
+                        spellCheck={false}
+                        onChange={(event) => setCustomProfileJson(event.currentTarget.value)}
+                      />
+                      <small>
+                        Dimensões, salas e corredores continuam configurados nos parâmetros da dungeon e de cada nível.
+                        Campos desconhecidos ou valores incompatíveis impedem a geração.
+                      </small>
+                    </label>
+                    {!customProfileValidation.valid && (
+                      <ul className="custom-profile-errors" role="alert">
+                        {customProfileValidation.errors.map((error) => <li key={error}>{error}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
                 <ParameterPanel
                   widthDraft={widthDraft}
                   heightDraft={heightDraft}
@@ -461,6 +726,207 @@ export default function App() {
                   updateSeedDraft={updateSeedDraft}
                   commitSeedDraft={commitSeedDraft}
                 />
+                {multilevelEnabled && (
+                  <details className="generation-advanced multilevel-config">
+                    <summary>Configurar níveis</summary>
+                      <label className="parameter-control" htmlFor="multilevel-count">
+                        <span className="parameter-label"><span>Quantidade de níveis</span><strong>{effectiveLevelCount}</strong></span>
+                        <input
+                          id="multilevel-count"
+                          type="range"
+                          min={2}
+                          max={MAX_DUNGEON_LEVEL_COUNT}
+                          step={1}
+                          value={effectiveLevelCount}
+                          onChange={(event) => setLevelCount(Number(event.currentTarget.value))}
+                        />
+                      </label>
+                      <label className="parameter-control" htmlFor="levels-above-reference">
+                        <span className="parameter-label"><span>Níveis acima do principal</span><strong>{effectiveLevelsAboveReference}</strong></span>
+                        <input
+                          id="levels-above-reference"
+                          type="range"
+                          min={0}
+                          max={effectiveLevelCount - 1}
+                          step={1}
+                          value={effectiveLevelsAboveReference}
+                          onChange={(event) => setLevelsAboveReference(Number(event.currentTarget.value))}
+                        />
+                        <small>{levelsBelowReference} abaixo · nível principal · {effectiveLevelsAboveReference} acima</small>
+                      </label>
+                      <label className="parameter-control" htmlFor="vertical-connection-count">
+                        <span className="parameter-label"><span>Conexões verticais</span><strong>{verticalConnectionCount}</strong></span>
+                        <input
+                          id="vertical-connection-count"
+                          type="range"
+                          min={requireGlobalConnectivity ? effectiveLevelCount - 1 : 0}
+                          max={maximumVerticalConnectionCount}
+                          step={1}
+                          value={verticalConnectionCount}
+                          onChange={(event) => setVerticalConnectionCountOverride(Number(event.currentTarget.value))}
+                        />
+                      </label>
+                      <label className="parameter-control" htmlFor="require-global-connectivity">
+                        <span className="parameter-label"><span>Conectar todos os níveis</span></span>
+                        <input
+                          id="require-global-connectivity"
+                          type="checkbox"
+                          checked={requireGlobalConnectivity}
+                          onChange={(event) => {
+                            setRequireGlobalConnectivity(event.currentTarget.checked);
+                            if (event.currentTarget.checked) setVerticalConnectionCountOverride(null);
+                          }}
+                        />
+                      </label>
+                      <label className="parameter-control" htmlFor="allow-vertical-cycles">
+                        <span className="parameter-label"><span>Permitir ciclos entre níveis</span></span>
+                        <input
+                          id="allow-vertical-cycles"
+                          type="checkbox"
+                          checked={allowVerticalCycles}
+                          onChange={(event) => setAllowVerticalCycles(event.currentTarget.checked)}
+                        />
+                      </label>
+                      <fieldset className="vertical-connection-types">
+                        <legend>Tipos de conexão permitidos</legend>
+                        {verticalConnectionOptions.map(({ id, label }) => (
+                          <label key={id}>
+                            <input
+                              type="checkbox"
+                              checked={allowedVerticalConnectionKinds.includes(id)}
+                              onChange={(event) => {
+                                const isChecked = event.currentTarget.checked;
+                                setAllowedVerticalConnectionKinds((current) => (
+                                  isChecked
+                                    ? [...current, id]
+                                    : current.filter((kind) => kind !== id)
+                                ));
+                              }}
+                            />
+                            {label}
+                          </label>
+                        ))}
+                      </fieldset>
+                      <div className="multilevel-level-list">
+                        {levelConfigs.map((level, index) => (
+                          <details className="multilevel-level-config" key={`${level.verticalIndex}-${index}`}>
+                            <summary>{level.name} · {level.width} × {level.height} · {level.roomCount} salas</summary>
+                            <label className="entrance-control" htmlFor={`level-width-${index}`}>
+                              <span>Largura</span>
+                              <input
+                                id={`level-width-${index}`}
+                                type="number"
+                                min={MIN_DUNGEON_DIMENSION}
+                                max={MAX_DUNGEON_WIDTH}
+                                step={1}
+                                value={level.width}
+                                onChange={(event) => {
+                                  const value = Number(event.currentTarget.value);
+                                  if (
+                                    Number.isSafeInteger(value)
+                                    && value >= MIN_DUNGEON_DIMENSION
+                                    && value <= MAX_DUNGEON_WIDTH
+                                  ) {
+                                    updateLevelOverride(index, "width", value);
+                                  }
+                                }}
+                              />
+                            </label>
+                            <label className="entrance-control" htmlFor={`level-height-${index}`}>
+                              <span>Altura</span>
+                              <input
+                                id={`level-height-${index}`}
+                                type="number"
+                                min={MIN_DUNGEON_DIMENSION}
+                                max={MAX_DUNGEON_HEIGHT}
+                                step={1}
+                                value={level.height}
+                                onChange={(event) => {
+                                  const value = Number(event.currentTarget.value);
+                                  if (
+                                    Number.isSafeInteger(value)
+                                    && value >= MIN_DUNGEON_DIMENSION
+                                    && value <= MAX_DUNGEON_HEIGHT
+                                  ) {
+                                    updateLevelOverride(index, "height", value);
+                                  }
+                                }}
+                              />
+                            </label>
+                            <label className="entrance-control" htmlFor={`level-rooms-${index}`}>
+                              <span>Salas</span>
+                              <input
+                                id={`level-rooms-${index}`}
+                                type="number"
+                                min={2}
+                                max={MAX_DUNGEON_ROOM_COUNT}
+                                step={1}
+                                value={level.roomCount}
+                                onChange={(event) => {
+                                  const value = Number(event.currentTarget.value);
+                                  if (
+                                    Number.isSafeInteger(value)
+                                    && value >= 2
+                                    && value <= MAX_DUNGEON_ROOM_COUNT
+                                  ) {
+                                    updateLevelOverride(index, "roomCount", value);
+                                  }
+                                }}
+                              />
+                            </label>
+                            <label className="parameter-control" htmlFor={`level-secret-${index}`}>
+                              <span className="parameter-label"><span>Nível secreto</span></span>
+                              <input
+                                id={`level-secret-${index}`}
+                                type="checkbox"
+                                checked={Boolean(level.isSecret)}
+                                onChange={(event) => updateLevelOverride(index, "isSecret", event.currentTarget.checked)}
+                              />
+                            </label>
+                            <label className="parameter-control" htmlFor={`level-optional-${index}`}>
+                              <span className="parameter-label"><span>Nível opcional</span></span>
+                              <input
+                                id={`level-optional-${index}`}
+                                type="checkbox"
+                                checked={Boolean(level.isOptional)}
+                                onChange={(event) => updateLevelOverride(index, "isOptional", event.currentTarget.checked)}
+                              />
+                            </label>
+                            <label className="entrance-control" htmlFor={`level-topology-${index}`}>
+                              <span>Topologia</span>
+                              <select
+                                id={`level-topology-${index}`}
+                                value={level.topologyStyle}
+                                onChange={(event) => {
+                                  const style = topologyStyleOptions.find(({ id }) => id === event.currentTarget.value)?.id;
+                                  if (style) updateLevelOverride(index, "topologyStyle", style);
+                                }}
+                              >
+                                {topologyStyleOptions.map((option) => (
+                                  <option key={option.id} value={option.id}>{option.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="entrance-control" htmlFor={`level-layout-${index}`}>
+                              <span>Distribuição</span>
+                              <select
+                                id={`level-layout-${index}`}
+                                value={level.spatialLayoutStyle}
+                                onChange={(event) => {
+                                  const style = spatialStyleOptions.find(({ id }) => id === event.currentTarget.value)?.id;
+                                  if (style) updateLevelOverride(index, "spatialLayoutStyle", style);
+                                }}
+                              >
+                                {spatialStyleOptions.map((option) => (
+                                  <option key={option.id} value={option.id}>{option.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </details>
+                        ))}
+                      </div>
+                  </details>
+                )}
                 <details className="generation-advanced">
                   <summary>Opções avançadas da V2</summary>
                   <label className="entrance-control" htmlFor="topology-style"><span>TOPOLOGIA</span>
@@ -496,8 +962,43 @@ export default function App() {
                   </label>
                   <label className="parameter-control" htmlFor="caves-enabled">
                     <span className="parameter-label"><span>Incluir cavernas</span></span>
-                    <input id="caves-enabled" type="checkbox" checked={cavesEnabled} disabled={cavesRequired} onChange={(event) => setCavesEnabled(event.currentTarget.checked)} />
+                    <input id="caves-enabled" type="checkbox" checked={cavesEnabled} disabled={cavesRequired || multilevelEnabled} onChange={(event) => setCavesEnabled(event.currentTarget.checked)} />
+                    <small>Na V2, cavernas orgânicas são conectadas às estruturas construídas.</small>
                   </label>
+                  {(cavesRequired || cavesEnabled) && (
+                    <>
+                      <label className="parameter-control" htmlFor="cavern-density">
+                        <span className="parameter-label"><span>Densidade navegável</span><strong>{parameters.cellularFillPercent}%</strong></span>
+                        <input
+                          id="cavern-density"
+                          type="range"
+                          min={35}
+                          max={65}
+                          step={1}
+                          value={parameters.cellularFillPercent}
+                          onChange={(event) => {
+                            const cellularFillPercent = Number(event.currentTarget.value);
+                            setParameters((current) => ({ ...current, cellularFillPercent }));
+                          }}
+                        />
+                      </label>
+                      <label className="parameter-control" htmlFor="cavern-irregularity">
+                        <span className="parameter-label"><span>Irregularidade</span><strong>{parameters.cellularIterations} iterações</strong></span>
+                        <input
+                          id="cavern-irregularity"
+                          type="range"
+                          min={2}
+                          max={8}
+                          step={1}
+                          value={parameters.cellularIterations}
+                          onChange={(event) => {
+                            const cellularIterations = Number(event.currentTarget.value);
+                            setParameters((current) => ({ ...current, cellularIterations }));
+                          }}
+                        />
+                      </label>
+                    </>
+                  )}
                 </details>
               </>
             )}
@@ -568,22 +1069,81 @@ export default function App() {
                 </button>
               </div>
               <span className="map-coordinate">
-                {dungeon.width} × {dungeon.height}
+                {hasGenerationResult ? dungeon.width : requestedLevelConfig?.width ?? parameters.width}
+                {" × "}
+                {hasGenerationResult ? dungeon.height : requestedLevelConfig?.height ?? parameters.height}
                 <span>GRID · 1 TILE = 1 M</span>
               </span>
             </div>
           </div>
+          {structureRun && selectedLevel && (
+            <div className="level-navigation" aria-label="Navegação entre níveis">
+              <label htmlFor="active-dungeon-level">NÍVEL</label>
+              <select
+                id="active-dungeon-level"
+                value={selectedLevel.id}
+                onChange={(event) => setSelectedLevelId(event.currentTarget.value)}
+              >
+                {structureRun.structure.levels.map((level) => {
+                  const generatedLevel = structureRun.levels.find(
+                    (entry) => entry.levelId === level.id,
+                  );
+                  return (
+                    <option key={level.id} value={level.id}>
+                      {level.name} · {level.verticalIndex > 0 ? `+${level.verticalIndex}` : level.verticalIndex}
+                      {" · "}{generatedLevel?.generation.dungeon.roomDetails.length ?? 0} salas
+                    </option>
+                  );
+                })}
+              </select>
+              <div className="level-connection-list">
+                {selectedVerticalConnections.length === 0
+                  ? <span>Sem conexões verticais neste nível.</span>
+                  : selectedVerticalConnections.map((connection) => {
+                    const source = structureRun.structure.levels.find(
+                      (level) => level.id === connection.sourceLevelId,
+                    );
+                    const target = structureRun.structure.levels.find(
+                      (level) => level.id === connection.targetLevelId,
+                    );
+                    const kindLabel = verticalConnectionOptions.find(
+                      (option) => option.id === connection.kind,
+                    )?.label ?? connection.kind;
+                    return (
+                      <span key={connection.id}>
+                        {source?.name ?? connection.sourceLevelId} ↔ {target?.name ?? connection.targetLevelId}
+                        {" · "}{kindLabel}
+                        {" · "}{connection.sourcePosition.x},{connection.sourcePosition.y}
+                        {" ↔ "}{connection.targetPosition.x},{connection.targetPosition.y}
+                      </span>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+          {structureRun && structureRun.connectivity.disconnectedLevelIds.length > 0 && (
+            <p className="generation-notice" role="status">
+              Níveis sem caminho a partir do nível inicial:{" "}
+              {structureRun.connectivity.disconnectedLevelIds.map((id) => (
+                structureRun.structure.levels.find((level) => level.id === id)?.name ?? id
+              )).join(", ")}.
+            </p>
+          )}
           {generationStatus === "running" && (
             <div className="generation-notice generation-worker-status" role="status" aria-live="polite">
               <span>{generationProgress ?? "Gerando dungeon..."}</span>
               {isWorkerGeneration && <button type="button" onClick={cancelGeneration}>Cancelar</button>}
             </div>
           )}
-          {generationError && <p className="generation-notice" role="alert">{generationError}</p>}
+          {generationError && !(concept === "custom" && !customProfileValidation.valid) && (
+            <p className="generation-notice" role="alert">{generationError}</p>
+          )}
           {generationStatus === "cancelled" && <p className="generation-notice" role="status">Geração cancelada.</p>}
           {generationStatus === "ready" && (
             <p className="generation-notice" role="status">
-              {generationMetrics.roomCount} salas geradas em {generationMetrics.generationMs.toFixed(1)} ms.
+              {generationMetrics.roomCount} salas
+              {generationMetrics.levelCount > 1 ? ` em ${generationMetrics.levelCount} níveis` : ""}
+              {" geradas em "}{generationMetrics.generationMs.toFixed(1)} ms.
               {generationRun.fallbackReason && ` ${generationRun.fallbackReason}`}
             </p>
           )}
@@ -591,7 +1151,8 @@ export default function App() {
             className="map-frame"
             data-generator-version={generationRun.metadata.generatorVersion}
             data-generation-profile={generationRun.metadata.profile}
-            data-generation-seed={generationRun.metadata.seed}
+            data-generation-seed={seed}
+            data-generation-ready={hasGenerationResult}
           >
             <div className="corner-mark corner-top-left" />
             <div className="corner-mark corner-top-right" />
@@ -629,7 +1190,7 @@ export default function App() {
                 onToggleLava={toggleLavaVisibility}
               />
             )}
-            <div className="map-overlay-label">NÍVEL 01 <span>/</span> PROCEDURAL</div>
+            <div className="map-overlay-label">{selectedLevel?.name ?? "NÍVEL 01"} <span>/</span> PROCEDURAL</div>
           </div>
           <div className="map-legend">
             <span><i className="legend-room" /> {floorLabel}</span>
@@ -700,24 +1261,24 @@ export default function App() {
           <div className="stats-row">
             <div className="stat-card">
               <span>ÁREA EXPLORÁVEL</span>
-              <strong>{floorPercentage}<small>%</small></strong>
-              <div className="stat-meter"><i style={{ width: `${floorPercentage}%` }} /></div>
+              <strong>{hasGenerationResult ? <>{floorPercentage}<small>%</small></> : "..."}</strong>
+              <div className="stat-meter"><i style={{ width: `${hasGenerationResult ? floorPercentage : 0}%` }} /></div>
             </div>
             <div className="stat-card">
               <span>TILES ABERTOS</span>
-              <strong>{dungeon.floorCount.toLocaleString("pt-BR")}<small> / {dungeon.width * dungeon.height}</small></strong>
-              <p>{floorDescription}</p>
+              <strong>{hasGenerationResult ? <>{dungeon.floorCount.toLocaleString("pt-BR")}<small> / {dungeon.width * dungeon.height}</small></> : "..."}</strong>
+              <p>{hasGenerationResult ? floorDescription : "Aguardando resultado da geração."}</p>
             </div>
             <div className="stat-card">
               <span>SALAS GERADAS</span>
-              <strong>{dungeon.rooms.toString().padStart(2, "0")}</strong>
-              <p>{conceptProfile.generationDescription}</p>
+              <strong>{hasGenerationResult ? dungeon.rooms.toString().padStart(2, "0") : "..."}</strong>
+              <p>{hasGenerationResult ? conceptProfile.generationDescription : "Aguardando resultado da geração."}</p>
             </div>
           </div>
           <details className="room-metadata-section" open>
             <summary>
               <span>METADADOS DAS SALAS</span>
-              <small>{dungeon.roomDetails.length} salas · categorias por sala</small>
+              <small>{hasGenerationResult ? `${dungeon.roomDetails.length} salas · categorias por sala` : "Aguardando geração..."}</small>
             </summary>
             <p className="room-metadata-note">
               Encontros, ocupação, recompensas e atributos narrativos são sugestões; armadilhas seguem as taxas do gerador.
@@ -744,7 +1305,7 @@ export default function App() {
         </section>
         <aside className="room-panel" aria-label="Guia das salas">
           <div className="room-panel-tools">
-            <DungeonExportControl dungeon={dungeon} />
+            {hasGenerationResult && <DungeonExportControl dungeon={dungeon} />}
           </div>
           <section className="room-index">
             <header className="room-index-heading">
@@ -752,16 +1313,25 @@ export default function App() {
                 <span className="room-index-kicker">GUIA DE SALAS</span>
                 <strong>Salas e armadilhas</strong>
                 <span className="room-index-summary">
-                  {dungeon.roomDetails.length} salas · {roomTrapCount + generatedTraps.length} armadilhas · {roomTreasureCount} tesouros
+                  {hasGenerationResult
+                    ? `${dungeon.roomDetails.length} salas · ${roomTrapCount + generatedTraps.length} armadilhas · ${roomTreasureCount} tesouros`
+                    : "Aguardando resultado da geração"}
                 </span>
               </div>
-              <span className="room-total" aria-label={`${dungeon.roomDetails.length} salas`}>
-                {dungeon.roomDetails.length.toString().padStart(2, "0")}
+              <span className="room-total" aria-label={hasGenerationResult ? `${dungeon.roomDetails.length} salas` : "Salas aguardando geração"}>
+                {hasGenerationResult ? dungeon.roomDetails.length.toString().padStart(2, "0") : "..."}
               </span>
             </header>
             <div className="room-list" ref={guideListRef}>
-              {dungeon.roomDetails.length === 0 && (
+              {!hasGenerationResult && (
                 <div className="room-empty">
+                  <span className="empty-room-icon" aria-hidden="true">⌁</span>
+                  <strong>{generationStatus === "cancelled" ? "Geração cancelada" : generationStatus === "error" ? "Geração indisponível" : "Salas em preparação"}</strong>
+                  <p>{generationStatus === "error" ? "Nenhum resultado foi gerado." : "As salas aparecerão aqui quando a geração terminar."}</p>
+                </div>
+              )}
+              {dungeon.roomDetails.length === 0 && (
+                hasGenerationResult && <div className="room-empty">
                   <span className="empty-room-icon" aria-hidden="true">⌁</span>
                   <strong>Sem salas individuais</strong>
                   <p>Este conceito não gera salas numeradas; armadilhas de cavernas e trilhas aparecem abaixo.</p>

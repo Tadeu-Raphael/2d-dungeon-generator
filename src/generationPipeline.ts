@@ -7,6 +7,7 @@ import {
   PILLAR_TILE,
   TRAP_DEFINITIONS,
   WATER_TILE,
+  assertSupportedDungeonDimensions,
   createGenerationRandomStreams,
   generateDungeonVersioned,
 } from "./dungeon";
@@ -18,8 +19,15 @@ import type {
   Tile,
   VersionedDungeonGeneration,
 } from "./dungeon";
-import { DUNGEON_CONCEPTS, resolveDungeonGenerationAlgorithm } from "./dungeonProfiles";
-import type { DungeonConcept } from "./dungeonProfiles";
+import { resolveDungeonGenerationAlgorithm } from "./dungeonProfiles";
+import type {
+  CustomDungeonProfile,
+  DungeonConceptProfile,
+  DungeonProfileSelection,
+} from "./dungeonProfiles";
+import {
+  resolveDungeonProfile,
+} from "./customDungeonProfile";
 import {
   createStableGenerationId,
 } from "./generationPlan";
@@ -30,19 +38,30 @@ import type {
   PlanTransition,
   RoomNode,
   SpatialLayoutStyle,
+  TopologyParameters,
   TopologyStyle,
 } from "./generationPlan";
-import { routeGenerationPlanCorridors, CorridorRoutingError } from "./generationCorridorRouter";
+import {
+  MAX_CORRIDOR_ROUTE_EXPANDED_STATES,
+  routeGenerationPlanCorridors,
+  CorridorRoutingError,
+} from "./generationCorridorRouter";
 import { generateGenerationSpatialLayout, SpatialLayoutError } from "./generationSpatialLayout";
 import { generationPlanToDungeon } from "./generationPlanToDungeon";
 import { GenerationPlanValidationError, validateGenerationPlan } from "./generationPlanValidation";
 import { generateDungeonTopology, getDungeonTopologyStatistics } from "./generationTopology";
 import { generateV2RoomRecipe } from "./generationRoomRecipe";
 import { DEFAULT_TREASURE_RARITY_WEIGHTS } from "./treasures";
+import {
+  CavernGenerationError,
+  generateHybridCavern,
+  generateNaturalCavern,
+} from "./generationCavern";
 
 export interface DungeonGenerationPipelineRequest {
   generatorVersion: typeof DUNGEON_GENERATOR_VERSION_V1 | typeof DUNGEON_GENERATOR_VERSION_V2;
-  profile: DungeonConcept;
+  profile: DungeonProfileSelection;
+  customProfile?: CustomDungeonProfile;
   seed: number;
   parameters?: DungeonParameters;
   cavesEnabled?: boolean;
@@ -58,6 +77,7 @@ export type GenerationStageName =
   | "roomRecipe"
   | "planPreparation"
   | "topology"
+  | "cavern"
   | "layout"
   | "contentTransfer"
   | "routing"
@@ -119,6 +139,170 @@ const TOPOLOGY_SPATIAL_STYLE: Record<TopologyStyle, SpatialLayoutStyle> = {
 };
 
 const WALL_TILE: Tile = 0;
+
+function cloneParameters(parameters: DungeonParameters): DungeonParameters {
+  return {
+    ...parameters,
+    roomSizeFrequencies: { ...parameters.roomSizeFrequencies },
+    roomShapeFrequencies: { ...parameters.roomShapeFrequencies },
+    rectangularRoomRatioFrequencies: { ...parameters.rectangularRoomRatioFrequencies },
+    roomTypeCategoryFrequencies: { ...parameters.roomTypeCategoryFrequencies },
+    trapCategoryWeights: { ...parameters.trapCategoryWeights },
+    treasureCategoryWeights: { ...parameters.treasureCategoryWeights },
+    treasureRarityWeights: { ...parameters.treasureRarityWeights },
+  };
+}
+
+function getProfileMetadataSettings(
+  resolvedProfile: ReturnType<typeof resolveDungeonProfile>,
+): Record<string, string | number | boolean> {
+  return resolvedProfile.customProfile
+    ? {
+      customProfileId: resolvedProfile.customProfile.id,
+      customProfileName: resolvedProfile.customProfile.name,
+      baseProfile: resolvedProfile.baseProfile,
+    }
+    : {};
+}
+
+function generateNaturalCavernV2Pipeline(
+  request: DungeonGenerationPipelineRequest,
+  parameters: DungeonParameters,
+  resolvedProfile: ReturnType<typeof resolveDungeonProfile>,
+  stageTimings?: GenerationStageTimings,
+): DungeonGenerationPipelineResult {
+  if (parameters.entranceMode !== "upper-stairs") {
+    return createFallbackResult(
+      request,
+      "A V2 ainda não posiciona entradas externas em cavernas; foi usado o gerador V1 para preservar essa geometria.",
+      "exterior-access-compatibility",
+      undefined,
+      stageTimings,
+    );
+  }
+
+  const planId = `generation:${resolvedProfile.id}:${request.seed}`;
+  let generated: ReturnType<typeof generateNaturalCavern>;
+  try {
+    generated = measureStage(stageTimings, "cavern", () => generateNaturalCavern(
+      planId,
+      parameters.width,
+      parameters.height,
+      parameters,
+      request.seed,
+    ));
+  } catch (error) {
+    if (!(error instanceof CavernGenerationError)) throw error;
+    return createFallbackResult(
+      request,
+      `${error.message} Foi usado o gerador V1 do perfil.`,
+      "cavern-generation",
+      undefined,
+      stageTimings,
+    );
+  }
+
+  const effectiveParameters = cloneParameters({ ...parameters, roomCount: 0 });
+  const generation: DungeonGenerationMetadata = {
+    generatorVersion: DUNGEON_GENERATOR_VERSION_V2,
+    seed: request.seed,
+    profile: resolvedProfile.id,
+    algorithm: "cellular",
+    parameters: effectiveParameters,
+    settings: {
+      requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V2,
+      generationMode: "natural-cavern",
+      requestedRoomCount: parameters.roomCount,
+      generatedRoomCount: 0,
+      roomCountApplicable: false,
+      caveAlgorithm: "cellular-automata",
+      caveRegionCount: 1,
+      caveTileCount: generated.tileCount,
+      cellularFillPercent: parameters.cellularFillPercent,
+      cellularIterations: parameters.cellularIterations,
+      ...getProfileMetadataSettings(resolvedProfile),
+    },
+    generatedAt: new Date().toISOString(),
+  };
+  const plan: GenerationPlan = {
+    id: planId,
+    width: parameters.width,
+    height: parameters.height,
+    generation,
+    generationMode: "natural-cavern",
+    rooms: [],
+    connections: [],
+    sectors: [],
+    naturalRegions: [generated.region],
+    entryRoomId: undefined,
+    exitRoomId: undefined,
+    objectiveRoomId: undefined,
+    intersections: [],
+    transitions: [
+      {
+        id: createStableGenerationId(planId, "transition", 0),
+        type: "stairs-up",
+        position: generated.entryPosition,
+        regionId: generated.region.id,
+        metadata: { role: "entry" },
+      },
+      {
+        id: createStableGenerationId(planId, "transition", 1),
+        type: "stairs-down",
+        position: generated.exitPosition,
+        regionId: generated.region.id,
+        metadata: { role: "exit" },
+      },
+    ],
+    features: [],
+    metadata: {
+      cavernTopology: {
+        algorithm: "cellular-automata",
+        connected: true,
+        regionCount: 1,
+        tileCount: generated.tileCount,
+      },
+    },
+  };
+  const validation = measureStage(
+    stageTimings,
+    "validation",
+    () => validateGenerationPlan(plan),
+  );
+  if (!validation.valid) {
+    return createFallbackResult(
+      request,
+      `A validação da caverna V2 falhou: ${validation.issues.map((issue) => issue.message).join("; ")}.`,
+      "plan-validation",
+      undefined,
+      stageTimings,
+    );
+  }
+  try {
+    const dungeon = measureStage(
+      stageTimings,
+      "rasterization",
+      () => generationPlanToDungeon(plan),
+    );
+    return {
+      dungeon,
+      metadata: generation,
+      requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V2,
+      plan,
+      stageTimings,
+      algorithmNote: "Caverna V2 gerada por Cellular Automata e representada como uma região lógica conectada.",
+    };
+  } catch (error) {
+    if (!(error instanceof GenerationPlanValidationError)) throw error;
+    return createFallbackResult(
+      request,
+      `A rasterização da caverna V2 falhou (${error.message}); foi usado o gerador V1 do perfil.`,
+      "dungeon-conversion",
+      undefined,
+      stageTimings,
+    );
+  }
+}
 interface RoomCountReportContext {
   requested: number;
   minimumAcceptable: number;
@@ -150,21 +334,20 @@ function measureStage<T>(
 
 function applyProfileGenerationParameters(
   parameters: DungeonParameters,
-  profile: DungeonConcept,
+  profile: DungeonConceptProfile,
 ): DungeonParameters {
-  const conceptProfile = DUNGEON_CONCEPTS[profile];
   return {
     ...parameters,
     roomTypeDistributionEnabled: true,
     roomTypeCategoryFrequencies: parameters.roomTypeDistributionEnabled
       ? parameters.roomTypeCategoryFrequencies
-      : conceptProfile.roomTypeCategoryFrequencies,
+      : profile.roomTypeCategoryFrequencies,
     trapCategoryWeights: parameters.trapCategoryDistributionEnabled
       ? parameters.trapCategoryWeights
-      : conceptProfile.trapCategoryWeights,
+      : profile.trapCategoryWeights,
     treasureCategoryWeights: parameters.treasureCategoryDistributionEnabled
       ? parameters.treasureCategoryWeights
-      : conceptProfile.treasureCategoryWeights,
+      : profile.treasureCategoryWeights,
     treasureRarityWeights: parameters.treasureRarityDistributionEnabled
       ? parameters.treasureRarityWeights
       : DEFAULT_TREASURE_RARITY_WEIGHTS,
@@ -172,17 +355,17 @@ function applyProfileGenerationParameters(
 }
 
 function chooseSpatialStyle(
-  profile: DungeonConcept,
+  profile: DungeonConceptProfile,
   seed: number,
   requestedStyle?: SpatialLayoutStyle,
   topologyStyle?: TopologyStyle,
 ): SpatialLayoutStyle {
   if (requestedStyle) return requestedStyle;
   if (topologyStyle) return TOPOLOGY_SPATIAL_STYLE[topologyStyle];
-  const weights = DUNGEON_CONCEPTS[profile].v2Preferences.spatialLayoutWeights;
+  const weights = profile.v2Preferences.spatialLayoutWeights;
   const totalWeight = SPATIAL_STYLE_ORDER.reduce((total, style) => total + weights[style], 0);
   if (totalWeight <= 0) {
-    throw new RangeError(`Profile ${profile} must assign a positive spatial layout weight.`);
+    throw new RangeError(`Profile ${profile.id} must assign a positive spatial layout weight.`);
   }
   let choice = createGenerationRandomStreams(seed).placement() * totalWeight;
   for (const style of SPATIAL_STYLE_ORDER) {
@@ -218,6 +401,83 @@ function routeWithConnectionOrderRecovery(
   throw lastError;
 }
 
+function makeRoomFootprintConnected(
+  footprint: readonly GridPosition[],
+  width: number,
+  height: number,
+): GridPosition[] {
+  const footprintIndexes = new Set(footprint.map((position) => position.y * width + position.x));
+  const connectedIndexes = new Set<number>();
+  const start = footprint[0];
+  if (!start) return [];
+  connectedIndexes.add(start.y * width + start.x);
+
+  const expandConnectedFootprint = (): void => {
+    const queue = [...connectedIndexes];
+    for (let head = 0; head < queue.length; head += 1) {
+      const current = queue[head]!;
+      const x = current % width;
+      const y = Math.floor(current / width);
+      const neighbors = [
+        ...(y > 0 ? [current - width] : []),
+        ...(x + 1 < width ? [current + 1] : []),
+        ...(y + 1 < height ? [current + width] : []),
+        ...(x > 0 ? [current - 1] : []),
+      ];
+      for (const neighbor of neighbors) {
+        if (footprintIndexes.has(neighbor) && !connectedIndexes.has(neighbor)) {
+          connectedIndexes.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+  };
+  expandConnectedFootprint();
+
+  while (connectedIndexes.size < footprintIndexes.size) {
+    const parents = new Int32Array(width * height);
+    parents.fill(-1);
+    const queue = [...connectedIndexes];
+    for (const position of connectedIndexes) parents[position] = position;
+    let target = -1;
+
+    for (let head = 0; head < queue.length && target < 0; head += 1) {
+      const current = queue[head]!;
+      const x = current % width;
+      const y = Math.floor(current / width);
+      const neighbors = [
+        ...(y > 0 ? [current - width] : []),
+        ...(x + 1 < width ? [current + 1] : []),
+        ...(y + 1 < height ? [current + width] : []),
+        ...(x > 0 ? [current - 1] : []),
+      ];
+      for (const neighbor of neighbors) {
+        if (parents[neighbor] !== -1) continue;
+        parents[neighbor] = current;
+        if (footprintIndexes.has(neighbor) && !connectedIndexes.has(neighbor)) {
+          target = neighbor;
+          break;
+        }
+        queue.push(neighbor);
+      }
+    }
+    if (target < 0) {
+      throw new V2FallbackSignal("room-recipe", "A room footprint could not be connected within its bounds.");
+    }
+
+    for (let current = target; !connectedIndexes.has(current); current = parents[current]!) {
+      connectedIndexes.add(current);
+      footprintIndexes.add(current);
+    }
+    expandConnectedFootprint();
+  }
+
+  return [...footprintIndexes].map((index) => ({
+    x: index % width,
+    y: Math.floor(index / width),
+  }));
+}
+
 function roomFootprintFromDungeon(dungeon: Dungeon, room: Dungeon["roomDetails"][number]): GridPosition[] {
   const footprint: GridPosition[] = [];
   for (let y = room.y; y < room.y + room.height; y += 1) {
@@ -230,7 +490,7 @@ function roomFootprintFromDungeon(dungeon: Dungeon, room: Dungeon["roomDetails"]
   if (footprint.length === 0) {
     throw new V2FallbackSignal("room-recipe", `A sala ${room.number} não contém células de piso utilizáveis.`);
   }
-  return footprint;
+  return makeRoomFootprintConnected(footprint, room.width, room.height);
 }
 
 function createRoomRecipePlan(
@@ -294,9 +554,8 @@ function createRoomRecipePlan(
 function addProfileCorridorWidths(
   plan: GenerationPlan,
   varyCorridorWidths: boolean,
+  corridorWidthBias: -1 | 0 | 1,
 ): GenerationPlan {
-  const profile = DUNGEON_CONCEPTS[plan.generation.profile as DungeonConcept];
-  const bias = profile.v2Preferences.corridorWidthBias;
   const globalWidth = plan.generation.parameters.corridorWidth;
   const roomsById = new Map(plan.rooms.map((room) => [room.id, room]));
   const connections = plan.connections.map((edge) => {
@@ -310,7 +569,7 @@ function addProfileCorridorWidths(
       || target.roomRole === "boss"
       || linksSectors;
     const narrow = edge.isSecret || edge.connectionType === "secret-door" || edge.isOptional;
-    const profileWidth = globalWidth + bias;
+    const profileWidth = globalWidth + corridorWidthBias;
     const preferredWidth = !varyCorridorWidths
       ? globalWidth
       : important
@@ -599,21 +858,29 @@ function createFallbackResult(
   reason: string,
   stage: string,
   roomCountContext?: RoomCountReportContext,
+  stageTimings?: GenerationStageTimings,
 ): DungeonGenerationPipelineResult {
-  const profile = DUNGEON_CONCEPTS[request.profile];
-  const cavesEnabled = Boolean(request.cavesEnabled || request.profile === "natural-cavern");
+  const resolvedProfile = resolveDungeonProfile(request.profile, request.customProfile);
+  const profile = resolvedProfile.profile;
+  const cavesEnabled = Boolean(
+    request.cavesEnabled
+    || resolvedProfile.cavesEnabled
+    || resolvedProfile.mode === "natural-cavern",
+  );
   const algorithm = resolveDungeonGenerationAlgorithm(profile.algorithm, cavesEnabled);
   const fallback = generateDungeonVersioned({
     generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
     algorithm: algorithm.algorithm,
     seed: request.seed,
-    profile: request.profile,
+    profile: resolvedProfile.id,
     parameters: request.parameters ?? DEFAULT_DUNGEON_PARAMETERS,
     settings: {
       cavesEnabled,
       requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V2,
       fallbackStage: stage,
       fallbackReason: reason,
+      profileAlgorithm: profile.algorithm,
+      ...getProfileMetadataSettings(resolvedProfile),
       ...(roomCountContext ? {
         requestedRoomCount: roomCountContext.requested,
         minimumAcceptableRoomCount: roomCountContext.minimumAcceptable,
@@ -652,26 +919,33 @@ function createFallbackResult(
     metadata,
     requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V2,
     fallbackReason: reason,
+    ...(stageTimings ? { stageTimings } : {}),
     ...(roomCountReport ? { roomCountReport } : {}),
   };
 }
 
 function generateDungeonV1Pipeline(
   request: DungeonGenerationPipelineRequest,
+  resolvedProfile: ReturnType<typeof resolveDungeonProfile>,
 ): DungeonGenerationPipelineResult {
-  const profile = DUNGEON_CONCEPTS[request.profile];
-  const cavesEnabled = Boolean(request.cavesEnabled || request.profile === "natural-cavern");
+  const profile = resolvedProfile.profile;
+  const cavesEnabled = Boolean(
+    request.cavesEnabled
+    || resolvedProfile.cavesEnabled
+    || resolvedProfile.mode === "natural-cavern",
+  );
   const resolution = resolveDungeonGenerationAlgorithm(profile.algorithm, cavesEnabled);
   const result = generateDungeonVersioned({
     generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
     algorithm: resolution.algorithm,
     seed: request.seed,
-    profile: request.profile,
+    profile: resolvedProfile.id,
     parameters: request.parameters ?? DEFAULT_DUNGEON_PARAMETERS,
     settings: {
       cavesEnabled,
       requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V1,
       profileAlgorithm: profile.algorithm,
+      ...getProfileMetadataSettings(resolvedProfile),
       ...(resolution.fallbackReason ? { algorithmFallbackReason: resolution.fallbackReason } : {}),
     },
   });
@@ -684,25 +958,21 @@ function generateDungeonV1Pipeline(
 
 function generateDungeonV2Pipeline(
   request: DungeonGenerationPipelineRequest,
+  resolvedProfile: ReturnType<typeof resolveDungeonProfile>,
 ): DungeonGenerationPipelineResult {
-  const profile = DUNGEON_CONCEPTS[request.profile];
-  const cavesEnabled = Boolean(request.cavesEnabled || request.profile === "natural-cavern");
-  if (request.profile === "natural-cavern") {
-    return createFallbackResult(
-      request,
-      "O perfil Caverna natural usa Cellular Automata sem salas estruturadas; a versão V2 requer um grafo de salas. Foi mantida a geração celular V1.",
-      "profile-compatibility",
-    );
-  }
-  if (cavesEnabled) {
-    return createFallbackResult(
-      request,
-      "Cavernas híbridas ainda não são representadas pelo GenerationPlan V2; foi usado o algoritmo V1 do perfil para preservar esse recurso.",
-      "cave-compatibility",
-    );
+  const profile = resolvedProfile.profile;
+  const cavesEnabled = Boolean(
+    request.cavesEnabled
+    || resolvedProfile.cavesEnabled
+    || resolvedProfile.mode === "natural-cavern",
+  );
+  const parameters = request.parameters ?? DEFAULT_DUNGEON_PARAMETERS;
+  const stageTimings = request.collectStageTimings ? {} : undefined;
+  assertSupportedDungeonDimensions(parameters.width, parameters.height);
+  if (resolvedProfile.mode === "natural-cavern") {
+    return generateNaturalCavernV2Pipeline(request, parameters, resolvedProfile, stageTimings);
   }
 
-  const parameters = request.parameters ?? DEFAULT_DUNGEON_PARAMETERS;
   if (parameters.entranceMode !== "upper-stairs") {
     return createFallbackResult(
       request,
@@ -712,11 +982,14 @@ function generateDungeonV2Pipeline(
   }
 
   if (request.spatialDensity !== undefined) assertSpatialDensity(request.spatialDensity);
-  const stageTimings = request.collectStageTimings ? {} : undefined;
   const roomRecipe = measureStage(
     stageTimings,
     "roomRecipe",
-    () => generateV2RoomRecipe(request, parameters, profile),
+    () => generateV2RoomRecipe(
+      { profile: resolvedProfile.baseProfile, seed: request.seed },
+      parameters,
+      profile,
+    ),
   );
   const roomCountContext: RoomCountReportContext = {
     requested: parameters.roomCount,
@@ -746,7 +1019,7 @@ function generateDungeonV2Pipeline(
     ? undefined
     : `O perfil declara ${profile.algorithm} no V1. No V2, o BSP é usado somente como receita de salas e conteúdo; topologia, layout e corredores vêm do GenerationPlan.`;
   const style = chooseSpatialStyle(
-    request.profile,
+    profile,
     request.seed,
     request.spatialLayoutStyle,
     request.topologyStyle,
@@ -759,7 +1032,7 @@ function generateDungeonV2Pipeline(
       const plan = createRoomRecipePlan(v1RoomRecipe.dungeon, {
         ...v1RoomRecipe.metadata,
         generatorVersion: DUNGEON_GENERATOR_VERSION_V2,
-        profile: request.profile,
+        profile: resolvedProfile.id,
         algorithm: "bsp",
         settings: {
           requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V2,
@@ -771,6 +1044,7 @@ function generateDungeonV2Pipeline(
           varyCorridorWidths: request.varyCorridorWidths ?? true,
           ...(request.cycleCount !== undefined ? { cycleCount: request.cycleCount } : {}),
           ...(profileAlgorithmNote ? { algorithmNote: profileAlgorithmNote } : {}),
+          ...getProfileMetadataSettings(resolvedProfile),
         },
       });
       return {
@@ -791,31 +1065,42 @@ function generateDungeonV2Pipeline(
     }
     throw error;
   }
+  const topologyParameters: Partial<TopologyParameters> = {
+    ...resolvedProfile.customProfile?.topology?.parameters,
+  };
+  if (request.cycleCount !== undefined) {
+    topologyParameters.cycleCount = request.cycleCount;
+    topologyParameters.additionalConnectionCount = 0;
+  }
   const topologyWithWidths = measureStage(
     stageTimings,
     "topology",
     () => addProfileCorridorWidths(
       generateDungeonTopology(sourcePlan, {
-        profile: request.profile,
-        style: request.topologyStyle,
-        parameters: request.cycleCount === undefined
-          ? undefined
-          : { cycleCount: request.cycleCount, additionalConnectionCount: 0 },
+        profile: resolvedProfile.baseProfile,
+        style: request.topologyStyle ?? profile.topology.style,
+        parameters: topologyParameters,
       }),
       request.varyCorridorWidths ?? true,
+      profile.v2Preferences.corridorWidthBias,
     ),
   );
 
   const layoutStyles = request.spatialLayoutStyle
     ? [style]
     : [style, ...SPATIAL_STYLE_ORDER.filter((candidate) => candidate !== style)];
-  const maxExpandedStates = parameters.width * parameters.height * 4;
+  const maxExpandedStates = Math.min(
+    parameters.width * parameters.height * 4,
+    MAX_CORRIDOR_ROUTE_EXPANDED_STATES,
+  );
   let routedPlan: GenerationPlan | undefined;
   let lastSpatialError: SpatialLayoutError | undefined;
   let lastContentSignal: V2FallbackSignal | undefined;
   let lastRouteError: CorridorRoutingError | GenerationPlanValidationError | undefined;
+  let attemptedLayoutCount = 0;
 
   for (const layoutStyle of layoutStyles) {
+    attemptedLayoutCount += 1;
     const layoutInput: GenerationPlan = {
       ...topologyWithWidths,
       generation: {
@@ -887,9 +1172,10 @@ function generateDungeonV2Pipeline(
         : lastRouteError.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ");
       return createFallbackResult(
         request,
-        `O roteamento ou a validação geométrica V2 falhou em ${layoutStyles.length} layouts (${lastRouteError.message}${details ? ` ${details}` : ""}); foi usado o gerador V1 do perfil.`,
+        `O roteamento ou a validação geométrica V2 falhou após ${attemptedLayoutCount} de ${layoutStyles.length} layouts (${lastRouteError.message}${details ? ` ${details}` : ""}); foi usado o gerador V1 do perfil.`,
         "corridor-routing",
         roomCountContext,
+        stageTimings,
       );
     }
     if (lastContentSignal) {
@@ -910,6 +1196,56 @@ function generateDungeonV2Pipeline(
     }
     throw new Error("V2 layout did not produce a routed plan or a failure reason.");
   }
+  if (cavesEnabled) {
+    try {
+      const generatedCavern = measureStage(
+        stageTimings,
+        "cavern",
+        () => generateHybridCavern(routedPlan!, request.seed),
+      );
+      routedPlan = {
+        ...routedPlan,
+        generationMode: "rooms",
+        naturalRegions: [
+          ...(routedPlan.naturalRegions ?? []),
+          generatedCavern.region,
+        ],
+        caveConnections: [
+          ...(routedPlan.caveConnections ?? []),
+          generatedCavern.connection,
+        ],
+        generation: {
+          ...routedPlan.generation,
+          settings: {
+            ...routedPlan.generation.settings,
+            cavesEnabled: true,
+            caveAlgorithm: "cellular-automata",
+            caveRegionCount: 1,
+            caveTileCount: generatedCavern.tileCount,
+          },
+        },
+        metadata: {
+          ...routedPlan.metadata,
+          cavernTopology: {
+            algorithm: "cellular-automata",
+            connected: true,
+            regionCount: 1,
+            tileCount: generatedCavern.tileCount,
+            linkedTo: generatedCavern.connection.target,
+          },
+        },
+      };
+    } catch (error) {
+      if (!(error instanceof CavernGenerationError)) throw error;
+      return createFallbackResult(
+        request,
+        `${error.message} Foi usado o gerador V1 do perfil.`,
+        "cavern-generation",
+        roomCountContext,
+        stageTimings,
+      );
+    }
+  }
   const validation = measureStage(
     stageTimings,
     "validation",
@@ -927,8 +1263,10 @@ function generateDungeonV2Pipeline(
   const generatedAt = routedPlan.generation.generatedAt;
   const routedMetadata: DungeonGenerationMetadata = {
     ...routedPlan.generation,
+    profile: resolvedProfile.id,
     settings: {
       ...routedPlan.generation.settings,
+      ...getProfileMetadataSettings(resolvedProfile),
       roomCount: routedPlan.rooms.length,
       connectionCount: routedPlan.connections.length,
       branchCount: stats.branchCount,
@@ -991,14 +1329,15 @@ function generateDungeonV2Pipeline(
 export function generateDungeonPipeline(
   request: DungeonGenerationPipelineRequest,
 ): DungeonGenerationPipelineResult {
+  const resolvedProfile = resolveDungeonProfile(request.profile, request.customProfile);
   const normalizedRequest = {
     ...request,
     parameters: applyProfileGenerationParameters(
       request.parameters ?? DEFAULT_DUNGEON_PARAMETERS,
-      request.profile,
+      resolvedProfile.profile,
     ),
   };
   return normalizedRequest.generatorVersion === DUNGEON_GENERATOR_VERSION_V2
-    ? generateDungeonV2Pipeline(normalizedRequest)
-    : generateDungeonV1Pipeline(normalizedRequest);
+    ? generateDungeonV2Pipeline(normalizedRequest, resolvedProfile)
+    : generateDungeonV1Pipeline(normalizedRequest, resolvedProfile);
 }

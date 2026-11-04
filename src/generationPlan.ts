@@ -223,6 +223,7 @@ export type PlanTransitionType =
   | "stairs-up"
   | "stairs-down"
   | "room-stairs"
+  | "vertical-connection"
   | "exterior-entrance"
   | "exterior-connection"
   | "cave-breach";
@@ -232,9 +233,40 @@ export interface PlanTransition {
   type: PlanTransitionType;
   position: GridPosition;
   roomId?: string;
+  regionId?: string;
   connectionId?: string;
+  verticalConnectionId?: string;
   metadata: Readonly<Record<string, unknown>>;
 }
+
+export interface NaturalRegionRowSpan {
+  y: number;
+  xStart: number;
+  xEnd: number;
+}
+
+export interface NaturalRegion {
+  id: string;
+  type: "cavern";
+  rowSpans: readonly NaturalRegionRowSpan[];
+  metadata: Readonly<Record<string, unknown>>;
+}
+
+export interface CaveConnectionTarget {
+  type: "room" | "connection";
+  id: string;
+  position: GridPosition;
+}
+
+export interface CaveConnection {
+  id: string;
+  regionId: string;
+  target: CaveConnectionTarget;
+  path: readonly GridPosition[];
+  metadata: Readonly<Record<string, unknown>>;
+}
+
+export type GenerationPlanMode = "rooms" | "natural-cavern";
 
 export type PlanFeature =
   | {
@@ -268,6 +300,9 @@ export interface GenerationPlan {
   topology?: GenerationTopologyMetadata;
   spatialLayout?: SpatialLayoutMetadata;
   corridorRouting?: CorridorRoutingMetadata;
+  generationMode?: GenerationPlanMode;
+  naturalRegions?: readonly NaturalRegion[];
+  caveConnections?: readonly CaveConnection[];
   intersections: readonly PlanIntersection[];
   transitions: readonly PlanTransition[];
   features: readonly PlanFeature[];
@@ -275,25 +310,29 @@ export interface GenerationPlan {
 }
 
 export type GenerationEntityKind =
+  | "level"
   | "room"
   | "connection"
+  | "vertical-connection"
   | "branch"
   | "sector"
   | "intersection"
   | "transition"
+  | "natural-region"
+  | "cave-connection"
   | "feature";
 
 export function createStableGenerationId(
-  planId: string,
+  scopeId: string,
   entityKind: GenerationEntityKind,
   ordinal: number,
 ): string {
-  const normalizedPlanId = planId.trim();
-  if (!normalizedPlanId) {
-    throw new RangeError("A GenerationPlan ID is required to create stable entity IDs.");
+  const normalizedScopeId = scopeId.trim();
+  if (!normalizedScopeId) {
+    throw new RangeError("A stable ID scope is required to create entity IDs.");
   }
   if (!Number.isSafeInteger(ordinal) || ordinal < 0) {
     throw new RangeError("A stable entity ID ordinal must be a non-negative safe integer.");
   }
-  return `${normalizedPlanId}:${entityKind}:${String(ordinal).padStart(4, "0")}`;
+  return `${normalizedScopeId}:${entityKind}:${String(ordinal).padStart(4, "0")}`;
 }

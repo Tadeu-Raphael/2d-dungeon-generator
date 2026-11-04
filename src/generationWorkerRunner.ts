@@ -1,14 +1,14 @@
-import type { DungeonGenerationPipelineRequest } from "./generationPipeline";
 import {
-  unpackGenerationResult,
+  unpackGenerationOutput,
 } from "./generationWorkerProtocol";
 import type {
+  DungeonGenerationWorkRequest,
   GenerationWorkerErrorMessage,
   GenerationWorkerMetrics,
   GenerationWorkerProgressMessage,
   GenerationWorkerRequestMessage,
   GenerationWorkerResponseMessage,
-  UiDungeonGenerationResult,
+  UiDungeonGenerationOutput,
 } from "./generationWorkerProtocol";
 
 export interface GenerationWorkerLike {
@@ -22,7 +22,7 @@ export interface GenerationWorkerLike {
 export interface GenerationWorkerCallbacks {
   onProgress(phase: GenerationWorkerProgressMessage["phase"]): void;
   onResult(
-    result: UiDungeonGenerationResult,
+    result: UiDungeonGenerationOutput,
     metrics: GenerationWorkerMetrics,
     warnings: string[],
   ): void;
@@ -59,7 +59,7 @@ export class GenerationWorkerRunner {
     this.workerFactory = workerFactory;
   }
 
-  run(request: DungeonGenerationPipelineRequest, callbacks: GenerationWorkerCallbacks): number {
+  run(request: DungeonGenerationWorkRequest, callbacks: GenerationWorkerCallbacks): number {
     this.cancel();
     const requestId = ++this.nextRequestId;
     this.activeRequestId = requestId;
@@ -105,7 +105,7 @@ export class GenerationWorkerRunner {
       }
 
       try {
-        const result = unpackGenerationResult(message.result);
+        const result = unpackGenerationOutput(message.result);
         finish();
         callbacks.onResult(result, message.metrics, message.warnings);
       } catch (error) {

@@ -660,7 +660,7 @@ export const TRAP_DEFINITIONS: Record<TrapType, {
 export const MIN_DUNGEON_DIMENSION = 20;
 export const MAX_DUNGEON_WIDTH = 1_000;
 export const MAX_DUNGEON_HEIGHT = 1_000;
-export const MAX_DUNGEON_TILE_COUNT = 250_000;
+export const MAX_DUNGEON_TILE_COUNT = 1_000_000;
 export const MAX_DUNGEON_ROOM_COUNT = 24;
 export const MAX_DUNGEON_SEED = 4_294_967_295;
 

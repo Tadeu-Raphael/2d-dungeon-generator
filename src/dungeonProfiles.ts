@@ -13,6 +13,32 @@ export type DungeonConcept =
   | "prison"
   | "lost-civilization";
 
+export type DungeonProfileSelection = DungeonConcept | "custom";
+
+export interface CustomDungeonProfile {
+  id: string;
+  name: string;
+  baseProfile: DungeonConcept;
+  description?: string;
+  generationDescription?: string;
+  algorithm?: Algorithm;
+  mode?: "rooms" | "natural-cavern";
+  cavesEnabled?: boolean;
+  roomTypeCategoryFrequencies?: Partial<RoomTypeCategoryFrequencies>;
+  trapCategoryWeights?: Partial<TrapCategoryWeights>;
+  treasureCategoryWeights?: Partial<TreasureCategoryWeights>;
+  topology?: {
+    style?: TopologyStyle;
+    parameters?: Partial<TopologyParameters>;
+  };
+  v2Preferences?: {
+    spatialLayoutWeights?: Partial<Record<SpatialLayoutStyle, number>>;
+    roomSizeBias?: DungeonConceptProfile["v2Preferences"]["roomSizeBias"];
+    defaultDensity?: number;
+    corridorWidthBias?: -1 | 0 | 1;
+  };
+}
+
 export interface DungeonConceptProfile {
   id: DungeonConcept;
   name: string;

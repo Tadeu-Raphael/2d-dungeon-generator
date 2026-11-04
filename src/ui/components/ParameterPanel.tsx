@@ -71,7 +71,7 @@ export function ParameterPanel({
         />
       </label>
       <p className="dimension-hint" id="dimension-hint">
-        Largura e altura: 20–1000 tiles; área máxima: 250.000 tiles.
+        Largura e altura: 20–1000 tiles; área máxima: 1.000.000 tiles.
       </p>
       {dimensionDraftError && (
         <p className="generation-notice" role="alert">

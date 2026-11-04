@@ -8,15 +8,14 @@ Este documento descreve as fronteiras atuais do gerador e os procedimentos para 
 Parâmetros da interface
   -> App.tsx / useDungeonGeneration
   -> execução síncrona ou GenerationWorkerRunner
-  -> generateDungeonPipeline
-       -> V1: geração compatível baseada em tiles
-       -> V2: receita de salas -> GenerationPlan -> topologia
-              -> layout espacial -> roteamento -> validação
-              -> adaptação para Dungeon
-  -> Dungeon consumida por PixiJS, Three.js e exportação SVG/PNG
+  -> solicitação de mapa único ou DungeonStructure
+       -> mapa único: generateDungeonPipeline
+       -> multinível: generateDungeonPipeline V2 por andar
+              -> GenerationPlan por nível -> links verticais -> validação global
+  -> tiles legados por mapa, consumidos por PixiJS, Three.js e exportação SVG/PNG
 ```
 
-O Worker chama o mesmo `generateDungeonPipeline` usado na execução síncrona; não existe uma segunda implementação dos algoritmos. A interface escolhe a execução em Worker por uma estimativa de trabalho, atualmente a partir de 120.000 unidades. O cancelamento termina o Worker ativo e IDs de solicitação impedem que um resultado antigo substitua o mais recente. O pipeline ainda não fornece progresso percentual por etapa.
+O Worker chama o mesmo `generateDungeonPipeline` usado na execução síncrona; não existe uma segunda implementação dos algoritmos. A interface escolhe a execução em Worker por `área × max(salas, iterações celulares aplicáveis)`, a partir de 10.000 unidades. O limite foi calibrado por benchmarks locais: 32×24/6 (4.608 unidades) levou cerca de 21 ms síncrono; 64×48/12 (36.864 unidades) levou cerca de 139 ms, então mapas médios desse custo também usam Worker. São heurísticas, não garantias de latência. O cancelamento termina o Worker ativo e IDs de solicitação impedem que um resultado antigo substitua o mais recente. O pipeline ainda não fornece progresso percentual por etapa.
 
 ## Responsabilidades dos módulos
 
@@ -26,13 +25,17 @@ O Worker chama o mesmo `generateDungeonPipeline` usado na execução síncrona; 
 | `src/core/content/` | Regras e valores dos elementos de conteúdo gerados, como portas, armadilhas, tesouros e líquidos. |
 | `src/core/generation/` | Primitivas de grid e algoritmos legados BSP, Cellular Automata, Drunkard's Walk e híbrido. |
 | `src/dungeon.ts` | Modelo legado `Dungeon`, parâmetros e APIs públicas da V1; também mantém regras de geração e edição que ainda não foram extraídas. É a maior concentração de responsabilidades restante. |
-| `src/dungeonProfiles.ts`, `src/generationRoomRecipe.ts` | Perfis e afinidades de geração; receita BSP de dimensões e conteúdo de salas usada pela V2. |
-| `src/generationPlan.ts` | Modelo lógico independente dos renderizadores: salas, funções estruturais, footprints, conexões, setores, transições e features. |
+| `src/dungeonProfiles.ts`, `src/customDungeonProfile.ts`, `src/generationRoomRecipe.ts` | Perfis registrados, validação/resolução de sobreposições customizadas e receita BSP de dimensões e conteúdo de salas usada pela V2. |
+| `src/generationPlan.ts` | Modelo lógico independente dos renderizadores: salas, conexões, regiões naturais em spans, links entre cavernas e estruturas, setores, transições e features. |
 | `src/generationTopology.ts` | Grafo de exploração, caminho principal, ramificações, ciclos, setores e análise de acessibilidade. Não posiciona nem roteia a geometria. |
 | `src/generationSpatialLayout.ts` | Posição e ajuste das salas, sem rasterizar tiles ou desenhar corredores. |
 | `src/generationCorridorGeometry.ts`, `src/generationCorridorRouter.ts` | Footprint compartilhado de corredores e roteamento A* determinístico, com portas e junções. |
-| `src/generationPlanValidation.ts` | Validação estrutural e geométrica do plano, incluindo footprints, conexões, transições e features. |
+| `src/generationPlanValidation.ts` | Validação estrutural e geométrica do plano, incluindo footprints, conectividade de regiões naturais e links de cavernas. |
+| `src/generationCavern.ts` | Gera cavernas determinísticas por Cellular Automata, compacta regiões navegáveis em spans e liga cavernas híbridas à estrutura por caminhos ortogonais. |
 | `src/generationPlanToDungeon.ts` | Adaptador final do `GenerationPlan` para `Dungeon.tiles` e detalhes que os consumidores existentes entendem. |
+| `src/dungeonStructure.ts`, `src/dungeonStructureValidation.ts` | Modelo lógico multinível, links verticais explícitos e validação entre níveis. |
+| `src/dungeonStructureGeneration.ts` | Gera cada nível pelo pipeline V2, cria âncoras de conexões verticais e valida a estrutura global. |
+| `src/dungeonStructureToDungeon.ts` | Projeção explícita de um nível lógico para o contrato legado de mapa único. |
 | `src/generationPipeline.ts` | Coordena V1/V2, métricas e fallbacks explícitos com motivo e etapa. |
 | `src/generationWorkerProtocol.ts`, `generationWorkerRunner.ts`, `generationWorkerRuntime.ts`, `generation.worker.ts` | Mensagens tipadas, seleção/execução/cancelamento do Worker e empacotamento dos tiles em buffer transferível. |
 | `src/ui/`, `src/App.tsx`, `src/useDungeonGeneration.ts` | Controles, estado React, formulários e integração com o serviço de geração. `App.tsx` ainda é um módulo grande de coordenação. |
@@ -45,7 +48,9 @@ Os módulos de geração não importam React, PixiJS nem Three.js. A dependênci
 
 `Dungeon` é o contrato legado: dimensões, `Tile[][]`, detalhes de salas e elementos renderizados. A V1 continua disponível e `generateDungeon` mantém sua API compatível.
 
-`GenerationPlan` é o modelo lógico/geométrico usado pela V2. `RoomNode.roomRole` (por exemplo, entrada, objetivo ou conector) é independente de `roomType` (categoria temática); cada sala possui um footprint explícito. `ConnectionEdge` registra endpoints, estado de acesso, largura e caminho; transições e features são entidades separadas. A geração mantém esses dados fora da matriz completa até a conversão final.
+`GenerationPlan` é o modelo lógico/geométrico usado pela V2. `RoomNode.roomRole` (por exemplo, entrada, objetivo ou conector) é independente de `roomType` (categoria temática); cada sala possui um footprint explícito. `ConnectionEdge` registra endpoints, estado de acesso, largura e caminho; transições e features são entidades separadas. Cavernas são `NaturalRegion`s não retangulares, armazenadas como spans horizontais inclusivos no início e exclusivos no fim; `CaveConnection` modela explicitamente o caminho até uma sala ou corredor. A geração mantém esses dados fora da matriz completa até a conversão final.
+
+Perfis customizados usam `profile: "custom"` e um objeto `customProfile` validado em `customDungeonProfile.ts`. `baseProfile` é obrigatório; campos de conteúdo, topologia e preferências V2 são opcionais e herdam do perfil-base. O validador rejeita chaves desconhecidas e enumerações/valores incompatíveis antes de iniciar qualquer geração. O objeto validado segue no mesmo pedido síncrono ou do Worker, inclusive em gerações multinível; cada nível pode sobrescrever o perfil. Dimensões, quantidade de salas e parâmetros de corredores continuam pertencendo ao pedido de geração (`DungeonParameters` e configuração do nível), em vez de duplicarem valores temáticos do perfil.
 
 O caminho V2 é:
 
@@ -58,17 +63,128 @@ O caminho V2 é:
 7. Validar o plano e sua geometria.
 8. Rasterizar uma única vez para o contrato `Dungeon.tiles`.
 
-Os subfluxos determinísticos isolam decisões de topologia, posicionamento, corredores, conteúdo e decoração. O horário de execução e as métricas não participam do resultado. O perfil Caverna natural, cavernas híbridas e entradas externas ainda usam fallback V1; o resultado registra o motivo e a etapa, em vez de ocultar a diferença.
+Na V2 de salas, a receita BSP tenta atender à quantidade solicitada em até cinco execuções determinísticas, reduzindo progressivamente a compactação dos corredores e mantendo o melhor resultado por quantidade de salas. Se ainda faltar uma sala, o pipeline não reduz a contagem silenciosamente: usa o fallback V1 identificado, informa quantas salas foram solicitadas e geradas, a quantidade mínima aceitável e o motivo. O layout também tem tentativas limitadas: relaxa o espaçamento até o mínimo compatível com a largura dos corredores e, por fim, pode redimensionar salas; o pipeline tenta estilos alternativos sem remover salas. `validateGenerationPlan` rejeita qualquer plano de salas cuja contagem difira da solicitada, e o adaptador valida novamente antes da rasterização. O modo natural-cavern é uma exceção explícita: seu plano contém zero salas e uma ou mais regiões navegáveis.
+
+Os subfluxos determinísticos isolam decisões de topologia, posicionamento, corredores, conteúdo, decoração e cavernas. O horário de execução e as métricas não participam do resultado. O perfil Caverna natural usa Cellular Automata para gerar uma região navegável conectada sem criar `RoomNode`s. A opção híbrida acrescenta a maior região celular que não sobrepõe salas, corredores ou features e escava um caminho ortogonal até o grafo construído; se não houver espaço viável, o pipeline recorre explicitamente à V1 com motivo e etapa. Densidade celular e iterações controlam a proporção navegável e a irregularidade; a V2 limita as iterações a 12 para manter o custo finito. Entradas externas continuam usando fallback V1.
+
+`validateGenerationPlan` valida spans ordenados, limites, sobreposição e conectividade ortogonal de cada região, além da origem, continuidade e destino de cada link cavernoso. O adaptador rasteriza regiões e passagens como `CAVE_TILE`, aplica escadas de referência à região natural e mantém a saída `Dungeon.tiles` para os renderizadores existentes. A geração multinível continua sem suporte a cavernas nesta etapa.
 
 O adaptador recusa planos topológicos ainda não roteados, planos inválidos e conexões verticais. A representação `Dungeon` atual é de um único nível e não pode preservar todas as propriedades lógicas de acesso; não se deve inferir navegação além dos dados que o modelo legado representa.
+
+## Fundação para dungeons multinível
+
+`DungeonStructure` é a composição lógica completa; não substitui nem altera o contrato legado `Dungeon`. Cada `DungeonLevel` possui um `GenerationPlan` próprio, portanto seus limites, salas, dimensões e grafo horizontal são independentes. `RoomNode.floorId` deve corresponder ao ID do nível que contém o plano. Links entre planos vivem exclusivamente em `DungeonStructure.verticalConnections`, separados dos `ConnectionEdge` horizontais.
+
+```mermaid
+flowchart TD
+  D["DungeonStructure<br/>seed, settings, política de conectividade"]
+  D -->|"níveis ordenados"| L0["DungeonLevel<br/>verticalIndex -1"]
+  D -->|"níveis ordenados"| L1["DungeonLevel<br/>verticalIndex 0"]
+  L0 --> P0["GenerationPlan independente<br/>dimensões próprias"]
+  L1 --> P1["GenerationPlan independente<br/>dimensões próprias"]
+  P0 --> G0["RoomNode + ConnectionEdge<br/>grafo horizontal do nível"]
+  P1 --> G1["RoomNode + ConnectionEdge<br/>grafo horizontal do nível"]
+  D --> V["VerticalConnection<br/>tipo, direção, condições e posições"]
+  V -->|"sourceLevelId + sourcePosition"| L1
+  V -->|"targetLevelId + targetPosition"| L0
+```
+
+`verticalIndex` é um inteiro assinado: índices menores ficam mais abaixo; a lista `levels` deve estar em ordem estritamente crescente, por exemplo, `-2` (subsolo profundo), `-1` (subsolo), `0` (referência) e `1` (torre). IDs de níveis e links podem ser criados com `createStableGenerationId(dungeonId, "level" | "vertical-connection", ordinal)`; IDs de salas e conexões horizontais permanecem no escopo do `GenerationPlan` do nível.
+
+O validador valida cada plano com `validateGenerationPlan`, exige IDs sem duplicação entre níveis, garante que cada sala pertença ao seu nível e rejeita `ConnectionEdge` vertical dentro do grafo horizontal. As posições dos dois extremos de cada link devem estar dentro das dimensões próprias do nível e coincidir com footprint de sala ou footprint roteado de corredor. Conectividade global é opcional; quando habilitada, exige `entryLevelId` e verifica alcance respeitando a direção dos links. As condições de acesso são preservadas como dados, mas ainda não são avaliadas pelo verificador estrutural. Links paralelos são válidos.
+
+Exemplo de dois níveis; `subsoloPlan` e `principalPlan` são planos completos validados independentemente:
+
+```ts
+const levels = [
+  {
+    id: createStableGenerationId("fortaleza", "level", 0),
+    name: "Subsolo",
+    verticalIndex: -1,
+    plan: subsoloPlan,
+    metadata: {},
+  },
+  {
+    id: createStableGenerationId("fortaleza", "level", 1),
+    name: "Principal",
+    verticalIndex: 0,
+    plan: principalPlan,
+    metadata: {},
+  },
+];
+
+const dungeon: DungeonStructure = {
+  id: "fortaleza",
+  name: "Fortaleza",
+  generation: { seed: 8342, generatorVersion: "v2", generatedAt: "2026-01-01T00:00:00.000Z" },
+  settings: {},
+  connectivity: { requireGlobalConnectivity: true, entryLevelId: levels[1].id },
+  levels,
+  verticalConnections: [{
+    id: createStableGenerationId("fortaleza", "vertical-connection", 0),
+    sourceLevelId: levels[1].id,
+    targetLevelId: levels[0].id,
+    sourcePosition: { x: 12, y: 8 },
+    targetPosition: { x: 7, y: 11 },
+    kind: "spiral-stairs",
+    direction: "bidirectional",
+    metadata: {},
+  }],
+  metadata: {},
+};
+```
+
+Exemplo de três níveis com duas rotas paralelas entre o principal e o primeiro subsolo, além de uma ligação ao subsolo profundo:
+
+```ts
+const levels = [
+  { id: createStableGenerationId("mina", "level", 0), name: "Veio profundo", verticalIndex: -2, plan: deepPlan, metadata: {} },
+  { id: createStableGenerationId("mina", "level", 1), name: "Galeria", verticalIndex: -1, plan: galleryPlan, metadata: {} },
+  { id: createStableGenerationId("mina", "level", 2), name: "Entrada", verticalIndex: 0, plan: entrancePlan, metadata: {} },
+];
+
+const verticalConnections = [
+  { id: createStableGenerationId("mina", "vertical-connection", 0), sourceLevelId: levels[2].id, targetLevelId: levels[1].id, sourcePosition: { x: 6, y: 8 }, targetPosition: { x: 9, y: 4 }, kind: "stairs", direction: "bidirectional", metadata: {} },
+  { id: createStableGenerationId("mina", "vertical-connection", 1), sourceLevelId: levels[2].id, targetLevelId: levels[1].id, sourcePosition: { x: 14, y: 8 }, targetPosition: { x: 18, y: 4 }, kind: "elevator", direction: "source-to-target", accessRequirements: ["power-restored"], metadata: {} },
+  { id: createStableGenerationId("mina", "vertical-connection", 2), sourceLevelId: levels[1].id, targetLevelId: levels[0].id, sourcePosition: { x: 9, y: 15 }, targetPosition: { x: 5, y: 12 }, kind: "vertical-shaft", direction: "bidirectional", metadata: {} },
+];
+```
+
+`dungeonStructureToDungeon(structure)` converte automaticamente apenas estruturas de um nível. Para vários níveis, o chamador deve informar `levelId`; o resultado é uma projeção desse andar para `Dungeon.tiles`, não um achatamento da dungeon. A estrutura original continua sendo a fonte do grafo vertical, que o formato legado e os renderizadores atuais não representam.
+
+## Geração multinível inicial
+
+`generateDungeonStructure` chama `generateDungeonPipeline` uma vez por nível, sempre solicitando V2. Se o pipeline recorrer à V1 ou não retornar um `GenerationPlan`, a geração multinível falha com o nome do nível e o motivo; não apresenta um resultado V1 como se fosse V2. Cada plano passa por sua validação normal antes de receber as transições verticais.
+
+```mermaid
+flowchart TD
+  R["Configuração + seed global"] --> S["Sub-seed estável por verticalIndex"]
+  S --> P["generateDungeonPipeline V2 por nível"]
+  P --> G["GenerationPlan independente por andar"]
+  G --> V["Escolha de âncoras livres em salas"]
+  V --> C["VerticalConnection + marcador nos dois planos"]
+  C --> A["Validar planos e alcançabilidade global"]
+  A --> W["Worker: ArrayBuffer de tiles por nível"]
+  W --> U["Seletor de nível + renderer legado de um mapa"]
+```
+
+O sub-seed do plano usa `deriveRandomSeed(seed, "multilevel-level:<verticalIndex>")`; alterar largura, quantidade de salas ou seed de outro nível não desloca os streams deste nível. As conexões verticais usam um stream derivado separado. O grafo global calcula alcançabilidade dirigida a partir do nível de entrada, componentes, níveis isolados e o número de ciclos, incluindo conexões paralelas. A política pode exigir conectividade global ou permitir níveis opcionais/secretos desconectados; quando desconectados, a interface os identifica.
+
+Cada conexão seleciona uma célula de sala livre em ambos os planos, grava `verticalConnectionId` em uma transição de cada nível e é validada contra essas duas âncoras. Escadas são rasterizadas como tiles de subida/descida; outros tipos usam o marcador legado de conexão vertical. O tipo semântico permanece em `VerticalConnection`. A interface mostra um nível de cada vez nos renderizadores atuais, permite selecionar o andar e lista tipo, par de níveis e coordenadas dos links.
+
+As requisições do Worker têm variantes tipadas para mapa único e estrutura multinível, reutilizam o runner/cancelamento/stale-guard existentes e transferem um `ArrayBuffer` de tiles por nível. Os `GenerationPlan`s não são transferidos para a UI: permanecem no resultado lógico do serviço, enquanto a tela recebe a estrutura sem planos e os mapas legados necessários para navegação e renderização. Para custo pequeno, a estimativa de trabalho soma `área × max(salas, iterações celulares aplicáveis)` de todos os níveis; a mesma fronteira de 10.000 unidades decide entre execução síncrona e Worker. A interface inicia com até seis salas por nível para reservar espaço ao roteamento; cada nível pode ser configurado entre 2 e 24 salas.
+
+Limites desta primeira versão: de 2 a 8 níveis, no máximo 1.000.000 de tiles somados e 24 salas solicitadas por nível; cada nível também respeita os limites individuais de dimensão. O teto de oito níveis limita o número de pipelines, buffers transferidos e controles simultâneos nesta primeira UI, enquanto o orçamento agregado preserva a proteção de memória já usada para um mapa. Apenas perfis V2 sem cavernas e com entrada superior por escadas são aceitos; Caverna natural, cavernas híbridas e acessos externos são rejeitados em vez de usar fallback. A interface aplica um perfil global, mas permite dimensões, salas, topologia e layout espacial próprios por nível. Links gerados são bidirecionais; direções e requisitos de acesso continuam suportados pelo modelo, mas ainda não são configuráveis na interface.
 
 ## Validação, dimensões e renderização
 
 `validateGenerationPlan` verifica consistência estrutural e geométrica antes da conversão. `validateDungeonTopology` verifica caminho principal, conectividade física, acesso do jogador, setores e ciclos. O roteador verifica as rotas durante e após a busca. Os benchmarks também comparam conectividade do grafo com conectividade observada no grid.
 
-O limite atual é de 250.000 tiles por mapa, com no máximo 1.000 tiles por eixo; 1000×1000 é recusado antes de alocar o grid. O teto mantém o custo do modelo legado e do A* dentro do orçamento definido. Aumentá-lo exige medir memória, geração, rasterização, renderização e exportação — não apenas permitir valores maiores nos controles.
+O limite atual é de 1.000.000 de tiles por mapa, com no máximo 1.000 tiles por eixo. Isso permite 1000×1000, mas não representa um compromisso de geração instantânea. O roteador aloca quatro estados direcionais por tile, com `Float64Array`, `Int32Array` e `Uint32Array`, além de dois arrays por tile; o workspace tipado máximo é aproximadamente 72 MB no teto, além de `roomAt`, obstáculos, heap A*, grids da V1/receita e `Dungeon.tiles`. Cada conexão tem uma busca inicial limitada a 100.000 estados e uma única busca adicional limitada a 250.000; ambas compartilham um orçamento cumulativo máximo de 350.000 estados, incluindo bounds locais e tentativas de largura. Esgotar o teto gera um erro explícito e interrompe novas tentativas de layout; a pipeline informa o fallback V1 e a conexão que falhou. Dimensões maiores são recusadas antes de alocar esses buffers. O Worker é selecionado por estimativa de trabalho; Pixi usa uma base rasterizada e desenha detalhes apenas na região visível, enquanto exportação mantém o limite de 16 milhões de pixels.
 
-PixiJS, Three.js e SVG consomem `Dungeon`, não `GenerationPlan`. `dungeonTileSemantics.ts` mantém paleta e classificação compartilhadas. A geometria e o ciclo de vida de cena continuam específicos de cada renderer; os recursos Three.js são descartados pelo helper dedicado. Os benchmarks medem etapas de geração, rasterização e serialização SVG, mas ainda não medem tempo real de GPU nem o pico de memória.
+O `GenerationPlan` mantém salas e conexões como entidades lógicas, sem exigir `Tile[][]` para topologia ou layout. O roteador cria buffers tipados densos por tile, restringe a expansão A* a bounds locais que crescem somente quando a rota exige e limita o trabalho total de cada conexão. O BSP usado como receita V2 ainda produz um `Dungeon` legado, e a conversão final também rasteriza `Tile[][]` para preservar os consumidores atuais. Os benchmarks validam 160×120 até 1000×1000; em 1000×1000, a V2 roteou 6 salas sem fallback, enquanto 24 salas atingiram o teto em uma conexão e usaram fallback V1 com as 24 salas preservadas. Por isso, chunks e uma nova estrutura espacial de colisão não foram introduzidos: a matriz final continua necessária aos renderizadores atuais, mas o roteamento tem uma limitação explícita para evitar buscas que durem minutos.
+
+PixiJS, Three.js e SVG consomem `Dungeon`, não `GenerationPlan`. `dungeonTileSemantics.ts` mantém paleta e classificação compartilhadas. A geometria e o ciclo de vida de cena continuam específicos de cada renderer; os recursos Three.js são descartados pelo helper dedicado. Os benchmarks medem etapas de geração, rasterização e serialização SVG, mas não isolam tempo de GPU nem pico de memória. O smoke test no navegador confirmou a troca 2D/3D e o cancelamento do Worker sem erros; métricas e limitações estão em [docs/v2-audit.md](./v2-audit.md).
 
 Os resultados reproduzíveis por dimensão, seed, número de salas e estágio estão na seção [Limites de escala](../README.md#limites-de-escala) do README.
 

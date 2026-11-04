@@ -1,4 +1,5 @@
 import {
+  DEFAULT_DUNGEON_PARAMETERS,
   CAVE_CONNECTION_WALL_TILE,
   CORRIDOR_TILE,
   DUNGEON_GENERATOR_VERSION_V1,
@@ -34,6 +35,14 @@ import {
   createDungeonV1BaselineRequest,
 } from "./generationBaselines";
 import type { DungeonGenerationBaseline } from "./generationBaselines";
+import {
+  generateDungeonStructure,
+} from "./dungeonStructureGeneration";
+import type {
+  DungeonStructureGenerationRequest,
+  DungeonStructureGenerationResult,
+} from "./dungeonStructureGeneration";
+import { validateDungeonStructure } from "./dungeonStructureValidation";
 import { getCorridorPathBrush } from "./generationCorridorGeometry";
 import type { GenerationPlan, GridPosition, SpatialLayoutStyle, TopologyStyle } from "./generationPlan";
 import {
@@ -79,6 +88,7 @@ export interface GenerationBenchmarkRun {
   requestedVersion: DungeonGeneratorVersion;
   effectiveVersion?: DungeonGeneratorVersion;
   profile: string;
+  profileLabel?: string;
   algorithm?: string;
   topologyStyle?: TopologyStyle;
   spatialLayoutStyle?: SpatialLayoutStyle;
@@ -111,10 +121,6 @@ export interface GenerationConsistencyAudit {
 }
 
 const WALL_TILE = 0;
-
-function isDungeonConcept(profile: string): profile is DungeonConcept {
-  return Object.prototype.hasOwnProperty.call(DUNGEON_CONCEPTS, profile);
-}
 
 function positionIndex(position: GridPosition, width: number): number {
   return position.y * width + position.x;
@@ -232,7 +238,9 @@ export function auditGenerationConsistency(
   dungeon: Dungeon,
 ): GenerationConsistencyAudit {
   const planValidation = validateGenerationPlan(plan);
-  const topologyValidation = validateDungeonTopology(plan);
+  const topologyValidation = plan.generationMode === "natural-cavern"
+    ? { valid: planValidation.valid, issues: [] }
+    : validateDungeonTopology(plan);
   const issues: string[] = [
     ...planValidation.issues.map((issue) => `${issue.code}: ${issue.message}`),
     ...topologyValidation.issues.map((issue) => `${issue.code}: ${issue.message}`),
@@ -464,13 +472,17 @@ function generateBaselineRun(
   version: DungeonGeneratorVersion,
   options: GenerationBenchmarkOptions,
 ): GenerationBenchmarkRun {
-  if (version === DUNGEON_GENERATOR_VERSION_V2 && !isDungeonConcept(baseline.profile)) {
+  if (
+    version === DUNGEON_GENERATOR_VERSION_V2
+    && baseline.profile === "custom"
+    && !baseline.customProfile
+  ) {
     return {
       baselineId: baseline.id,
       seed: baseline.seed,
       requestedVersion: version,
       profile: baseline.profile,
-      unsupportedReason: "The V2 pipeline requires one of the eight registered dungeon profiles; this Phase 1 case uses the custom profile.",
+      unsupportedReason: "The V2 pipeline requires a valid customProfile configuration for custom baselines.",
     };
   }
 
@@ -492,7 +504,8 @@ function generateBaselineRun(
   } else {
     const result: DungeonGenerationPipelineResult = generateDungeonPipeline({
       generatorVersion: DUNGEON_GENERATOR_VERSION_V2,
-      profile: baseline.profile as DungeonConcept,
+      profile: baseline.profile,
+      ...(baseline.customProfile ? { customProfile: baseline.customProfile } : {}),
       seed: baseline.seed,
       parameters,
       topologyStyle: options.topologyStyle,
@@ -526,6 +539,7 @@ function generateBaselineRun(
     requestedVersion: version,
     effectiveVersion: generation.metadata.generatorVersion,
     profile: baseline.profile,
+    profileLabel: baseline.customProfile?.name,
     algorithm: generation.metadata.algorithm,
     topologyStyle: plan?.topology?.style,
     spatialLayoutStyle: plan?.spatialLayout?.style,
@@ -596,6 +610,211 @@ export function runGenerationBenchmark(
   ));
 }
 
+export interface GenerationBenchmarkStructureRun {
+  id: string;
+  seed: number;
+  elapsedMs: number;
+  result: DungeonStructureGenerationResult;
+  validationIssues: readonly string[];
+}
+
+export interface GenerationBenchmarkGalleryScenarios {
+  runs: GenerationBenchmarkRun[];
+  structures: GenerationBenchmarkStructureRun[];
+}
+
+const GALLERY_TOPOLOGY_STYLES: readonly TopologyStyle[] = [
+  "linear",
+  "branching",
+  "circuit",
+  "centralized",
+  "sectorized",
+  "hybrid",
+];
+
+function runStructureGalleryScenario(
+  id: string,
+  request: DungeonStructureGenerationRequest,
+): GenerationBenchmarkStructureRun {
+  const startedAt = globalThis.performance.now();
+  const result = generateDungeonStructure(request);
+  const elapsedMs = globalThis.performance.now() - startedAt;
+  const validation = validateDungeonStructure(result.structure);
+  return {
+    id,
+    seed: request.seed,
+    elapsedMs,
+    result,
+    validationIssues: validation.issues.map((issue) => `${issue.path}: ${issue.message}`),
+  };
+}
+
+export function runGenerationBenchmarkGalleryScenarios(): GenerationBenchmarkGalleryScenarios {
+  const runs = runGenerationBenchmark();
+  const [largeMap] = createCustomBenchmarkBaselines({
+    profile: "military-fortress",
+    firstSeed: 98200,
+    seedCount: 1,
+    width: 1_000,
+    height: 1_000,
+    roomCount: 6,
+    corridorWidth: 1,
+  });
+  if (!largeMap) throw new RangeError("Could not configure the 1000×1000 gallery scenario.");
+  runs.push(...runGenerationBenchmark({
+    baselines: [{ ...largeMap, id: "gallery-large-1000x1000" }],
+    versions: [DUNGEON_GENERATOR_VERSION_V2],
+    collectStageTimings: true,
+  }));
+
+  const [topologyTemplate] = createCustomBenchmarkBaselines({
+    profile: "military-fortress",
+    firstSeed: 98210,
+    seedCount: 1,
+    width: 64,
+    height: 48,
+    roomCount: 8,
+    corridorWidth: 1,
+  });
+  if (!topologyTemplate) throw new RangeError("Could not configure topology gallery scenarios.");
+  for (const [index, topologyStyle] of GALLERY_TOPOLOGY_STYLES.entries()) {
+    runs.push(...runGenerationBenchmark({
+      baselines: [{
+        ...topologyTemplate,
+        id: `gallery-topology-${topologyStyle}`,
+        seed: topologyTemplate.seed + index,
+      }],
+      versions: [DUNGEON_GENERATOR_VERSION_V2],
+      topologyStyle,
+      collectStageTimings: true,
+    }));
+  }
+
+  const hybridCavernBaseline: DungeonGenerationBaseline = {
+    id: "gallery-custom-hybrid-cavern",
+    scale: "small",
+    profile: "custom",
+    customProfile: {
+      id: "gallery-hybrid-cavern",
+      name: "Caverna híbrida personalizada",
+      baseProfile: "military-fortress",
+      cavesEnabled: true,
+    },
+    algorithm: "bsp",
+    seed: 98230,
+    parameters: { width: 64, height: 48, roomCount: 6 },
+    expectedRoomCount: 6,
+    expectedFingerprint: "",
+  };
+  runs.push(...runGenerationBenchmark({
+    baselines: [hybridCavernBaseline],
+    versions: [DUNGEON_GENERATOR_VERSION_V2],
+    collectStageTimings: true,
+  }));
+
+  const baseParameters = {
+    ...DEFAULT_DUNGEON_PARAMETERS,
+    width: 80,
+    height: 56,
+    roomCount: 6,
+    corridorWidth: 1,
+    entranceMode: "upper-stairs" as const,
+  };
+  const structures = [
+    runStructureGalleryScenario("gallery-two-level", {
+      seed: 98240,
+      profile: "military-fortress",
+      parameters: baseParameters,
+      levels: [
+        {
+          name: "Subsolo",
+          verticalIndex: -1,
+          width: 64,
+          height: 48,
+          roomCount: 6,
+          topologyStyle: "linear",
+          spatialLayoutStyle: "axis-branches",
+        },
+        {
+          name: "Nível principal",
+          verticalIndex: 0,
+          width: 80,
+          height: 56,
+          roomCount: 6,
+          topologyStyle: "sectorized",
+          spatialLayoutStyle: "clusters",
+        },
+      ],
+      entryLevelIndex: 1,
+      verticalConnectionCount: 1,
+      allowedVerticalConnectionKinds: ["stairs"],
+      requireGlobalConnectivity: true,
+      allowVerticalCycles: false,
+    }),
+    runStructureGalleryScenario("gallery-five-level", {
+      seed: 98245,
+      profile: "military-fortress",
+      parameters: baseParameters,
+      levels: [
+        {
+          name: "Galerias secretas",
+          verticalIndex: -3,
+          width: 60,
+          height: 44,
+          roomCount: 4,
+          topologyStyle: "linear",
+          spatialLayoutStyle: "axis-branches",
+          isSecret: true,
+        },
+        {
+          name: "Cripta inferior",
+          verticalIndex: -2,
+          width: 64,
+          height: 48,
+          roomCount: 5,
+          topologyStyle: "branching",
+          spatialLayoutStyle: "clusters",
+        },
+        {
+          name: "Nível principal",
+          verticalIndex: 0,
+          width: 80,
+          height: 56,
+          roomCount: 6,
+          topologyStyle: "sectorized",
+          spatialLayoutStyle: "clusters",
+        },
+        {
+          name: "Torre",
+          verticalIndex: 1,
+          width: 56,
+          height: 44,
+          roomCount: 4,
+          topologyStyle: "circuit",
+          spatialLayoutStyle: "ring",
+        },
+        {
+          name: "Observatório",
+          verticalIndex: 3,
+          width: 72,
+          height: 52,
+          roomCount: 5,
+          topologyStyle: "centralized",
+          spatialLayoutStyle: "central-hub",
+          isOptional: true,
+        },
+      ],
+      entryLevelIndex: 2,
+      verticalConnectionCount: 6,
+      allowedVerticalConnectionKinds: ["stairs", "elevator", "secret-passage"],
+      requireGlobalConnectivity: true,
+      allowVerticalCycles: true,
+    }),
+  ];
+
+  return { runs, structures };
+}
+
 function tileColor(tile: number): string {
   if (tile === FLOOR_TILE) return "#ded2bc";
   if (tile === CORRIDOR_TILE) return "#a9824d";
@@ -643,12 +862,19 @@ function escapeHtml(value: string): string {
   })[character]!);
 }
 
-export function createGenerationBenchmarkGalleryHtml(runs: readonly GenerationBenchmarkRun[]): string {
+export function createGenerationBenchmarkGalleryHtml(
+  runs: readonly GenerationBenchmarkRun[],
+  structures: readonly GenerationBenchmarkStructureRun[] = [],
+): string {
   const rows = runs.map((run) => {
     const metrics = run.metrics;
+    const svgStartedAt = globalThis.performance.now();
     const map = run.dungeon
       ? renderDungeonBenchmarkSvg(run.dungeon, `${run.profile}, seed ${run.seed}, ${run.requestedVersion}`)
       : "";
+    const svgSerializationMs = run.dungeon
+      ? globalThis.performance.now() - svgStartedAt
+      : undefined;
     const fallback = run.fallbackReason
       ? `<p class="notice">${escapeHtml(run.fallbackReason)}</p>`
       : run.unsupportedReason
@@ -657,9 +883,46 @@ export function createGenerationBenchmarkGalleryHtml(runs: readonly GenerationBe
     const status = run.unsupportedReason
       ? "Indisponível"
       : run.fallbackReason
-        ? `${run.requestedVersion.toUpperCase()} → ${run.effectiveVersion?.toUpperCase()}`
+        ? `${run.requestedVersion.toUpperCase()} → ${run.effectiveVersion?.toUpperCase() ?? "falhou"}`
         : run.effectiveVersion?.toUpperCase() ?? "—";
-    return `<article class="card"><header><strong>${escapeHtml(run.baselineId)}</strong><span>${status}</span></header>${map}<dl><dt>Seed / perfil</dt><dd>${run.seed} / ${escapeHtml(run.profile)}</dd><dt>Salas / conexões</dt><dd>${metrics?.roomCount ?? "—"} / ${metrics?.connectionCount ?? "—"}</dd><dt>Ramos / ciclos / folhas</dt><dd>${metrics?.branchCount ?? "—"} / ${metrics?.cycleCount ?? "—"} / ${metrics?.deadEndCount ?? "—"}</dd><dt>Corredor médio</dt><dd>${formatMetric(metrics?.averageCorridorLength)}</dd><dt>Isoladas / área ocupada</dt><dd>${metrics?.isolatedRoomCount ?? "—"} / ${metrics ? `${formatMetric(metrics.occupiedAreaPercent)}%` : "—"}</dd><dt>Compactação / distância NN</dt><dd>${formatMetric(metrics?.compactness, 2)} / ${formatMetric(metrics?.averageNearestRoomDistance)}</dd><dt>Geração</dt><dd>${formatMetric(run.elapsedMs, 2)} ms</dd><dt>Rasterização V2</dt><dd>${formatMetric(run.rasterizationMs, 2)} ms</dd></dl>${fallback}</article>`;
+    const requestedRooms = run.metadata?.parameters.roomCount
+      ?? "—";
+    const dimensions = run.dungeon ? `${run.dungeon.width} × ${run.dungeon.height}` : "—";
+    return `<article class="card"><header><strong>${escapeHtml(run.baselineId)}</strong><span>${escapeHtml(status)}</span></header>${map}<dl><dt>Seed / perfil</dt><dd>${run.seed} / ${escapeHtml(run.profileLabel ?? run.metadata?.profile ?? run.profile)}</dd><dt>Dimensões</dt><dd>${dimensions}</dd><dt>Salas solicitadas / geradas</dt><dd>${requestedRooms} / ${metrics?.roomCount ?? "—"}</dd><dt>Conexões horizontais</dt><dd>${metrics?.connectionCount ?? "—"}</dd><dt>Ramos / ciclos / folhas</dt><dd>${metrics?.branchCount ?? "—"} / ${metrics?.cycleCount ?? "—"} / ${metrics?.deadEndCount ?? "—"}</dd><dt>Corredor médio</dt><dd>${formatMetric(metrics?.averageCorridorLength)}</dd><dt>Isoladas / área ocupada</dt><dd>${metrics?.isolatedRoomCount ?? "—"} / ${metrics ? `${formatMetric(metrics.occupiedAreaPercent)}%` : "—"}</dd><dt>Compactação / distância NN</dt><dd>${formatMetric(metrics?.compactness, 2)} / ${formatMetric(metrics?.averageNearestRoomDistance)}</dd><dt>Topologia / layout</dt><dd>${escapeHtml(run.topologyStyle ?? "padrão")} / ${escapeHtml(run.spatialLayoutStyle ?? "padrão")}</dd><dt>Geração</dt><dd>${formatMetric(run.elapsedMs, 2)} ms</dd><dt>Rasterização V2</dt><dd>${formatMetric(run.rasterizationMs, 2)} ms</dd><dt>Serialização SVG</dt><dd>${formatMetric(svgSerializationMs, 2)} ms</dd></dl>${fallback}</article>`;
   }).join("");
-  return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Benchmark de geração procedural</title><style>*{box-sizing:border-box}body{margin:0;padding:24px;background:#11151b;color:#e8e1d5;font:14px/1.5 system-ui,sans-serif}h1{font-size:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{padding:14px;border:1px solid #39414d;border-radius:10px;background:#1a2029}.card header{display:flex;justify-content:space-between;gap:8px;margin-bottom:12px}.card svg{display:block;width:100%;max-height:300px;image-rendering:pixelated;background:#15191f}.card dl{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.card dt{color:#aaa}.card dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.notice{color:#e7b66c;font-size:12px}</style><h1>Benchmark de geração procedural</h1><p>${runs.length} resultados; as métricas topológicas são indisponíveis para o grafo legado V1.</p><main class="grid">${rows}</main></html>`;
+  const structureSections = structures.map((run) => {
+    const structure = run.result.structure;
+    const generationByLevel = new Map(run.result.levels.map((level) => [level.levelId, level.generation]));
+    const levelCards = structure.levels.map((level) => {
+      const generation = generationByLevel.get(level.id);
+      const dungeon = generation?.dungeon;
+      const levelMap = dungeon
+        ? renderDungeonBenchmarkSvg(dungeon, `${structure.name}, ${level.name}`)
+        : "";
+      const connectedLevels = structure.verticalConnections
+        .flatMap((connection) => {
+          if (connection.sourceLevelId === level.id) {
+            const target = structure.levels.find((candidate) => candidate.id === connection.targetLevelId);
+            return target ? [`${connection.kind} → ${target.name}`] : [];
+          }
+          if (connection.targetLevelId === level.id) {
+            const source = structure.levels.find((candidate) => candidate.id === connection.sourceLevelId);
+            return source ? [`${connection.kind} → ${source.name}`] : [];
+          }
+          return [];
+        })
+        .join(", ") || "nenhuma";
+      const requested = generation?.roomCountReport?.requested ?? "—";
+      const generated = generation?.plan?.rooms.length ?? "—";
+      const horizontalConnections = generation?.plan?.connections.length ?? "—";
+      const flags = [
+        level.isSecret ? "secreto" : "",
+        level.isOptional ? "opcional" : "",
+      ].filter(Boolean).join(" · ");
+      return `<article class="level-card"><header><strong>${escapeHtml(level.name)}</strong><span>Z ${level.verticalIndex >= 0 ? "+" : ""}${level.verticalIndex}${flags ? ` · ${escapeHtml(flags)}` : ""}</span></header>${levelMap}<dl><dt>Dimensões</dt><dd>${level.plan.width} × ${level.plan.height}</dd><dt>Salas solicitadas / geradas</dt><dd>${requested} / ${generated}</dd><dt>Conexões horizontais</dt><dd>${horizontalConnections}</dd><dt>Conexões verticais</dt><dd>${escapeHtml(connectedLevels)}</dd></dl></article>`;
+    }).join("");
+    const connectivity = run.result.connectivity;
+    return `<section class="structure-card"><header><h3>${escapeHtml(run.id)}</h3><span>Seed ${run.seed} · ${formatMetric(run.elapsedMs, 2)} ms</span></header><p>${structure.levels.length} níveis · ${structure.verticalConnections.length} conexões verticais · ${connectivity.reachableLevelIds.length}/${structure.levels.length} alcançáveis · ${connectivity.cycleCount} ciclos · ${run.validationIssues.length} inconsistências de validação</p>${run.validationIssues.length > 0 ? `<ul class="notice">${run.validationIssues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>` : ""}<div class="level-grid">${levelCards}</div></section>`;
+  }).join("");
+  return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Galeria de auditoria da geração</title><style>*{box-sizing:border-box}body{margin:0;padding:24px;background:#11151b;color:#e8e1d5;font:14px/1.5 system-ui,sans-serif}h1{font-size:24px}h2{font-size:20px;margin-top:32px}.grid,.level-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card,.level-card{padding:14px;border:1px solid #39414d;border-radius:10px;background:#1a2029}.card header,.level-card header,.structure-card>header{display:flex;justify-content:space-between;gap:8px;margin-bottom:12px}.card svg,.level-card svg{display:block;width:100%;max-height:300px;image-rendering:pixelated;background:#15191f}.card dl,.level-card dl{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.card dt,.level-card dt{color:#aaa}.card dd,.level-card dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.structure-card{margin:18px 0;padding:16px;border:1px solid #39414d;border-radius:10px;background:#171d25}.structure-card h3{margin:0}.structure-card>p{color:#c6c1b8}.notice{color:#e7b66c;font-size:12px}</style><h1>Galeria de auditoria da geração</h1><p>${runs.length} execuções individuais e ${structures.length} dungeons multinível. Fallbacks e indisponibilidades são mostrados explicitamente e não contam como sucesso V2.</p><p>Os tempos de serialização SVG medem a preparação do arquivo, não renderização GPU real no navegador. Medidas de renderização em tempo real não estão incluídas.</p><h2>Perfis, escalas, topologias e cavernas</h2><main class="grid">${rows}</main><h2>Dungeons multinível e conexões verticais</h2>${structureSections}</html>`;
 }

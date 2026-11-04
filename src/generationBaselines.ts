@@ -10,7 +10,7 @@ import type {
   VersionedDungeonGeneration,
 } from "./dungeon";
 import { DUNGEON_CONCEPTS } from "./dungeonProfiles";
-import type { DungeonConcept } from "./dungeonProfiles";
+import type { CustomDungeonProfile, DungeonConcept } from "./dungeonProfiles";
 
 type BaselineParameters = Pick<DungeonParameters, "width" | "height" | "roomCount">
   & Partial<Pick<DungeonParameters, "cellularFillPercent" | "cellularIterations" | "drunkardCoveragePercent">>;
@@ -19,6 +19,7 @@ export interface DungeonGenerationBaseline {
   id: string;
   scale: "small" | "medium" | "large";
   profile: DungeonConcept | "custom";
+  customProfile?: CustomDungeonProfile;
   algorithm: Algorithm;
   seed: number;
   parameters: BaselineParameters;
@@ -77,6 +78,13 @@ export const DUNGEON_GENERATION_V1_BASELINES: readonly DungeonGenerationBaseline
     id: "medium-custom-drunkard",
     scale: "medium",
     profile: "custom",
+    customProfile: {
+      id: "medium-custom-drunkard",
+      name: "Galerias errantes",
+      baseProfile: "abandoned-mine",
+      algorithm: "drunkard",
+      topology: { style: "branching" },
+    },
     algorithm: "drunkard",
     seed: 55005,
     parameters: { width: 64, height: 48, roomCount: 12, drunkardCoveragePercent: 34 },

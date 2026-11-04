@@ -14,6 +14,7 @@ export type GenerationPlanValidationIssueCode =
   | "invalid-plan-id"
   | "invalid-plan-dimensions"
   | "generation-dimension-mismatch"
+  | "invalid-generation-mode"
   | "room-count-mismatch"
   | "invalid-entity-id"
   | "duplicate-entity-id"
@@ -49,9 +50,20 @@ export type GenerationPlanValidationIssueCode =
   | "intersection-not-on-connection"
   | "invalid-transition"
   | "transition-reference-not-found"
+  | "transition-region-not-found"
   | "transition-not-on-connection"
   | "invalid-feature"
-  | "feature-room-not-found";
+  | "feature-room-not-found"
+  | "natural-region-missing"
+  | "invalid-natural-region"
+  | "disconnected-natural-region"
+  | "natural-region-overlaps-structure"
+  | "natural-region-unconnected"
+  | "cave-connection-region-not-found"
+  | "cave-connection-target-not-found"
+  | "invalid-cave-connection"
+  | "discontinuous-cave-connection-path"
+  | "cave-connection-does-not-touch-target";
 
 export interface GenerationPlanValidationIssue {
   code: GenerationPlanValidationIssueCode;
@@ -97,6 +109,31 @@ function getRoomCells(room: RoomNode): Set<string> {
   })));
 }
 
+function isRoomFootprintConnected(room: RoomNode): boolean {
+  const footprint = new Set(room.footprint.map(positionKey));
+  const first = room.footprint[0];
+  if (!first) return false;
+  const visited = new Set([positionKey(first)]);
+  const queue = [first];
+  for (let head = 0; head < queue.length; head += 1) {
+    const current = queue[head]!;
+    const neighbors = [
+      ...(current.y > 0 ? [{ x: current.x, y: current.y - 1 }] : []),
+      ...(current.x + 1 < room.width ? [{ x: current.x + 1, y: current.y }] : []),
+      ...(current.y + 1 < room.height ? [{ x: current.x, y: current.y + 1 }] : []),
+      ...(current.x > 0 ? [{ x: current.x - 1, y: current.y }] : []),
+    ];
+    for (const neighbor of neighbors) {
+      const key = positionKey(neighbor);
+      if (footprint.has(key) && !visited.has(key)) {
+        visited.add(key);
+        queue.push(neighbor);
+      }
+    }
+  }
+  return visited.size === footprint.size;
+}
+
 function isRoomCell(room: RoomNode, position: GridPosition): boolean {
   return room.footprint.some((cell) => (
     room.position.x + cell.x === position.x
@@ -116,6 +153,53 @@ function canonicalPath(path: readonly GridPosition[]): string {
   const forward = path.map(positionKey).join(";");
   const backward = [...path].reverse().map(positionKey).join(";");
   return forward < backward ? forward : backward;
+}
+
+function isRegionConnected(
+  spans: readonly { y: number; xStart: number; xEnd: number }[],
+): boolean {
+  if (spans.length === 0) return false;
+  const parents = spans.map((_, index) => index);
+  const findRoot = (index: number): number => {
+    let root = index;
+    while (parents[root] !== root) root = parents[root]!;
+    while (parents[index] !== index) {
+      const next = parents[index]!;
+      parents[index] = root;
+      index = next;
+    }
+    return root;
+  };
+  const join = (first: number, second: number): void => {
+    const firstRoot = findRoot(first);
+    const secondRoot = findRoot(second);
+    if (firstRoot !== secondRoot) parents[secondRoot] = firstRoot;
+  };
+  const spanIndicesByRow = new Map<number, number[]>();
+  spans.forEach((span, index) => {
+    const row = spanIndicesByRow.get(span.y) ?? [];
+    row.push(index);
+    spanIndicesByRow.set(span.y, row);
+  });
+  for (const [y, currentIndices] of spanIndicesByRow) {
+    const previousIndices = spanIndicesByRow.get(y - 1);
+    if (!previousIndices) continue;
+    let previousCursor = 0;
+    for (const currentIndex of currentIndices) {
+      const current = spans[currentIndex]!;
+      while (
+        previousCursor < previousIndices.length
+        && spans[previousIndices[previousCursor]!]!.xEnd <= current.xStart
+      ) previousCursor += 1;
+      for (let cursor = previousCursor; cursor < previousIndices.length; cursor += 1) {
+        const previousIndex = previousIndices[cursor]!;
+        const previous = spans[previousIndex]!;
+        if (previous.xStart >= current.xEnd) break;
+        if (previous.xEnd > current.xStart) join(currentIndex, previousIndex);
+      }
+    }
+  }
+  return new Set(parents.map((_, index) => findRoot(index))).size === 1;
 }
 
 function isDoorConnection(edge: ConnectionEdge): boolean {
@@ -259,11 +343,34 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
       "Generation metadata dimensions must match the GenerationPlan dimensions.",
     );
   }
-  if (plan.rooms.length !== plan.generation.parameters.roomCount) {
+  if (
+    plan.generationMode !== "natural-cavern"
+    && plan.rooms.length !== plan.generation.parameters.roomCount
+  ) {
     addIssue(
       "room-count-mismatch",
       "rooms",
       `GenerationPlan contains ${plan.rooms.length} rooms, but ${plan.generation.parameters.roomCount} were requested.`,
+    );
+  }
+  if (
+    plan.generationMode === "natural-cavern"
+    && (plan.rooms.length > 0 || plan.connections.length > 0)
+  ) {
+    addIssue(
+      "invalid-generation-mode",
+      "generationMode",
+      "A natural-cavern plan must represent its walkable area as natural regions, not rooms or room connections.",
+    );
+  }
+  if (
+    plan.generationMode === "natural-cavern"
+    && (plan.naturalRegions?.length ?? 0) === 0
+  ) {
+    addIssue(
+      "natural-region-missing",
+      "naturalRegions",
+      "A natural-cavern plan needs at least one navigable natural region.",
     );
   }
 
@@ -426,6 +533,20 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
       } else {
         occupiedCells.set(absoluteKey, room.id);
       }
+    }
+    const footprintCellsAreValid = room.footprint.every((cell) => (
+      isGridPosition(cell)
+      && cell.x >= 0
+      && cell.y >= 0
+      && cell.x < room.width
+      && cell.y < room.height
+    ));
+    if (footprintCellsAreValid && !isRoomFootprintConnected(room)) {
+      addIssue(
+        "invalid-room-footprint",
+        `${roomPath}.footprint`,
+        "Room footprints must form one orthogonally connected region.",
+      );
     }
     if (validDimensions && room.footprint.some((cell) => (
       cell.x >= 0 && cell.y >= 0 && cell.x < room.width && cell.y < room.height
@@ -643,6 +764,277 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
     }
   }
 
+  const naturalRegions = plan.naturalRegions ?? [];
+  const caveConnections = plan.caveConnections ?? [];
+  const regionsById = new Map<string, typeof naturalRegions[number]>();
+  const regionIndexById = new Map<string, number>();
+  const cavernChecksEnabled = naturalRegions.length > 0
+    || caveConnections.length > 0
+    || plan.generationMode === "natural-cavern";
+  const validationArea = cavernChecksEnabled ? plan.width * plan.height : 0;
+  const regionAt = new Int32Array(validationArea);
+  regionAt.fill(-1);
+  const structuralCells = new Uint8Array(validationArea);
+  if (cavernChecksEnabled) {
+    for (const room of plan.rooms) {
+      for (const cell of room.footprint) {
+        const x = room.position.x + cell.x;
+        const y = room.position.y + cell.y;
+        if (x >= 0 && y >= 0 && x < plan.width && y < plan.height) {
+          structuralCells[y * plan.width + x] = 1;
+        }
+      }
+    }
+    for (const edge of plan.connections) {
+      if (
+        edge.connectionType === "vertical"
+        || edge.path.length === 0
+        || !Number.isSafeInteger(edge.width)
+        || edge.width <= 0
+      ) continue;
+      for (const position of getCorridorPathBrush(edge.path, edge.width)) {
+        if (isPositionInsidePlan(position, plan)) {
+          structuralCells[position.y * plan.width + position.x] = 1;
+        }
+      }
+    }
+    for (const intersection of plan.intersections) {
+      const offset = Math.floor((intersection.width - 1) / 2);
+      for (let y = 0; y < intersection.width; y += 1) {
+        for (let x = 0; x < intersection.width; x += 1) {
+          const position = {
+            x: intersection.position.x + x - offset,
+            y: intersection.position.y + y - offset,
+          };
+          if (isPositionInsidePlan(position, plan)) {
+            structuralCells[position.y * plan.width + position.x] = 1;
+          }
+        }
+      }
+    }
+    for (const feature of plan.features) {
+      if (isPositionInsidePlan(feature.position, plan)) {
+        structuralCells[feature.position.y * plan.width + feature.position.x] = 1;
+      }
+    }
+  }
+
+  for (const [regionIndex, region] of naturalRegions.entries()) {
+    const regionPath = `naturalRegions[${regionIndex}]`;
+    registerId(region.id, `${regionPath}.id`);
+    if (!regionsById.has(region.id)) {
+      regionsById.set(region.id, region);
+      regionIndexById.set(region.id, regionIndex);
+    }
+    if (region.type !== "cavern" || region.rowSpans.length === 0) {
+      addIssue(
+        "invalid-natural-region",
+        regionPath,
+        "Natural regions must have a supported type and at least one row span.",
+      );
+      continue;
+    }
+    let previousY = -1;
+    let previousXEnd = -1;
+    const validSpans: Array<{ y: number; xStart: number; xEnd: number }> = [];
+    for (const [spanIndex, span] of region.rowSpans.entries()) {
+      const spanPath = `${regionPath}.rowSpans[${spanIndex}]`;
+      const valid = Number.isSafeInteger(span.y)
+        && Number.isSafeInteger(span.xStart)
+        && Number.isSafeInteger(span.xEnd)
+        && span.y >= 1
+        && span.y < plan.height - 1
+        && span.xStart >= 1
+        && span.xEnd > span.xStart
+        && span.xEnd < plan.width;
+      if (!valid) {
+        addIssue(
+          "invalid-natural-region",
+          spanPath,
+          "Cavern spans must be non-empty, ordered tile ranges inside the map while preserving its one-tile border.",
+        );
+        continue;
+      }
+      const sameRow = span.y === previousY;
+      if (
+        span.y < previousY
+        || (sameRow && span.xStart <= previousXEnd)
+      ) {
+        addIssue(
+          "invalid-natural-region",
+          spanPath,
+          "Cavern spans must be sorted and non-overlapping, with adjacent spans merged.",
+        );
+      }
+      if (!sameRow) previousXEnd = -1;
+      previousY = span.y;
+      previousXEnd = span.xEnd;
+      validSpans.push(span);
+      const row = span.y * plan.width;
+      let overlapReported = false;
+      for (let x = span.xStart; x < span.xEnd; x += 1) {
+        const cellIndex = row + x;
+        if (regionAt[cellIndex] >= 0 && regionAt[cellIndex] !== regionIndex) {
+          addIssue(
+            "invalid-natural-region",
+            spanPath,
+            "Natural regions cannot overlap each other.",
+          );
+          break;
+        }
+        regionAt[cellIndex] = regionIndex;
+        if (structuralCells[cellIndex] && !overlapReported) {
+          addIssue(
+            "natural-region-overlaps-structure",
+            spanPath,
+            "A natural cavern cannot overlap a room, connection path, junction, or planned feature.",
+          );
+          overlapReported = true;
+        }
+      }
+    }
+    if (!isRegionConnected(validSpans)) {
+      addIssue(
+        "disconnected-natural-region",
+        `${regionPath}.rowSpans`,
+        "Each natural region must be orthogonally connected.",
+      );
+    }
+  }
+
+  const caveLinksByRegion = new Map<string, number>();
+  for (const [index, caveConnection] of caveConnections.entries()) {
+    const connectionPath = `caveConnections[${index}]`;
+    registerId(caveConnection.id, `${connectionPath}.id`);
+    const region = regionsById.get(caveConnection.regionId);
+    const regionIndex = regionIndexById.get(caveConnection.regionId);
+    if (!region || regionIndex === undefined) {
+      addIssue(
+        "cave-connection-region-not-found",
+        `${connectionPath}.regionId`,
+        `Natural region ${caveConnection.regionId} does not exist.`,
+      );
+    } else {
+      caveLinksByRegion.set(
+        caveConnection.regionId,
+        (caveLinksByRegion.get(caveConnection.regionId) ?? 0) + 1,
+      );
+    }
+    const target = caveConnection.target;
+    let targetExists = false;
+    if (target.type === "room") {
+      const targetRoom = roomsById.get(target.id);
+      targetExists = Boolean(targetRoom && isRoomCell(targetRoom, target.position));
+    } else if (target.type === "connection") {
+      const targetConnection = connectionsById.get(target.id);
+      targetExists = Boolean(
+        targetConnection
+        && targetConnection.connectionType !== "vertical"
+        && targetConnection.connectionType !== "blocked-passage"
+        && getCorridorPathBrush(targetConnection.path, targetConnection.width).some((position) => (
+          position.x === target.position.x && position.y === target.position.y
+        )),
+      );
+    }
+    if (!isPositionInsidePlan(target.position, plan) || !targetExists) {
+      addIssue(
+        "cave-connection-target-not-found",
+        `${connectionPath}.target`,
+        "A cave connection target must identify an existing room tile or routed corridor tile.",
+      );
+    }
+    if (caveConnection.path.length === 0) {
+      addIssue(
+        "invalid-cave-connection",
+        `${connectionPath}.path`,
+        "A cave connection needs a path from its region to the built dungeon.",
+      );
+    }
+    const seenPathPositions = new Set<string>();
+    let pathIsValid = true;
+    for (const [pathIndex, position] of caveConnection.path.entries()) {
+      if (!isPositionInsidePlan(position, plan)) {
+        addIssue(
+          "invalid-cave-connection",
+          `${connectionPath}.path[${pathIndex}]`,
+          "Cave connection positions must be inside the GenerationPlan bounds.",
+        );
+        pathIsValid = false;
+        continue;
+      }
+      const key = positionKey(position);
+      if (seenPathPositions.has(key)) {
+        addIssue(
+          "invalid-cave-connection",
+          `${connectionPath}.path[${pathIndex}]`,
+          "A cave connection path cannot revisit a tile.",
+        );
+        pathIsValid = false;
+      }
+      seenPathPositions.add(key);
+      if (structuralCells[position.y * plan.width + position.x]) {
+        addIssue(
+          "invalid-cave-connection",
+          `${connectionPath}.path[${pathIndex}]`,
+          "A cave connection tunnel cannot cut through rooms, corridors, junctions, or features.",
+        );
+        pathIsValid = false;
+      }
+      if (pathIndex > 0) {
+        const previous = caveConnection.path[pathIndex - 1]!;
+        if (
+          Math.abs(position.x - previous.x) + Math.abs(position.y - previous.y) !== 1
+        ) {
+          addIssue(
+            "discontinuous-cave-connection-path",
+            `${connectionPath}.path[${pathIndex}]`,
+            "Consecutive cave connection tiles must be orthogonally adjacent.",
+          );
+          pathIsValid = false;
+        }
+      }
+    }
+    const firstPathPosition = caveConnection.path[0];
+    if (
+      region
+      && regionIndex !== undefined
+      && firstPathPosition
+      && regionAt[firstPathPosition.y * plan.width + firstPathPosition.x] !== regionIndex
+    ) {
+      addIssue(
+        "invalid-cave-connection",
+        `${connectionPath}.path`,
+        "A cave connection must start inside its referenced natural region.",
+      );
+      pathIsValid = false;
+    }
+    const lastPathPosition = caveConnection.path[caveConnection.path.length - 1];
+    if (
+      pathIsValid
+      && lastPathPosition
+      && targetExists
+      && Math.abs(lastPathPosition.x - target.position.x)
+        + Math.abs(lastPathPosition.y - target.position.y) !== 1
+    ) {
+      addIssue(
+        "cave-connection-does-not-touch-target",
+        `${connectionPath}.path`,
+        "The cave tunnel must end orthogonally adjacent to its target tile.",
+      );
+    }
+  }
+  if (plan.generationMode !== "natural-cavern") {
+    for (const region of naturalRegions) {
+      if (!caveLinksByRegion.has(region.id)) {
+        addIssue(
+          "natural-region-unconnected",
+          `naturalRegions.${region.id}`,
+          "A cavern added to a constructed dungeon must have a cave connection to its room graph.",
+        );
+      }
+    }
+  }
+
   for (const room of plan.rooms) {
     const isSoleEntryObjective = plan.rooms.length === 1
       && room.id === plan.entryRoomId
@@ -737,7 +1129,33 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
         "Door transitions must reference their connection.",
       );
     }
+    if (transition.type === "vertical-connection" && !transition.verticalConnectionId) {
+      addIssue(
+        "invalid-transition",
+        transitionPath,
+        "Vertical connection transitions must reference their DungeonStructure connection.",
+      );
+    }
     validatePlanRoomReference(transition.roomId, `${transitionPath}.roomId`);
+    if (transition.regionId && !regionsById.has(transition.regionId)) {
+      addIssue(
+        "transition-region-not-found",
+        `${transitionPath}.regionId`,
+        `Natural region ${transition.regionId} does not exist.`,
+      );
+    } else if (
+      transition.regionId
+      && isPositionInsidePlan(transition.position, plan)
+      && regionIndexById.has(transition.regionId)
+      && regionAt[transition.position.y * plan.width + transition.position.x]
+        !== regionIndexById.get(transition.regionId)
+    ) {
+      addIssue(
+        "invalid-transition",
+        `${transitionPath}.position`,
+        "A region transition must be placed on a tile in its referenced natural region.",
+      );
+    }
     const connection = transition.connectionId
       ? connectionsById.get(transition.connectionId)
       : undefined;
@@ -787,11 +1205,17 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
         "Routed door transitions must belong to a room opening on the referenced connection.",
       );
     }
-    if (!transition.roomId && !transition.connectionId) {
+    const doorTransition = transition.type === "doorway" || transition.type === "secret-door";
+    const hasValidTarget = doorTransition
+      ? Boolean(transition.connectionId && !transition.regionId)
+      : Number(Boolean(transition.roomId))
+        + Number(Boolean(transition.connectionId))
+        + Number(Boolean(transition.regionId)) === 1;
+    if (!hasValidTarget) {
       addIssue(
         "invalid-transition",
         transitionPath,
-        "Transitions must reference a room or a connection.",
+        "Transitions must reference a room, natural region, or connection; door transitions must reference their connection.",
       );
     }
   }

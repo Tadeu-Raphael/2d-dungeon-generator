@@ -12,10 +12,11 @@ Aplicação web interativa para gerar, explorar e exportar mapas de masmorras pa
 - **Oito conceitos de masmorra**, cada um com regras próprias para geração e distribuição de salas, armadilhas e tesouros.
 - **Geração procedural combinável** com BSP, Cellular Automata e Drunkard's Walk.
 - **Dois pipelines disponíveis**: V1 permanece como padrão; V2 gera topologia, layout e corredores por meio de `GenerationPlan`.
+- **Dungeons multinível**: gere de 2 a 8 andares com dimensões, salas, topologia e layout próprios, conexões verticais e navegação por seletor.
 - **Geração responsiva**: solicitações maiores usam Web Worker; mapas menores mantêm a execução síncrona e os mesmos algoritmos.
-- **Seed reproduzível** e dimensões configuráveis: de 20 a 1.000 tiles por eixo, com orçamento máximo de 250.000 tiles.
+- **Seed reproduzível** e dimensões configuráveis: de 20 a 1.000 tiles por eixo, com orçamento máximo de 1.000.000 tiles.
 - **Salas ajustáveis**: de 4 a 24 salas, 13 formatos, sete portes, proporções retangulares e frequências personalizáveis para 11 categorias e 168 funções.
-- **Cavernas naturais opcionais**, além do conceito Caverna natural, que gera cavernas sem salas estruturadas.
+- **Cavernas naturais e híbridas na V2**: regiões orgânicas conectadas, com ou sem salas construídas.
 - **Elementos de mapa** como portas, escadas, colunas, água e lava; as camadas de água e lava podem ser exibidas ou ocultadas.
 - **Visualização 2D e 3D** do mesmo mapa. Na vista 3D, paredes, pisos, pilares e marcadores de salas ganham volume; orbite com o arraste, aproxime com a roda do mouse e mova a câmera com o botão direito.
 - **Guia de salas, armadilhas e tesouros** com detalhes, metadados e resumos por mapa. O catálogo inclui 138 armadilhas em nove categorias e tesouros em dez categorias.
@@ -24,7 +25,9 @@ Aplicação web interativa para gerar, explorar e exportar mapas de masmorras pa
 
 ## Limites de escala
 
-A aplicação aceita mapas de 20 a 1.000 tiles em cada eixo, limitados também a 250.000 tiles no total. O teto preserva a matriz legada `Dungeon.tiles` e limita o roteador direcional a, no máximo, um milhão de estados A*; dimensões fora desses limites são rejeitadas antes da geração, em vez de alocar matrizes sem limite. Assim, 1000×1000 não é suportado (excede o limite de área), embora dimensões como 1000×250 sejam permitidas. A exportação reduz a escala para permanecer abaixo de 16 milhões de pixels.
+A aplicação aceita mapas de 20 a 1.000 tiles por eixo e até 1.000.000 de tiles no total. No teto, três arrays tipados por estado direcional e dois por tile ocupam aproximadamente 72 MB; isso é apenas o workspace A*, além da matriz legada `Dungeon.tiles`, do plano, do heap e de estruturas temporárias. Para evitar buscas desproporcionais sem alterar os casos V2 já suportados, cada conexão tem uma busca inicial de até 100.000 estados e, se necessário, uma única nova busca limitada a 250.000; o máximo cumulativo é 350.000 estados, incluindo bounds e larguras alternativas. Ao atingir o limite, a V2 informa a conexão e o orçamento usado e recorre à V1, sem remover conexões silenciosamente. O limite de área permite 1000×1000 sem alocação ilimitada; dimensões acima dos limites são rejeitadas antes da geração. Mapas grandes são encaminhados ao Worker pela estimativa de trabalho e podem levar mais tempo ou consumir mais memória. A exportação reduz a escala para permanecer abaixo de 16 milhões de pixels.
+
+A auditoria de compatibilidade e escalabilidade com múltiplas seeds, perfis, topologias, cavernas e até cinco níveis está documentada em [docs/v2-audit.md](./docs/v2-audit.md). Ela separa sucesso V2 de fallback V1 e registra limites, conectividade, rasterização, serialização SVG e deltas de memória.
 
 No V2, salas e conexões permanecem no `GenerationPlan` até a conversão final. A busca de posições adapta sua resolução ao tamanho do mapa e refina localmente cada candidato. Para cada sala, o layout pré-calcula limites, folgas de colisão e relações topológicas; a pontuação considera apenas salas conectadas ou do mesmo setor. Isso preserva a ordem de busca e as chamadas ao RNG, mantendo o resultado determinístico. O roteador mantém índices compactos de salas/obstáculos e reutiliza buffers tipados entre conexões. O benchmark verifica o grafo contra um BFS em tiles com filas tipadas e mede separadamente as etapas:
 
@@ -39,15 +42,36 @@ Três execuções com as mesmas seeds (83001–83004); valores abaixo são media
 
 No caso de estresse com 24 salas em 160×120 (seed 81004), a V2 gerou todas as salas sem fallback e passou na validação de conectividade. A mediana de três execuções foi 3.044 ms no total, com 103 ms no layout e 2.904 ms no roteamento; portanto, o roteamento permanece o principal gargalo nesse caso.
 
-As medições usam seeds fixas e representam o ambiente local, não uma garantia de tempo em todos os dispositivos. A variação de heap é aproximada e não representa o pico de memória. A serialização SVG é medida separadamente, mas não representa o tempo de renderização GPU de PixiJS ou Three.js; a renderização Three.js ainda não foi medida.
+Uma execução adicional por dimensão (seeds 83001–83007) avaliou o novo limite de área e o teto de trabalho A*. As deltas de memória são diferenças entre medições antes/depois, não picos. `SVG` mede serialização de diagnóstico, não renderização GPU.
+
+| Dimensões | Salas pedidas / geradas | Conexões | Geração | Roteamento V2 | Rasterização | SVG | Falhas / observações |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 160×120 | 6 / 6 | 6 | 195 ms | 150 ms | 2,2 ms | 0,7 ms | Sem fallback; auditoria íntegra; RSS +33,6 MB |
+| 250×250 | 8 / 8 | 8 | 281 ms | 238 ms | 3,2 ms | 1,4 ms | Sem fallback; auditoria íntegra; RSS +15,0 MB |
+| 400×300 | 12 / 12 | 12 | 294 ms | 246 ms | 3,1 ms | 0,4 ms | Sem fallback; auditoria íntegra; RSS +16,1 MB |
+| 500×500 | 16 / 16 | 17 | 216 ms | 152 ms | 5,7 ms | 2,8 ms | Sem fallback; auditoria íntegra; RSS +25,8 MB |
+| 1000×1000 | 6 / 6 | 6 | 290 ms | 221 ms | 13,8 ms | 8,4 ms | Sem fallback; auditoria íntegra; RSS +60,0 MB; ArrayBuffers +62,7 MB |
+| 1000×1000 | 24 / 24 | — | 2.731 ms | 1.776 ms | N/D após fallback V1 | 61,1 ms | Limite de 350.000 estados na conexão 0006; fallback V1, 24 salas conectadas; RSS +111,9 MB; ArrayBuffers +39,0 MB |
+
+O caso 1000×1000 com 24 salas foi mantido como teste de regressão: o roteamento V2 para de forma limitada e identificável na conexão `0006`, e a V1 gera e conecta as 24 salas. Uma execução V1 independente com 24 salas (seed 83007) levou 2.143 ms. A medição do fallback de 24 salas levou 2.731 ms no total, incluindo roteamento V2 e geração V1; o tempo de rasterização V1 não é separado pelo benchmark.
+
+As medições usam seeds fixas e representam o ambiente local, não uma garantia de tempo em todos os dispositivos. A variação de heap é aproximada e não representa o pico de memória. A serialização SVG é medida separadamente, mas não representa o tempo de renderização GPU de PixiJS ou Three.js. Houve um smoke test no navegador dos dois renderizadores e do Worker, porém sem uma medição isolada e estável de GPU; os detalhes estão no [relatório da auditoria](./docs/v2-audit.md).
 
 ## Geração em segundo plano
 
-A aplicação estima o trabalho como `área do mapa × maior valor entre salas e iterações celulares aplicáveis`; a partir de 120.000 unidades, executa o mesmo `generateDungeonPipeline` em um Web Worker. Com a otimização atual, 160×120 com 6 salas representa 115.200 unidades e levou uma mediana de cerca de 197 ms; 96×72 com 18 salas representa 124.416 unidades e levou cerca de 164 ms. O limite é uma heurística baseada no trabalho estimado, não uma garantia de duração.
+A aplicação estima o trabalho como `área do mapa × maior valor entre salas e iterações celulares aplicáveis`; a partir de 10.000 unidades, executa o mesmo `generateDungeonPipeline` em um Web Worker. O limite foi calibrado com medições locais: 32×24 com 6 salas (4.608 unidades) levou cerca de 21 ms e permanece síncrono; 64×48 com 12 salas (36.864 unidades) levou cerca de 139 ms e usa Worker. Mapas maiores também são encaminhados ao Worker. A estimativa não garante duração: perfil, seed e roteamento afetam o custo real.
 
 O mapa concluído permanece visível durante o trabalho. Alterar parâmetros substitui a solicitação, cancelar termina o Worker ativo e identificadores de solicitação impedem que respostas antigas atualizem a tela. O Worker transfere os tiles em um `ArrayBuffer` compacto, que é reconstruído como `Dungeon.tiles` na interface. O progresso disponível é indeterminado (“gerando”): o pipeline é síncrono internamente e ainda não fornece etapas intermediárias para uma porcentagem confiável.
 
 A prévia 2D usa uma base rasterizada e desenha detalhes apenas na região visível em mapas grandes.
+
+## Dungeons multinível
+
+Na aba **Geração**, abra **Dungeon multinível** para escolher a quantidade de níveis, distribuir andares acima/abaixo do nível principal, definir dimensões, quantidade de salas, topologia e layout de cada andar e selecionar tipos e quantidade de conexões verticais. A interface inicia com até seis salas por nível para reservar espaço ao roteamento; cada nível pode ser configurado entre 2 e 24 salas. A navegação acima do mapa troca o nível exibido e informa salas, links, tipo e coordenadas. Cada andar continua usando os renderizadores existentes de um mapa por vez.
+
+A geração usa V2 em todos os níveis e deriva seeds estáveis por posição vertical, além de um stream separado para links. A validação verifica as âncoras de cada extremo e o alcance global a partir do nível inicial; é possível permitir níveis secretos/opcionais desconectados, que são indicados na interface. A V1 não foi alterada e continua disponível para geração de nível único.
+
+Esta primeira versão limita a estrutura a 2–8 níveis, 24 salas por nível e 1.000.000 de tiles no total. Perfis com cavernas ou entrada externa ainda não são suportados em multinível: como o pipeline V2 recorre à V1 nesses casos, a solicitação multinível é interrompida com um erro explícito para preservar a garantia de que todos os andares foram gerados pelo V2. As conexões geradas são bidirecionais; o modelo lógico já comporta sentidos e requisitos de acesso, mas a interface ainda não os configura.
 
 ## Conceitos
 
@@ -78,7 +102,7 @@ Os métodos podem ser combinados para criar mapas com salas, túneis e cavernas.
 
 A geração legada é a **V1**. `generateDungeon` permanece como entrada compatível, e `generateDungeonV1` é um alias explícito. `generateDungeonVersioned` retorna a dungeon e metadados com versão, seed, perfil, algoritmo efetivo, parâmetros e horário da execução. O horário é apenas informativo; não participa do resultado determinístico. A interface inicia em V1 e permite selecionar V2 sem remover a versão anterior.
 
-A V1 continua usando o fluxo aleatório original. `createGenerationRandomStreams` oferece fluxos independentes para topologia, posicionamento, corredores, conteúdo e decoração; o pipeline V2 usa esses fluxos para que posicionamento, rotas e conteúdo não compartilhem o mesmo estado aleatório.
+A V1 continua usando o fluxo aleatório original. `createGenerationRandomStreams` oferece fluxos independentes para topologia, posicionamento, corredores, conteúdo, decoração e cavernas; o pipeline V2 usa esses fluxos para que posicionamento, rotas, conteúdo e cavernas não compartilhem o mesmo estado aleatório.
 
 O despacho V1 respeita os algoritmos declarados em `dungeonProfiles.ts`: o templo usa BSP + Cellular Automata; catacumbas e mina usam BSP + Drunkard's Walk; laboratório e civilização perdida usam o híbrido; a caverna natural usa Cellular Automata. O controle **Incluir cavernas** acrescenta Cellular Automata aos perfis compatíveis, combinando os passes em `hybrid` quando necessário. `resolveDungeonGenerationAlgorithm` retorna o algoritmo efetivo e uma explicação quando há fallback.
 
@@ -88,13 +112,41 @@ O despacho V1 respeita os algoritmos declarados em `dungeonProfiles.ts`: o templ
 
 Os controles V2 permitem substituir a topologia e o estilo espacial sugeridos pelo perfil, ajustar conexões/ciclos, compactação e variação das larguras. A seed reproduz grafo, layout, rotas e tiles. `metadata.generatorVersion` identifica a versão efetivamente usada; em um fallback V2→V1, `requestedGeneratorVersion`, `fallbackReason` e `fallbackStage` tornam a decisão explícita.
 
-O perfil **Caverna natural**, a opção de cavernas híbridas e entradas externas usam fallback V1 enquanto essas geometrias não estiverem representadas como conexões roteáveis no GenerationPlan. O fallback preserva o algoritmo e o conteúdo V1, e a interface exibe o motivo. Para perfis cuja receita V1 declara `bsp-drunkard` ou `hybrid`, a V2 informa que usa BSP apenas como receita de salas/conteúdo; topologia, layout e corredores finais continuam vindo do pipeline V2.
+O perfil **Caverna natural** gera no V2 um mapa de Cellular Automata sem `RoomNode`s. A forma conectada é mantida como spans de linhas no `GenerationPlan`, depois rasterizada em `CAVE_TILE`; as escadas de entrada e saída são colocadas na região. A opção **Incluir cavernas** acrescenta uma região orgânica livre a mapas construídos e escava um caminho ortogonal até uma sala ou corredor. A validação rejeita regiões desconectadas, sobreposições e links sem destino; se uma região híbrida viável não couber, o fallback V1 é explícito. Entradas externas continuam usando fallback V1. Os controles de caverna ajustam densidade (35–65%) e irregularidade (2–8 iterações); a API V2 aceita densidade de 1–99% e de 0 a 12 iterações.
+
+### Perfis personalizados
+
+Além dos oito perfis registrados, a interface permite escolher **Personalizado (JSON)**. Um perfil customizado exige `id`, `name` e `baseProfile` (um perfil registrado) e pode substituir algoritmo, categorias de conteúdo, topologia, preferências espaciais e modo de caverna. Campos omitidos herdam os valores do perfil-base; campos desconhecidos, enumerações inválidas, pesos fora de 0–100 e densidade fora de 0–100 são rejeitados com o caminho do campo. O perfil é enviado integralmente à execução síncrona ou ao Worker, e seu identificador é preservado nos metadados. Uma falha de capacidade ou de geometria continua retornando o motivo explícito de fallback V2→V1.
+
+Exemplo de chamada programática:
+
+```ts
+generateDungeonPipeline({
+  generatorVersion: "v2",
+  profile: "custom",
+  customProfile: {
+    id: "fortaleza-setorizada",
+    name: "Fortaleza setorizada",
+    baseProfile: "military-fortress",
+    topology: { style: "sectorized", parameters: { cycleCount: 2 } },
+    v2Preferences: {
+      spatialLayoutWeights: { clusters: 100 },
+      roomSizeBias: "compact",
+      defaultDensity: 72,
+    },
+  },
+  seed: 81234,
+  parameters,
+});
+```
+
+Dimensões, quantidade de salas, largura de corredores e parâmetros celulares permanecem em `DungeonParameters`, não no perfil temático. Em dungeons multinível, cada nível pode selecionar seu próprio perfil registrado ou customizado, e dimensões/quantidade de salas/topologia espacial podem ser configuradas separadamente. Cavernas naturais customizadas usam `mode: "natural-cavern"` e o algoritmo Cellular; `cavesEnabled: true` habilita cavernas híbridas em perfis baseados em salas. Cavernas multinível ainda não são suportadas e são rejeitadas explicitamente.
 
 ### Modelo lógico GenerationPlan
 
 `GenerationPlan` é a camada lógica/geométrica usada pela V2, sem substituir o contrato consumido pelo restante da aplicação. `RoomNode.roomRole` descreve a função estrutural da sala (como entrada ou objetivo), enquanto `roomType` continua usando as categorias temáticas existentes (como religiosa ou arcana). Cada sala fornece um `footprint` de tiles locais explícitos, e cada conexão geométrica fornece seu próprio caminho absoluto. Caminhos duplicados são rejeitados, mas conexões paralelas intencionais podem declarar `metadata.allowParallel: true`.
 
-O plano também registra setores, interseções, transições, recursos, versão e metadados completos da geração. `validateGenerationPlan` verifica IDs e referências, dimensões, setores, sobreposições de footprints e geometrias obrigatórias. Essa validação estrutural é distinta da análise de conectividade do grafo; ela não altera o BFS existente usado ao reposicionar salas.
+O plano também registra setores, interseções, transições, recursos, versão e metadados completos da geração. `NaturalRegion` representa cavernas por spans horizontais conectados, sem transformá-las em salas retangulares; `CaveConnection` liga explicitamente uma região ao grafo de salas/corredores. `validateGenerationPlan` verifica IDs e referências, dimensões, setores, sobreposições de footprints e regiões, conectividade e geometrias obrigatórias. Essa validação estrutural é distinta da análise do grafo de salas; ela não altera o BFS existente usado ao reposicionar salas.
 
 `generationPlanToDungeon` rasteriza os footprints e caminhos informados no contrato atual `Dungeon.tiles`, além de preencher `roomDetails`, armadilhas e tiles existentes de portas, escadas e outros elementos. PixiJS, Three.js e as exportações SVG continuam consumindo somente `Dungeon`. O modelo retém flags como conexão secreta, bloqueada, opcional e trancada; o formato `Dungeon` atual não possui campos para todos esses estados. A conversão mantém essas informações no `GenerationPlan`, sem inferir uma regra de navegação. O reposicionamento legado trabalha com limites retangulares de salas, portanto não preserva necessariamente todos os detalhes de footprints irregulares após arrastar uma sala.
 
@@ -134,6 +186,8 @@ O layout ainda não roteia corredores: as arestas ficam com `path` vazio e `geom
 ### Roteamento de corredores do GenerationPlan
 
 `routeGenerationPlanCorridors` implementa uma busca A* em grade com estado de direção. Ela começa em aberturas candidatas nas bordas reais dos footprints, busca até uma abertura do cômodo de destino e não atravessa salas, recursos ou elementos de transição não relacionados. Paredes são escaváveis; corredores já roteados podem ser compartilhados quando a conexão tem uma sala em comum ou quando o grafo marca o ciclo como intencional. Cruzamentos sem essa relação são proibidos.
+
+A busca compartilha um orçamento cumulativo por conexão entre expansões de bounds e tentativas de largura: até 100.000 estados na busca inicial e uma única nova busca limitada a 250.000, para um máximo total de 350.000. Se o orçamento se esgota, o roteador lança um erro `search-limit` com conexão e contagem; a pipeline interrompe novas tentativas de layout e registra fallback V1, em vez de ampliar a busca sem limite.
 
 ```ts
 const topology = generateDungeonTopology(roomPlan, { profile: "ancient-temple" });
@@ -259,9 +313,14 @@ Para responsabilidades dos módulos, fluxo de geração, convenções de contrib
 | `src/generationBaselines.ts` | Casos V1 de referência e gerador da coleção |
 | `src/dungeon.test.ts` | Testes de regressão e contrato da geração |
 | `src/generationPlan.ts` | Modelo lógico de salas, conexões, setores e transições |
+| `src/dungeonStructure.ts` | Dungeon composta por níveis independentes e conexões verticais |
+| `src/dungeonStructureGeneration.ts` | Geração multinível com o pipeline V2 e validação global |
+| `src/dungeonStructureValidation.ts` | Validação de âncoras e análise de conectividade entre níveis |
 | `src/generationPipeline.ts` | Despacho V1/V2 e orquestração do grafo, layout, roteamento e conversão |
+| `src/generationWorkerProtocol.ts` | Mensagens tipadas e transferência compacta de mapas simples ou multinível |
 | `src/generationRoomRecipe.ts` | Receita BSP de salas e conteúdo usada como entrada para a V2 |
 | `src/generationPipeline.test.ts` | Integração por perfil, determinismo, fallbacks e contrato dos renderizadores/exportações |
+| `src/customDungeonProfile.test.ts` | Validação, herança e integração de perfis customizados em salas e cavernas V2 |
 | `src/generationPlanValidation.ts` | Validação estrutural do GenerationPlan |
 | `src/generationPlanToDungeon.ts` | Conversão de GenerationPlan para Dungeon |
 | `src/generationPlan.test.ts` | Testes do modelo, validador e conversor |

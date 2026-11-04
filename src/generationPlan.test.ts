@@ -172,6 +172,21 @@ describe("GenerationPlan", () => {
     expect(validateGenerationPlan(createValidPlan())).toEqual({ valid: true, issues: [] });
   });
 
+  it("rejects a room footprint with disconnected floor regions", () => {
+    const plan = createValidPlan();
+    const disconnectedObjective = {
+      ...plan.rooms[1],
+      footprint: [
+        { x: 0, y: 0 },
+        { x: 2, y: 2 },
+        { x: 4, y: 4 },
+      ],
+    };
+
+    expect(issueCodes({ ...plan, rooms: [plan.rooms[0], disconnectedObjective] }))
+      .toContain("invalid-room-footprint");
+  });
+
   it("rejects a plan whose room count differs from the requested count", () => {
     const plan = createValidPlan();
     const incompletePlan = {

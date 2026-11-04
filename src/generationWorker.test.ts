@@ -7,12 +7,18 @@ import {
 import { generateDungeonPipeline } from "./generationPipeline";
 import type { DungeonGenerationPipelineRequest } from "./generationPipeline";
 import {
+  generateDungeonStructure,
+} from "./dungeonStructureGeneration";
+import type { DungeonStructureGenerationRequest } from "./dungeonStructureGeneration";
+import {
   estimateGenerationWork,
   GENERATION_WORKER_WORK_THRESHOLD,
   shouldGenerateInWorker,
-  unpackGenerationResult,
+  unpackGenerationOutput,
 } from "./generationWorkerProtocol";
 import type {
+  DungeonGenerationWorkRequest,
+  GenerationWorkerOutput,
   GenerationWorkerRequestMessage,
   GenerationWorkerResponseMessage,
 } from "./generationWorkerProtocol";
@@ -40,6 +46,63 @@ function createRequest(
   };
 }
 
+function createWorkRequest(
+  request: DungeonGenerationPipelineRequest = createRequest(),
+): DungeonGenerationWorkRequest {
+  return { kind: "single", request };
+}
+
+function createStructureRequest(): DungeonStructureGenerationRequest {
+  return {
+    seed: 83002,
+    profile: "military-fortress",
+    parameters: {
+      ...DEFAULT_DUNGEON_PARAMETERS,
+      width: 64,
+      height: 48,
+      roomCount: 6,
+      corridorWidth: 1,
+      entranceMode: "upper-stairs",
+    },
+    levels: [
+      {
+        name: "Subsolo",
+        verticalIndex: -1,
+        width: 64,
+        height: 48,
+        roomCount: 6,
+        topologyStyle: "linear",
+        spatialLayoutStyle: "axis-branches",
+      },
+      {
+        name: "Nível principal",
+        verticalIndex: 0,
+        width: 64,
+        height: 48,
+        roomCount: 6,
+        topologyStyle: "branching",
+        spatialLayoutStyle: "clusters",
+      },
+    ],
+    entryLevelIndex: 1,
+    verticalConnectionCount: 1,
+    allowedVerticalConnectionKinds: ["stairs"],
+    requireGlobalConnectivity: true,
+    allowVerticalCycles: false,
+  };
+}
+
+function unpackSingleResult(output: GenerationWorkerOutput) {
+  const unpacked = unpackGenerationOutput(output);
+  if (unpacked.kind !== "single") throw new Error("Expected a single-level Worker result.");
+  return unpacked.result;
+}
+
+function getSingleWorkerResult(output: GenerationWorkerOutput) {
+  if (output.kind !== "single") throw new Error("Expected a single-level Worker result.");
+  return output.result;
+}
+
 class FakeGenerationWorker implements GenerationWorkerLike {
   onmessage: GenerationWorkerLike["onmessage"] = null;
   onerror: GenerationWorkerLike["onerror"] = null;
@@ -65,17 +128,17 @@ describe("generation Worker strategy and protocol", () => {
     const small = createRequest({
       parameters: {
         ...DEFAULT_DUNGEON_PARAMETERS,
-        width: 160,
-        height: 120,
+        width: 32,
+        height: 24,
         roomCount: 6,
       },
     });
     const medium = createRequest({
       parameters: {
         ...DEFAULT_DUNGEON_PARAMETERS,
-        width: 96,
-        height: 72,
-        roomCount: 18,
+        width: 64,
+        height: 48,
+        roomCount: 12,
       },
     });
     const large = createRequest({
@@ -86,12 +149,20 @@ describe("generation Worker strategy and protocol", () => {
         roomCount: 8,
       },
     });
+    const multilevelRequest: DungeonGenerationWorkRequest = {
+      kind: "multilevel",
+      request: createStructureRequest(),
+    };
 
-    expect(estimateGenerationWork(small)).toBe(115_200);
-    expect(estimateGenerationWork(medium)).toBeGreaterThanOrEqual(GENERATION_WORKER_WORK_THRESHOLD);
-    expect(shouldGenerateInWorker(small)).toBe(false);
-    expect(shouldGenerateInWorker(medium)).toBe(true);
-    expect(shouldGenerateInWorker(large)).toBe(true);
+    expect(GENERATION_WORKER_WORK_THRESHOLD).toBe(10_000);
+    expect(estimateGenerationWork(createWorkRequest(small))).toBe(4_608);
+    expect(estimateGenerationWork(createWorkRequest(medium))).toBe(36_864);
+    expect(estimateGenerationWork(createWorkRequest(medium))).toBeGreaterThanOrEqual(GENERATION_WORKER_WORK_THRESHOLD);
+    expect(shouldGenerateInWorker(createWorkRequest(small))).toBe(false);
+    expect(shouldGenerateInWorker(createWorkRequest(medium))).toBe(true);
+    expect(shouldGenerateInWorker(createWorkRequest(large))).toBe(true);
+    expect(estimateGenerationWork(multilevelRequest)).toBe(36_864);
+    expect(shouldGenerateInWorker(multilevelRequest)).toBe(true);
   });
 
   it.each([
@@ -109,12 +180,13 @@ describe("generation Worker strategy and protocol", () => {
       },
     });
     const expected = generateDungeonPipeline(request);
-    const workerResult = runGenerationWorkerRequest(4, request);
-    const actual = unpackGenerationResult(workerResult.message.result);
+    const workerResult = runGenerationWorkerRequest(4, createWorkRequest(request));
+    const actual = unpackSingleResult(workerResult.message.result);
+    const packedResult = getSingleWorkerResult(workerResult.message.result);
 
     expect(actual.dungeon).toEqual(expected.dungeon);
-    expect("plan" in workerResult.message.result).toBe(false);
-    expect(workerResult.transferBuffer.byteLength).toBe(250 * 250);
+    expect("plan" in packedResult).toBe(false);
+    expect(workerResult.transferBuffers[0]?.byteLength).toBe(250 * 250);
     expect(workerResult.message.metrics).toMatchObject({
       roomCount: expected.dungeon.roomDetails.length,
       tileCount: 250 * 250,
@@ -125,14 +197,79 @@ describe("generation Worker strategy and protocol", () => {
     ].filter((warning): warning is string => Boolean(warning)))]);
   });
 
+  it("preserves custom-profile settings and synchronous equivalence in the Worker", () => {
+    const request = createRequest({
+      profile: "custom",
+      customProfile: {
+        id: "worker-custom-profile",
+        name: "Perfil no Worker",
+        baseProfile: "military-fortress",
+        topology: { style: "circuit", parameters: { cycleCount: 1 } },
+        v2Preferences: { spatialLayoutWeights: { ring: 100 } },
+      },
+      parameters: {
+        ...DEFAULT_DUNGEON_PARAMETERS,
+        width: 96,
+        height: 72,
+        roomCount: 8,
+        corridorWidth: 1,
+      },
+    });
+    const expected = generateDungeonPipeline(request);
+    const workerResult = runGenerationWorkerRequest(9, createWorkRequest(request));
+    const actual = unpackSingleResult(workerResult.message.result);
+
+    expect(shouldGenerateInWorker(createWorkRequest(request))).toBe(true);
+    expect(actual.dungeon).toEqual(expected.dungeon);
+    expect(actual.metadata.profile).toBe("worker-custom-profile");
+    expect(actual.metadata.settings.customProfileId).toBe("worker-custom-profile");
+  });
+
   it("keeps the result deterministic for identical seeds and parameters", () => {
     const request = createRequest();
-    const first = unpackGenerationResult(runGenerationWorkerRequest(1, request).message.result);
-    const second = unpackGenerationResult(runGenerationWorkerRequest(2, request).message.result);
+    const first = unpackSingleResult(
+      runGenerationWorkerRequest(1, createWorkRequest(request)).message.result,
+    );
+    const second = unpackSingleResult(
+      runGenerationWorkerRequest(2, createWorkRequest(request)).message.result,
+    );
 
     expect(first.dungeon).toEqual(second.dungeon);
     expect(first.metadata.seed).toBe(second.metadata.seed);
     expect(first.metadata.parameters).toEqual(second.metadata.parameters);
+  });
+
+  it("transfers one compact map buffer per multilevel V2 plan", () => {
+    const request = createStructureRequest();
+    const expected = generateDungeonStructure(request);
+    const workerResult = runGenerationWorkerRequest(8, {
+      kind: "multilevel",
+      request,
+    });
+    const actual = unpackGenerationOutput(workerResult.message.result);
+    if (actual.kind !== "multilevel") throw new Error("Expected a multilevel Worker result.");
+    const packed = workerResult.message.result;
+    if (packed.kind !== "multilevel") throw new Error("Expected a packed multilevel result.");
+
+    expect(actual.result.structure.verticalConnections).toEqual(expected.structure.verticalConnections);
+    expect(actual.result.levels.map(({ generation }) => generation.dungeon))
+      .toEqual(expected.levels.map(({ generation }) => generation.dungeon));
+    expect(workerResult.transferBuffers.map((buffer) => buffer.byteLength))
+      .toEqual([64 * 48, 64 * 48]);
+    expect(packed.result.levels.every(
+      ({ generation }) => !("plan" in generation),
+    )).toBe(true);
+    expect(packed.result.structure.levels.every(
+      (level) => !("plan" in level),
+    )).toBe(true);
+    expect(workerResult.message.metrics).toMatchObject({
+      levelCount: 2,
+      tileCount: 2 * 64 * 48,
+      roomCount: expected.levels.reduce(
+        (total, level) => total + level.generation.dungeon.roomDetails.length,
+        0,
+      ),
+    });
   });
 });
 
@@ -152,10 +289,13 @@ describe("generation Worker lifecycle", () => {
       onError: (message: string) => results.push(message),
     };
     const request = createRequest();
-    const oldRequestId = runner.run(request, callbacks);
+    const oldRequestId = runner.run(createWorkRequest(request), callbacks);
     const oldHandler = workers[0].onmessage;
-    const currentRequestId = runner.run({ ...request, seed: request.seed + 1 }, callbacks);
-    const staleResult = runGenerationWorkerRequest(oldRequestId, request);
+    const currentRequestId = runner.run(
+      createWorkRequest({ ...request, seed: request.seed + 1 }),
+      callbacks,
+    );
+    const staleResult = runGenerationWorkerRequest(oldRequestId, createWorkRequest(request));
 
     expect(currentRequestId).toBeGreaterThan(oldRequestId);
     expect(workers[0].terminated).toBe(true);
@@ -166,10 +306,10 @@ describe("generation Worker lifecycle", () => {
     expect(staleProgress).toEqual([]);
     expect(results).toEqual([]);
 
-    const currentResult = runGenerationWorkerRequest(currentRequestId, {
-      ...request,
-      seed: request.seed + 1,
-    });
+    const currentResult = runGenerationWorkerRequest(
+      currentRequestId,
+      createWorkRequest({ ...request, seed: request.seed + 1 }),
+    );
     workers[1].emit(currentResult.message);
     expect(results).toHaveLength(1);
     expect(workers[1].terminated).toBe(true);
@@ -179,7 +319,7 @@ describe("generation Worker lifecycle", () => {
     const worker = new FakeGenerationWorker();
     const runner = new GenerationWorkerRunner(() => worker);
     let resultCount = 0;
-    const requestId = runner.run(createRequest(), {
+    const requestId = runner.run(createWorkRequest(), {
       onProgress: () => undefined,
       onResult: () => { resultCount += 1; },
       onError: () => undefined,
@@ -199,7 +339,7 @@ describe("generation Worker lifecycle", () => {
     const startupRunner = new GenerationWorkerRunner(() => {
       throw new Error("Worker unavailable");
     });
-    startupRunner.run(createRequest(), {
+    startupRunner.run(createWorkRequest(), {
       onProgress: () => undefined,
       onResult: () => undefined,
       onError: (message) => startupErrors.push(message),
@@ -209,7 +349,7 @@ describe("generation Worker lifecycle", () => {
     const worker = new FakeGenerationWorker();
     const runtimeErrors: string[] = [];
     const runner = new GenerationWorkerRunner(() => worker);
-    runner.run(createRequest(), {
+    runner.run(createWorkRequest(), {
       onProgress: () => undefined,
       onResult: () => undefined,
       onError: (message) => runtimeErrors.push(message),

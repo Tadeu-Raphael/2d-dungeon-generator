@@ -230,6 +230,12 @@ describe("topology-aware spatial layout", () => {
       if (!(error instanceof SpatialLayoutError)) throw error;
       expect(error.code).toBe("layout-failed");
       expect(error.failedRoomIds.length).toBeGreaterThan(0);
+      expect(error.details.join("; ")).toMatch(/Placed \d+ of 24 rooms\./);
+      const attemptedGaps = error.details
+        .find((detail) => detail.startsWith("Attempted minimum room gaps: "))
+        ?.split(": ")[1]
+        ?.split(", ");
+      expect(attemptedGaps).toHaveLength(3);
     }
   });
 
