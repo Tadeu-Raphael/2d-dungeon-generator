@@ -159,7 +159,7 @@ for (const trapType of TRAP_TYPES) {
   }
 }
 
-function getTileColor(tile: Tile): readonly [number, number, number] {
+export function getTileColor(tile: Tile): readonly [number, number, number] {
   const color = TILE_COLORS[tile];
   if (color) return color;
   throw new Error(`Nenhuma cor definida para o tile ${tile}.`);

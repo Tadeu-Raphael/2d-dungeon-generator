@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import DungeonCanvas, { DungeonExportControl } from "./DungeonCanvas";
 import type { MapFocusRequest } from "./DungeonCanvas";
 import {
@@ -138,6 +139,39 @@ interface RoomMetadataField {
 
 type SettingsSection = "generation" | "rooms" | "types" | "traps" | "treasures" | "access";
 type RoomMetadataSection = "structure" | "operations" | "narrative";
+type CanvasView = "2d" | "3d";
+
+const DungeonThreeCanvas = lazy(() => import("./DungeonThreeCanvas"));
+
+class CanvasViewErrorBoundary extends Component<
+  { children: ReactNode; onBackTo2D: () => void },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("Não foi possível carregar a visualização Three.js.", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="three-canvas-error" role="alert">
+          <p>Não foi possível carregar a visualização 3D. A visualização 2D continua disponível.</p>
+          <button className="map-control-button" type="button" onClick={this.props.onBackTo2D}>
+            Voltar para 2D
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 interface GeneratedTrap extends DungeonTrap {
   corridorRoomNumbers: number[];
@@ -161,7 +195,7 @@ const roomCountControl: ParameterControl = {
 
 const corridorControls: ParameterControl[] = [
   { key: "corridorWidth", label: "Largura dos corredores", min: 1, max: 3, step: 1, format: (value) => `${value} ${value === 1 ? "tile" : "tiles"}` },
-  { key: "corridorCompactness", label: "Compactação dos corredores", min: 0, max: 100, step: 5, format: (value) => `${value}%` },
+  { key: "corridorCompactness", label: "Compactação do mapa", min: 0, max: 100, step: 5, format: (value) => `${value}%` },
 ];
 
 const cellularControls: ParameterControl[] = [
@@ -807,6 +841,7 @@ export default function App() {
   const [roomDetailNumber, setRoomDetailNumber] = useState<number | null>(null);
   const [roomDetailSection, setRoomDetailSection] = useState<RoomMetadataSection | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("generation");
+  const [canvasView, setCanvasView] = useState<CanvasView>("2d");
   const [roomPositionEdit, setRoomPositionEdit] = useState<RoomPositionEdit | null>(null);
   const guideListRef = useRef<HTMLDivElement | null>(null);
   const roomDetailDialogRef = useRef<HTMLDialogElement | null>(null);
@@ -1530,7 +1565,7 @@ export default function App() {
                     {corridorControls.map(renderParameterControl)}
                   </div>
                   <p className="corridor-compactness-hint">
-                    Quanto maior a compactação, mais as salas se aproximam do centro da masmorra e menores ficam os trajetos.
+                    Valores maiores concentram as salas em uma área menor e encurtam os corredores; algumas plantas ainda podem se espalhar.
                   </p>
                   <label className="double-door-option">
                     <input
@@ -1890,6 +1925,24 @@ export default function App() {
               </div>
             </div>
             <div className="map-toolbar-actions">
+              <div className="map-mode-controls canvas-view-toggle" role="group" aria-label="Modo de visualização do mapa">
+                <button
+                  className="map-control-button"
+                  type="button"
+                  aria-pressed={canvasView === "2d"}
+                  onClick={() => setCanvasView("2d")}
+                >
+                  2D
+                </button>
+                <button
+                  className="map-control-button"
+                  type="button"
+                  aria-pressed={canvasView === "3d"}
+                  onClick={() => setCanvasView("3d")}
+                >
+                  3D
+                </button>
+              </div>
               <span className="map-coordinate">{dungeon.width} × {dungeon.height} <span>GRID · 1 TILE = 1 M</span></span>
             </div>
           </div>
@@ -1899,19 +1952,38 @@ export default function App() {
             <div className="corner-mark corner-top-right" />
             <div className="corner-mark corner-bottom-left" />
             <div className="corner-mark corner-bottom-right" />
-            <DungeonCanvas
-              dungeon={dungeon}
-              generationKey={generatedDungeon}
-              focusRequest={focusRequest}
-              onRoomMove={moveRoom}
-              onRoomSelect={openRoomDetails}
-              onRoomMoveEnd={selectMovedRoom}
-              onClearSelection={() => setFocusRequest(null)}
-              showWater={showWater}
-              showLava={showLava}
-              onToggleWater={() => setShowWater((visible) => !visible)}
-              onToggleLava={() => setShowLava((visible) => !visible)}
-            />
+            {canvasView === "3d" ? (
+              <CanvasViewErrorBoundary onBackTo2D={() => setCanvasView("2d")}>
+                <Suspense fallback={<div className="canvas-loading">Carregando Three.js...</div>}>
+                  <DungeonThreeCanvas
+                    dungeon={dungeon}
+                    generationKey={generatedDungeon}
+                    focusRequest={focusRequest}
+                    onRoomSelect={openRoomDetails}
+                    onClearSelection={() => setFocusRequest(null)}
+                    showWater={showWater}
+                    showLava={showLava}
+                    onToggleWater={() => setShowWater((visible) => !visible)}
+                    onToggleLava={() => setShowLava((visible) => !visible)}
+                    onBackTo2D={() => setCanvasView("2d")}
+                  />
+                </Suspense>
+              </CanvasViewErrorBoundary>
+            ) : (
+              <DungeonCanvas
+                dungeon={dungeon}
+                generationKey={generatedDungeon}
+                focusRequest={focusRequest}
+                onRoomMove={moveRoom}
+                onRoomSelect={openRoomDetails}
+                onRoomMoveEnd={selectMovedRoom}
+                onClearSelection={() => setFocusRequest(null)}
+                showWater={showWater}
+                showLava={showLava}
+                onToggleWater={() => setShowWater((visible) => !visible)}
+                onToggleLava={() => setShowLava((visible) => !visible)}
+              />
+            )}
             <div className="map-overlay-label">NÍVEL 01 <span>/</span> PROCEDURAL</div>
           </div>
 

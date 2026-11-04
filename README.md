@@ -5,7 +5,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/Tadeu-Raphael/2d-dungeon-generator?style=for-the-badge)](https://github.com/Tadeu-Raphael/2d-dungeon-generator/issues)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](#licença)
 
-Aplicação web interativa para gerar, explorar e exportar mapas 2D de masmorras para RPGs. Os mapas são renderizados em tiles com PixiJS e podem ser reproduzidos usando a mesma seed.
+Aplicação web interativa para gerar, explorar e exportar mapas de masmorras para RPGs. Alterne entre a planta 2D, renderizada em tiles com PixiJS, e uma visualização 3D orbitável com Three.js. Os mapas podem ser reproduzidos usando a mesma seed.
 
 ## Recursos
 
@@ -15,6 +15,7 @@ Aplicação web interativa para gerar, explorar e exportar mapas 2D de masmorras
 - **Salas ajustáveis**: de 4 a 24 salas, 13 formatos, sete portes, proporções retangulares e frequências personalizáveis para 11 categorias e 168 funções.
 - **Cavernas naturais opcionais**, além do conceito Caverna natural, que gera cavernas sem salas estruturadas.
 - **Elementos de mapa** como portas, escadas, colunas, água e lava; as camadas de água e lava podem ser exibidas ou ocultadas.
+- **Visualização 2D e 3D** do mesmo mapa. Na vista 3D, paredes, pisos, pilares e marcadores de salas ganham volume; orbite com o arraste, aproxime com a roda do mouse e mova a câmera com o botão direito.
 - **Guia de salas, armadilhas e tesouros** com detalhes, metadados e resumos por mapa. O catálogo inclui 138 armadilhas em nove categorias e tesouros em dez categorias.
 - **Reposicionamento de salas** por arraste, ajustado à grade, sem sobreposição ou saída dos limites; os corredores são recalculados e a conectividade é preservada.
 - **Exportação do mapa em SVG e PNG.**
@@ -38,7 +39,7 @@ Cada perfil aplica pesos próprios às categorias de salas, armadilhas e tesouro
 
 | Método | Uso |
 |---|---|
-| **BSP** | Divide o mapa em regiões para posicionar salas e conectá-las por corredores. |
+| **BSP** | Divide o mapa em regiões para dimensionar salas, agrupa-as conforme a compactação configurada e conecta suas bordas por corredores curtos. |
 | **Cellular Automata** | Suaviza áreas abertas e cria cavernas orgânicas. |
 | **Drunkard's Walk** | Escava trilhas e túneis conectados. |
 
@@ -46,13 +47,14 @@ Os métodos podem ser combinados para criar mapas com salas, túneis e cavernas.
 
 ## Controles e interação
 
-As configurações estão organizadas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Elas permitem ajustar o conceito, as dimensões, as proporções e os formatos das salas, as categorias funcionais e as chances de geração.
+As configurações estão organizadas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Elas permitem ajustar o conceito, as dimensões, a compactação do mapa, as proporções e os formatos das salas, as categorias funcionais e as chances de geração.
 
 - Na aba **Acesso**, escolha uma escadaria superior, uma entrada externa ou uma conexão com o exterior. Portas são colocadas em soleiras reais, e escadas indicam a direção de subida ou descida.
 - Selecione uma sala no mapa para destacá-la no guia e abrir seus detalhes. O modal separa metadados de estrutura, uso e riscos, narrativa, armadilhas e tesouros.
-- Use **Mover** para reposicionar uma sala; use **Ajustar** para enquadrar o mapa e os controles de zoom para aproximar ou afastar.
+- Alterne entre **2D** e **3D** acima do mapa. A seleção de salas e as camadas de água e lava funcionam nas duas vistas.
+- Na vista 2D, use **Mover** para reposicionar salas, **Ajustar** para reenquadrar o mapa e os controles para aproximar ou afastar. Na vista 3D, **Ajustar** restaura o enquadramento da câmera; o reposicionamento de salas continua disponível na vista 2D.
 - Armadilhas e tesouros são apresentados no guia, não como ilustrações no mapa. Armadilhas em corredores recebem identificadores numéricos no mapa e nas exportações.
-- A exportação oferece os formatos **SVG** e **PNG**. O mapa exportado não inclui marcadores de tesouros nem ilustrações das armadilhas.
+- A exportação oferece os formatos **SVG** e **PNG** da planta 2D, independentemente da visualização ativa. O mapa exportado não inclui marcadores de tesouros nem ilustrações das armadilhas.
 
 Uma sala pode receber até três armadilhas e até três tesouros, conforme as chances configuradas. As armadilhas variam por categoria e local de ocorrência; tesouros podem incluir consumíveis e itens mágicos com raridades distintas. Encontros não são simulados: os metadados narrativos são sugestões para criação de histórias.
 
@@ -125,6 +127,7 @@ Os arquivos de produção são gerados em `dist/`.
 - TypeScript
 - Vite
 - PixiJS
+- Three.js
 
 ## Estrutura do projeto
 
@@ -136,6 +139,7 @@ Os arquivos de produção são gerados em `dist/`.
 | `src/roomTypes.ts` | Categorias e funções de salas |
 | `src/treasures.ts` | Categorias e catálogo de tesouros |
 | `src/DungeonCanvas.tsx` | Renderização do mapa e exportação |
+| `src/DungeonThreeCanvas.tsx` | Visualização 3D orbitável e seleção de salas |
 
 ## Referências relacionadas
 

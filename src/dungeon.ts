@@ -771,10 +771,10 @@ interface GeneratedRoom extends Rect {
 
 export const DEFAULT_DUNGEON_PARAMETERS: DungeonParameters = {
   width: 64,
-  height: 40,
+  height: 48,
   roomCount: 12,
   corridorWidth: 1,
-  corridorCompactness: 65,
+  corridorCompactness: 95,
   doubleDoorsEnabled: false,
   entranceMode: "upper-stairs",
   cellularFillPercent: 52,
@@ -858,8 +858,6 @@ const STAIRS_DOWN = STAIRS_DOWN_TILE;
 const MIN_ROOM_SIZE = 2;
 const MAX_ROOM_SIZE = 12;
 const MAX_ROOM_ASPECT_RATIO = 1.5;
-const MAIN_ROOM_SHARE = 0.4;
-const SMALL_ROOM_BRIDGE_CHANCE = 0.05;
 
 function createRandom(seed: number): () => number {
   let state = seed >>> 0;
@@ -1202,7 +1200,25 @@ function generateBsp(
   rooms: GeneratedRoom[];
 } {
   const tiles = createGrid(width, height);
-  const leaves: Rect[] = [{ x: 2, y: 2, width: width - 4, height: height - 4 }];
+  const compactness = Math.max(0, Math.min(1, corridorCompactness / 100));
+  const roomScale = Math.min(1.25, Math.sqrt(DEFAULT_DUNGEON_PARAMETERS.roomCount / Math.max(1, roomTarget)));
+  const compactFootprintScaleX = Math.max(0.75, 1 - 0.25 * compactness * roomScale);
+  const compactFootprintScaleY = Math.max(0.75, 1 - 0.18 * compactness * roomScale);
+  const expandedFootprint = random() >= compactness;
+  const layoutWidth = Math.max(
+    Math.min(width - 4, 15),
+    Math.round((width - 4) * (expandedFootprint ? 1 : compactFootprintScaleX)),
+  );
+  const layoutHeight = Math.max(
+    Math.min(height - 4, 15),
+    Math.round((height - 4) * (expandedFootprint ? 1 : compactFootprintScaleY)),
+  );
+  const leaves: Rect[] = [{
+    x: Math.floor((width - layoutWidth) / 2),
+    y: Math.floor((height - layoutHeight) / 2),
+    width: layoutWidth,
+    height: layoutHeight,
+  }];
   const rooms: GeneratedRoom[] = [];
   const defaultAreaPerRoom = (
     DEFAULT_DUNGEON_PARAMETERS.width
@@ -1232,6 +1248,147 @@ function generateBsp(
   const roomSizeTargets = roomSizeDistributionEnabled
     ? createRoomSizeTargets(roomTarget, random, roomSizeFrequencies)
     : [];
+  const placementBounds: Rect = {
+    x: leaves[0].x,
+    y: leaves[0].y,
+    width: leaves[0].width,
+    height: leaves[0].height,
+  };
+  const targetFootprintScale = Math.min(
+    0.98,
+    0.82 + 0.13 * Math.sqrt(roomTarget / DEFAULT_DUNGEON_PARAMETERS.roomCount) + 0.1 * (1 - compactness),
+  );
+  const targetFootprintWidth = placementBounds.width * targetFootprintScale;
+  const targetFootprintHeight = placementBounds.height * targetFootprintScale;
+  const fullBounds: Rect = { x: 2, y: 2, width: width - 4, height: height - 4 };
+  const canPlaceRoom = (candidate: Rect, bounds: Rect): boolean => {
+    if (
+      candidate.x < bounds.x + 1
+      || candidate.y < bounds.y + 1
+      || candidate.x + candidate.width > bounds.x + bounds.width - 1
+      || candidate.y + candidate.height > bounds.y + bounds.height - 1
+    ) return false;
+    return rooms.every((room) => {
+      const horizontalGap = Math.max(
+        0,
+        candidate.x - (room.x + room.width),
+        room.x - (candidate.x + candidate.width),
+      );
+      const verticalGap = Math.max(
+        0,
+        candidate.y - (room.y + room.height),
+        room.y - (candidate.y + candidate.height),
+      );
+      return horizontalGap > 0 || verticalGap > 0;
+    });
+  };
+  const placeRoom = (roomWidth: number, roomHeight: number): Rect | null => {
+    if (rooms.length === 0) {
+      return {
+        x: placementBounds.x + Math.floor((placementBounds.width - roomWidth) / 2),
+        y: placementBounds.y + Math.floor((placementBounds.height - roomHeight) / 2),
+        width: roomWidth,
+        height: roomHeight,
+      };
+    }
+
+    const candidates = new Map<string, { room: Rect; score: number; tieBreak: number }>();
+    const maxGap = 1 + Math.ceil((1 - compactness) * 8);
+    const addCandidate = (x: number, y: number): void => {
+      const candidate = { x, y, width: roomWidth, height: roomHeight };
+      if (!canPlaceRoom(candidate, placementBounds)) return;
+      const key = `${x},${y}`;
+      if (candidates.has(key)) return;
+
+      const minX = Math.min(x, ...rooms.map((room) => room.x));
+      const minY = Math.min(y, ...rooms.map((room) => room.y));
+      const maxX = Math.max(x + roomWidth, ...rooms.map((room) => room.x + room.width));
+      const maxY = Math.max(y + roomHeight, ...rooms.map((room) => room.y + room.height));
+      const centerX = x + roomWidth / 2;
+      const centerY = y + roomHeight / 2;
+      const layoutCenterX = placementBounds.x + placementBounds.width / 2;
+      const layoutCenterY = placementBounds.y + placementBounds.height / 2;
+      const footprintWidth = maxX - minX;
+      const footprintHeight = maxY - minY;
+      const nearestGap = Math.min(...rooms.map((room) => {
+        const horizontalGap = Math.max(
+          0,
+          x - (room.x + room.width),
+          room.x - (x + roomWidth),
+        );
+        const verticalGap = Math.max(
+          0,
+          y - (room.y + room.height),
+          room.y - (y + roomHeight),
+        );
+        return horizontalGap + verticalGap;
+      }));
+      const adjacentRoomCount = rooms.filter((room) => {
+        const horizontalGap = Math.max(
+          0,
+          x - (room.x + room.width),
+          room.x - (x + roomWidth),
+        );
+        const verticalGap = Math.max(
+          0,
+          y - (room.y + room.height),
+          room.y - (y + roomHeight),
+        );
+        return horizontalGap + verticalGap === 1;
+      }).length;
+      const score = Math.abs(targetFootprintWidth - footprintWidth)
+        + Math.abs(targetFootprintHeight - footprintHeight)
+        + 0.25 * (Math.abs(centerX - layoutCenterX) + Math.abs(centerY - layoutCenterY))
+        + 1.95 * nearestGap
+        - 1.5 * Math.max(0, adjacentRoomCount - 1);
+      candidates.set(key, { room: candidate, score, tieBreak: random() });
+    };
+
+    for (const anchor of rooms) {
+      const alignedY = new Set([
+        anchor.y,
+        anchor.y + Math.floor((anchor.height - roomHeight) / 2),
+        anchor.y + anchor.height - roomHeight,
+        anchor.y - roomHeight + 1,
+        anchor.y + anchor.height - 1,
+      ]);
+      const alignedX = new Set([
+        anchor.x,
+        anchor.x + Math.floor((anchor.width - roomWidth) / 2),
+        anchor.x + anchor.width - roomWidth,
+        anchor.x - roomWidth + 1,
+        anchor.x + anchor.width - 1,
+      ]);
+      for (let gap = 1; gap <= maxGap; gap += 1) {
+        for (const y of alignedY) {
+          addCandidate(anchor.x - gap - roomWidth, y);
+          addCandidate(anchor.x + anchor.width + gap, y);
+        }
+        for (const x of alignedX) {
+          addCandidate(x, anchor.y - gap - roomHeight);
+          addCandidate(x, anchor.y + anchor.height + gap);
+        }
+      }
+    }
+
+    if (candidates.size > 0) {
+      const rankedCandidates = [...candidates.values()].sort(
+        (left, right) => left.score - right.score || left.tieBreak - right.tieBreak,
+      );
+      const candidateCount = Math.max(1, Math.ceil(rankedCandidates.length * (1 - compactness) * 0.25));
+      return rankedCandidates[Math.floor(random() * Math.min(candidateCount, rankedCandidates.length))].room;
+    }
+
+    for (const bounds of [placementBounds, fullBounds]) {
+      for (let y = bounds.y + 1; y <= bounds.y + bounds.height - roomHeight - 1; y += 1) {
+        for (let x = bounds.x + 1; x <= bounds.x + bounds.width - roomWidth - 1; x += 1) {
+          const candidate = { x, y, width: roomWidth, height: roomHeight };
+          if (canPlaceRoom(candidate, bounds)) return candidate;
+        }
+      }
+    }
+    return null;
+  };
 
   for (let index = 0; index < leaves.length && leaves.length < roomTarget; index += 1) {
     const leaf = leaves[index];
@@ -1327,21 +1484,8 @@ function generateBsp(
       ratioKey,
     );
     if (!dimensions) continue;
-    const minX = leaf.x + 1;
-    const maxX = leaf.x + leaf.width - dimensions.width - 1;
-    const minY = leaf.y + 1;
-    const maxY = leaf.y + leaf.height - dimensions.height - 1;
-    const randomX = minX + Math.floor(random() * (maxX - minX + 1));
-    const randomY = minY + Math.floor(random() * (maxY - minY + 1));
-    const targetX = Math.max(minX, Math.min(maxX, Math.round((width - dimensions.width) / 2)));
-    const targetY = Math.max(minY, Math.min(maxY, Math.round((height - dimensions.height) / 2)));
-    const compactness = Math.max(0, Math.min(1, corridorCompactness / 100));
-    const room: Rect = {
-      x: Math.round(randomX + (targetX - randomX) * compactness),
-      y: Math.round(randomY + (targetY - randomY) * compactness),
-      width: dimensions.width,
-      height: dimensions.height,
-    };
+    const room = placeRoom(dimensions.width, dimensions.height);
+    if (!room) continue;
     rooms.push({
       ...room,
       shape,
@@ -1365,21 +1509,66 @@ function generateBsp(
     return { ...shapedRoom, shape, generationBounds: room.generationBounds };
   });
 
-  const roomIndices = generatedRooms.map((_, index) => index);
-  const largestFirst = [...roomIndices].sort((left, right) => (
-    generatedRooms[right].width * generatedRooms[right].height
-    - generatedRooms[left].width * generatedRooms[left].height
-    || left - right
-  ));
-  const mainRoomCount = Math.max(1, Math.ceil(generatedRooms.length * MAIN_ROOM_SHARE));
-  const mainRoomIndices = largestFirst.slice(0, mainRoomCount);
-  const connectedMainRoomIndices = new Set<number>(mainRoomIndices.slice(0, 1));
-  const pendingMainRoomIndices = new Set(mainRoomIndices.slice(1));
+  const roomBoundaryPoints = generatedRooms.map((room) => {
+    const points: Array<[number, number]> = [];
+    for (let y = room.y; y < room.y + room.height; y += 1) {
+      for (let x = room.x; x < room.x + room.width; x += 1) {
+        if (
+          tiles[y][x] !== WALL
+          && (x === room.x || x === room.x + room.width - 1 || y === room.y || y === room.y + room.height - 1)
+        ) {
+          points.push([x, y]);
+        }
+      }
+    }
+    if (points.length > 0) return points;
+    for (let y = room.y; y < room.y + room.height; y += 1) {
+      for (let x = room.x; x < room.x + room.width; x += 1) {
+        if (tiles[y][x] !== WALL) points.push([x, y]);
+      }
+    }
+    return points.length > 0 ? points : [roomCenter(room)];
+  });
+
+  const connectedRoomIndices = new Set<number>(generatedRooms.length > 0 ? [0] : []);
+  const pendingRoomIndices = new Set(generatedRooms.map((_, index) => index).slice(1));
+  const getRoomSeparation = (firstIndex: number, secondIndex: number): number => {
+    let shortestDistance = Number.POSITIVE_INFINITY;
+    for (const [firstX, firstY] of roomBoundaryPoints[firstIndex]) {
+      for (const [secondX, secondY] of roomBoundaryPoints[secondIndex]) {
+        shortestDistance = Math.min(
+          shortestDistance,
+          Math.abs(firstX - secondX) + Math.abs(firstY - secondY),
+        );
+      }
+    }
+    return shortestDistance;
+  };
 
   const connectRooms = (sourceIndex: number, targetIndex: number) => {
-    const [sourceX, sourceY] = roomCenter(generatedRooms[sourceIndex]);
-    const [targetX, targetY] = roomCenter(generatedRooms[targetIndex]);
-    if (random() > 0.5) {
+    let shortestDistance = Number.POSITIVE_INFINITY;
+    const shortestConnections: Array<[[number, number], [number, number]]> = [];
+    for (const sourcePoint of roomBoundaryPoints[sourceIndex]) {
+      for (const targetPoint of roomBoundaryPoints[targetIndex]) {
+        const distance = Math.abs(sourcePoint[0] - targetPoint[0])
+          + Math.abs(sourcePoint[1] - targetPoint[1]);
+        if (distance < shortestDistance) {
+          shortestDistance = distance;
+          shortestConnections.length = 0;
+          shortestConnections.push([sourcePoint, targetPoint]);
+        } else if (distance === shortestDistance) {
+          shortestConnections.push([sourcePoint, targetPoint]);
+        }
+      }
+    }
+    const [[sourceX, sourceY], [targetX, targetY]] = shortestConnections[
+      Math.floor(random() * shortestConnections.length)
+    ];
+    if (sourceX === targetX) {
+      carveVertical(tiles, sourceY, targetY, sourceX, corridorWidth);
+    } else if (sourceY === targetY) {
+      carveHorizontal(tiles, sourceX, targetX, sourceY, corridorWidth);
+    } else if (random() > 0.5) {
       carveHorizontal(tiles, sourceX, targetX, sourceY, corridorWidth);
       carveVertical(tiles, sourceY, targetY, targetX, corridorWidth);
     } else {
@@ -1388,14 +1577,12 @@ function generateBsp(
     }
   };
 
-  while (pendingMainRoomIndices.size > 0) {
+  while (pendingRoomIndices.size > 0) {
     let shortestDistance = Number.POSITIVE_INFINITY;
     const shortestConnections: Array<[number, number]> = [];
-    for (const connectedIndex of connectedMainRoomIndices) {
-      const [connectedX, connectedY] = roomCenter(generatedRooms[connectedIndex]);
-      for (const pendingIndex of pendingMainRoomIndices) {
-        const [pendingX, pendingY] = roomCenter(generatedRooms[pendingIndex]);
-        const distance = Math.abs(connectedX - pendingX) + Math.abs(connectedY - pendingY);
+    for (const connectedIndex of connectedRoomIndices) {
+      for (const pendingIndex of pendingRoomIndices) {
+        const distance = getRoomSeparation(connectedIndex, pendingIndex);
         if (distance < shortestDistance) {
           shortestDistance = distance;
           shortestConnections.length = 0;
@@ -1410,52 +1597,8 @@ function generateBsp(
       Math.floor(random() * shortestConnections.length)
     ];
     connectRooms(sourceIndex, targetIndex);
-    connectedMainRoomIndices.add(targetIndex);
-    pendingMainRoomIndices.delete(targetIndex);
-  }
-
-  const mainRoomSet = new Set(mainRoomIndices);
-  const smallerRoomIndices = roomIndices.filter((index) => !mainRoomSet.has(index));
-  let rareBridgeChildIndex: number | null = null;
-  let rareBridgeParentIndex: number | null = null;
-  if (smallerRoomIndices.length > 1 && random() < SMALL_ROOM_BRIDGE_CHANCE) {
-    rareBridgeChildIndex = smallerRoomIndices[Math.floor(random() * smallerRoomIndices.length)];
-    const [childX, childY] = roomCenter(generatedRooms[rareBridgeChildIndex]);
-    rareBridgeParentIndex = smallerRoomIndices
-      .filter((index) => index !== rareBridgeChildIndex)
-      .reduce((closestIndex, candidateIndex) => {
-        const [closestX, closestY] = roomCenter(generatedRooms[closestIndex]);
-        const [candidateX, candidateY] = roomCenter(generatedRooms[candidateIndex]);
-        const closestDistance = Math.abs(closestX - childX) + Math.abs(closestY - childY);
-        const candidateDistance = Math.abs(candidateX - childX) + Math.abs(candidateY - childY);
-        return candidateDistance < closestDistance ? candidateIndex : closestIndex;
-      });
-  }
-
-  for (const smallerRoomIndex of smallerRoomIndices) {
-    if (smallerRoomIndex === rareBridgeChildIndex) continue;
-    let shortestDistance = Number.POSITIVE_INFINITY;
-    const closestMainRoomIndices: number[] = [];
-    const [targetX, targetY] = roomCenter(generatedRooms[smallerRoomIndex]);
-    for (const mainRoomIndex of connectedMainRoomIndices) {
-      const [sourceX, sourceY] = roomCenter(generatedRooms[mainRoomIndex]);
-      const distance = Math.abs(sourceX - targetX) + Math.abs(sourceY - targetY);
-      if (distance < shortestDistance) {
-        shortestDistance = distance;
-        closestMainRoomIndices.length = 0;
-        closestMainRoomIndices.push(mainRoomIndex);
-      } else if (distance === shortestDistance) {
-        closestMainRoomIndices.push(mainRoomIndex);
-      }
-    }
-    const sourceIndex = closestMainRoomIndices[
-      Math.floor(random() * closestMainRoomIndices.length)
-    ];
-    connectRooms(sourceIndex, smallerRoomIndex);
-  }
-
-  if (rareBridgeChildIndex !== null && rareBridgeParentIndex !== null) {
-    connectRooms(rareBridgeParentIndex, rareBridgeChildIndex);
+    connectedRoomIndices.add(targetIndex);
+    pendingRoomIndices.delete(targetIndex);
   }
 
   return { tiles, rooms: generatedRooms };

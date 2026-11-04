@@ -370,6 +370,7 @@ h1 {
 .room-empty p { max-width: 210px; margin: 0; color: #818a94; font-size: 10px; line-height: 1.6; }
 .map-toolbar { min-height: 45px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .map-toolbar-actions { display: flex; align-items: flex-start; gap: 10px; }
+.canvas-view-toggle button[aria-pressed="true"] { border-color: #9c7d4d; background: rgba(105, 78, 42, 0.3); color: #e8c88e; }
 .map-title { display: flex; align-items: center; gap: 10px; }
 .live-dot { width: 7px; height: 7px; background: var(--accent); box-shadow: 0 0 8px #d6aa6677; }
 .map-title div { display: grid; gap: 4px; }
@@ -392,6 +393,36 @@ h1 {
 
 .canvas-host { position: absolute; inset: 0; overflow: hidden; }
 .dungeon-canvas { display: block; width: 100%; height: 100%; }
+.dungeon-three-canvas { display: block; width: 100%; height: 100%; }
+.three-canvas-host { cursor: grab; }
+.three-canvas-controls { flex-wrap: wrap; justify-content: flex-end; }
+.three-canvas-hint {
+  position: absolute;
+  z-index: 1;
+  bottom: 12px;
+  left: 12px;
+  max-width: calc(100% - 24px);
+  padding: 6px 8px;
+  border: 1px solid rgba(59, 65, 73, 0.8);
+  border-radius: 3px;
+  background: rgba(16, 20, 27, 0.84);
+  color: #9ca5af;
+  font: 8px "DM Mono", monospace;
+  line-height: 1.5;
+  pointer-events: none;
+}
+.three-canvas-error {
+  position: absolute;
+  inset: 0;
+  padding: 24px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  background: rgba(11, 16, 23, 0.96);
+  text-align: center;
+}
+.three-canvas-error p { max-width: 300px; margin: 0; color: #b7c0ca; font-size: 11px; line-height: 1.6; }
 .canvas-loading { position: absolute; inset: 0; display: grid; place-items: center; color: #7d8791; font-size: 12px; }
 .canvas-zoomed { cursor: grab; touch-action: none; }
 .canvas-room-hover { cursor: pointer; touch-action: none; }
@@ -706,6 +737,9 @@ h1 {
   .reroll-button { margin-top: 13px; }
   .sidebar-footer { display: none; }
   .map-frame { height: 54vh; min-height: 340px; }
+  .map-toolbar { min-height: 52px; }
+  .map-toolbar-actions { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .map-coordinate { align-self: center; }
   .room-index { height: min(62vh, 460px); min-height: 320px; }
   .room-detail-dialog { width: calc(100vw - 20px); max-height: 92vh; }
   .room-detail-shell { max-height: 92vh; }
