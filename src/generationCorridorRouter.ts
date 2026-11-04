@@ -1,8 +1,7 @@
 import {
-  MAX_DUNGEON_HEIGHT,
-  MAX_DUNGEON_WIDTH,
-  MIN_DUNGEON_DIMENSION,
+  MAX_DUNGEON_TILE_COUNT,
   createGenerationRandomStreams,
+  isSupportedDungeonDimensions,
 } from "./dungeon";
 import type {
   ConnectionEdge,
@@ -105,6 +104,21 @@ interface RouteSearchResult {
     targetExit: RoomExitCandidate;
   };
   reachedLimit: boolean;
+  diagnostics?: readonly string[];
+}
+
+interface RouterSearchWorkspace {
+  bestCost: Float64Array;
+  previous: Int32Array;
+  status: Uint32Array;
+  generation: number;
+}
+
+interface RouteSearchBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
 }
 
 interface BrushCheck {
@@ -120,6 +134,7 @@ interface RouterContext {
   centerlineOwners: Map<number, Set<string>>;
   edgeById: ReadonlyMap<string, ConnectionEdge>;
   cycleConnectionIds: ReadonlySet<string>;
+  searchWorkspace: RouterSearchWorkspace;
 }
 
 const ROUTE_ORIENTATIONS: readonly ConnectionEndpointGeometry["orientation"][] = [
@@ -129,7 +144,7 @@ const ROUTE_ORIENTATIONS: readonly ConnectionEndpointGeometry["orientation"][] =
   "west",
 ];
 const MAX_CORRIDOR_WIDTH = 3;
-const MAX_ROUTING_TILE_COUNT = MAX_DUNGEON_WIDTH * MAX_DUNGEON_HEIGHT;
+const MAX_ROUTING_TILE_COUNT = MAX_DUNGEON_TILE_COUNT;
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
@@ -183,17 +198,10 @@ function getObstacles(plan: GenerationPlan, roomAt: Int32Array): Uint8Array {
 }
 
 function assertPlanCanBeRouted(plan: GenerationPlan): void {
-  if (
-    !Number.isSafeInteger(plan.width)
-    || !Number.isSafeInteger(plan.height)
-    || plan.width < MIN_DUNGEON_DIMENSION
-    || plan.height < MIN_DUNGEON_DIMENSION
-    || plan.width > MAX_DUNGEON_WIDTH
-    || plan.height > MAX_DUNGEON_HEIGHT
-  ) {
+  if (!isSupportedDungeonDimensions(plan.width, plan.height)) {
     throw new CorridorRoutingError(
       "invalid-plan",
-      "The GenerationPlan dimensions are outside the supported dungeon bounds.",
+      "The GenerationPlan dimensions exceed the supported per-axis or total-tile limits.",
     );
   }
   if (plan.topology?.geometryStatus !== "unrouted") {
@@ -524,39 +532,42 @@ function getCrossSection(position: GridPosition, directionIndex: number, width: 
   });
 }
 
-function createDistanceField(
-  plan: GenerationPlan,
+function getDistanceToTargetExits(
+  position: GridPosition,
   exits: readonly RoomExitCandidate[],
-): Int32Array {
-  const distance = new Int32Array(plan.width * plan.height).fill(-1);
-  const queue = new Int32Array(distance.length);
-  let tail = 0;
+): number {
+  let minimumDistance = Number.POSITIVE_INFINITY;
   for (const exit of exits) {
-    const index = positionIndex(exit.position, plan.width);
-    if (distance[index] >= 0) continue;
-    distance[index] = 0;
-    queue[tail] = index;
-    tail += 1;
+    minimumDistance = Math.min(
+      minimumDistance,
+      Math.abs(position.x - exit.position.x) + Math.abs(position.y - exit.position.y),
+    );
   }
-  for (let head = 0; head < tail; head += 1) {
-    const current = positionFromIndex(queue[head], plan.width);
-    const nextDistance = distance[queue[head]] + 1;
-    for (const direction of CORRIDOR_DIRECTIONS) {
-      const next = { x: current.x + direction.dx, y: current.y + direction.dy };
-      if (
-        next.x <= 0
-        || next.y <= 0
-        || next.x >= plan.width - 1
-        || next.y >= plan.height - 1
-      ) continue;
-      const nextIndex = positionIndex(next, plan.width);
-      if (distance[nextIndex] >= 0) continue;
-      distance[nextIndex] = nextDistance;
-      queue[tail] = nextIndex;
-      tail += 1;
-    }
+  return minimumDistance;
+}
+
+function getRouteSearchBounds(
+  plan: GenerationPlan,
+  sourceExits: readonly RoomExitCandidate[],
+  targetExits: readonly RoomExitCandidate[],
+  margin: number,
+): RouteSearchBounds {
+  let minX = plan.width - 2;
+  let minY = plan.height - 2;
+  let maxX = 1;
+  let maxY = 1;
+  for (const exit of [...sourceExits, ...targetExits]) {
+    minX = Math.min(minX, exit.position.x);
+    minY = Math.min(minY, exit.position.y);
+    maxX = Math.max(maxX, exit.position.x);
+    maxY = Math.max(maxY, exit.position.y);
   }
-  return distance;
+  return {
+    minX: Math.max(1, minX - margin),
+    minY: Math.max(1, minY - margin),
+    maxX: Math.min(plan.width - 2, maxX + margin),
+    maxY: Math.min(plan.height - 2, maxY + margin),
+  };
 }
 
 function compareSearchEntries(first: SearchEntry, second: SearchEntry): number {
@@ -650,16 +661,196 @@ function reconstructPath(
   state: number,
   previous: Int32Array,
   width: number,
-): GridPosition[] {
+): { path: GridPosition[]; sourceExitIndex: number } {
   const path: GridPosition[] = [];
-  for (let current = state; current >= 0; current = previous[current]) {
+  let current = state;
+  let sourceExitIndex = -1;
+  while (true) {
     path.push(positionFromIndex(Math.floor(current / CORRIDOR_DIRECTIONS.length), width));
-    if (previous[current] < 0) break;
+    const parent = previous[current];
+    if (parent <= -2) {
+      sourceExitIndex = -parent - 2;
+      break;
+    }
+    if (parent < 0) {
+      throw new Error("A corridor route state is missing its predecessor.");
+    }
+    current = parent;
   }
-  return path.reverse();
+  return { path: path.reverse(), sourceExitIndex };
 }
 
 function searchRoute(
+  plan: GenerationPlan,
+  edge: ConnectionEdge,
+  routeStyle: CorridorRouteStyle,
+  width: number,
+  sourceRoom: RoomNode,
+  targetRoom: RoomNode,
+  sourceExits: readonly RoomExitCandidate[],
+  targetExits: readonly RoomExitCandidate[],
+  context: RouterContext,
+  bounds: RouteSearchBounds,
+  costs: CorridorRoutingCosts,
+  maxExpandedStates: number,
+): RouteSearchResult {
+  if (sourceExits.length === 0 || targetExits.length === 0) {
+    return { reachedLimit: false };
+  }
+  const workspace = context.searchWorkspace;
+  const { bestCost, previous, status } = workspace;
+  if (workspace.generation >= 0x7fffffff) {
+    status.fill(0);
+    workspace.generation = 1;
+  } else {
+    workspace.generation += 1;
+  }
+  const openStatus = workspace.generation * 2;
+  const closedStatus = openStatus + 1;
+  const targetExitByState = new Map<number, number>();
+  const open = new MinHeap();
+  let sequence = 0;
+  const minimumStepCost = costs.movement + (
+    context.corridorOwners.size === 0
+      ? costs.excavateWall
+      : Math.min(costs.excavateWall, costs.reuseCorridor)
+  );
+
+for (const [exitIndex, exit] of sourceExits.entries()) {
+    const stamp = inspectBrush(exit.position, exit.direction, width, edge, context);
+    if (!stamp.valid) continue;
+    const cellIndex = positionIndex(exit.position, plan.width);
+    const state = cellIndex * CORRIDOR_DIRECTIONS.length + exit.direction;
+    const routeCost = exit.preference * 0.04
+      + costs.movement
+      + (stamp.owners.size > 0 ? costs.reuseCorridor : costs.excavateWall);
+    if (
+      status[state] === closedStatus
+      || routeCost >= (status[state] === openStatus ? bestCost[state] : Number.POSITIVE_INFINITY)
+    ) {
+      continue;
+    }
+    status[state] = openStatus;
+    bestCost[state] = routeCost;
+    previous[state] = -2 - exitIndex;
+    const heuristicDistance = getDistanceToTargetExits(exit.position, targetExits);
+    open.push({
+      state,
+      cost: routeCost,
+      priority: routeCost + heuristicDistance * minimumStepCost,
+      sequence,
+    });
+    sequence += 1;
+  }
+
+  for (const [exitIndex, exit] of targetExits.entries()) {
+    const approachDirection = (exit.direction + 2) % CORRIDOR_DIRECTIONS.length;
+    const cellIndex = positionIndex(exit.position, plan.width);
+    const state = cellIndex * CORRIDOR_DIRECTIONS.length + approachDirection;
+    const currentExit = targetExitByState.get(state);
+    if (currentExit === undefined || exit.preference < targetExits[currentExit].preference) {
+      targetExitByState.set(state, exitIndex);
+    }
+  }
+
+  let expandedStates = 0;
+  while (open.size > 0) {
+    const entry = open.pop()!;
+    if (status[entry.state] !== openStatus || entry.cost > bestCost[entry.state] + 1e-9) continue;
+    if (expandedStates >= maxExpandedStates) {
+      return {
+        reachedLimit: true,
+        diagnostics: [
+          `A* expanded ${expandedStates} states inside ${bounds.minX},${bounds.minY}–${bounds.maxX},${bounds.maxY}.`,
+        ],
+      };
+    }
+    status[entry.state] = closedStatus;
+    expandedStates += 1;
+    const targetExitIndex = targetExitByState.get(entry.state);
+    if (targetExitIndex !== undefined) {
+      const reconstructed = reconstructPath(entry.state, previous, plan.width);
+      const sourceExit = sourceExits[reconstructed.sourceExitIndex];
+      if (!sourceExit) throw new Error("A corridor route resolved to an unknown source exit.");
+      return {
+        route: {
+          path: reconstructed.path,
+          sourceExit,
+          targetExit: targetExits[targetExitIndex],
+        },
+        reachedLimit: false,
+      };
+    }
+
+    const cellIndex = Math.floor(entry.state / CORRIDOR_DIRECTIONS.length);
+    const current = positionFromIndex(cellIndex, plan.width);
+    const incomingDirection = entry.state % CORRIDOR_DIRECTIONS.length;
+    for (let directionIndex = 0; directionIndex < CORRIDOR_DIRECTIONS.length; directionIndex += 1) {
+      if (previous[entry.state] <= -2 && directionIndex !== incomingDirection) continue;
+      if ((directionIndex + 2) % CORRIDOR_DIRECTIONS.length === incomingDirection) continue;
+      const direction = CORRIDOR_DIRECTIONS[directionIndex];
+      const next = { x: current.x + direction.dx, y: current.y + direction.dy };
+      if (
+        next.x < bounds.minX
+        || next.y < bounds.minY
+        || next.x > bounds.maxX
+        || next.y > bounds.maxY
+      ) continue;
+
+      const turn = directionIndex !== incomingDirection;
+      if (turn && !inspectBrush(current, directionIndex, width, edge, context).valid) continue;
+      const nextStamp = inspectBrush(next, directionIndex, width, edge, context);
+      if (!nextStamp.valid) continue;
+      const nextCellIndex = positionIndex(next, plan.width);
+      const nextState = nextCellIndex * CORRIDOR_DIRECTIONS.length + directionIndex;
+      if (status[nextState] === closedStatus) continue;
+      const existingPenalty = nextStamp.owners.size === 0
+        ? costs.excavateWall
+        : costs.reuseCorridor + (
+          [...nextStamp.owners].some((ownerId) => (
+            !getAllEdgesShareRoom(edge, context.edgeById.get(ownerId)!)
+          ))
+            ? costs.cycleJunction
+            : 0
+        );
+      const turnPenalty = turn ? getTurnCost(routeStyle, costs) : 0;
+      const bias = getSinuousBias(next, sourceRoom, targetRoom, routeStyle, plan.generation.seed, costs);
+      const targetExitIndexForNext = targetExitByState.get(nextState);
+      const destinationPreference = targetExitIndexForNext === undefined
+        ? 0
+        : targetExits[targetExitIndexForNext].preference * 0.04;
+      const nextCost = entry.cost
+        + costs.movement
+        + existingPenalty
+        + turnPenalty
+        + bias
+        + destinationPreference;
+      if (
+        status[nextState] === openStatus
+        && nextCost >= bestCost[nextState]
+      ) continue;
+      status[nextState] = openStatus;
+      bestCost[nextState] = nextCost;
+      previous[nextState] = entry.state;
+      const heuristicDistance = getDistanceToTargetExits(next, targetExits);
+      open.push({
+        state: nextState,
+        cost: nextCost,
+        priority: nextCost + heuristicDistance * minimumStepCost,
+        sequence,
+      });
+      sequence += 1;
+    }
+  }
+return {
+  reachedLimit: false,
+  diagnostics: [
+    `A* exhausted ${expandedStates} states inside ${bounds.minX},${bounds.minY}–${bounds.maxX},${bounds.maxY}.`,
+  ],
+};
+}
+
+function searchRouteWithExpandingBounds(
   plan: GenerationPlan,
   edge: ConnectionEdge,
   routeStyle: CorridorRouteStyle,
@@ -675,126 +866,38 @@ function searchRoute(
   if (sourceExits.length === 0 || targetExits.length === 0) {
     return { reachedLimit: false };
   }
-  const stateCount = plan.width * plan.height * CORRIDOR_DIRECTIONS.length;
-  const distancesToTarget = createDistanceField(plan, targetExits);
-  const bestCost = new Float64Array(stateCount).fill(Number.POSITIVE_INFINITY);
-  const previous = new Int32Array(stateCount).fill(-1);
-  const startExitByState = new Int32Array(stateCount).fill(-1);
-  const targetExitByState = new Int32Array(stateCount).fill(-1);
-  const closed = new Uint8Array(stateCount);
-  const open = new MinHeap();
-  let sequence = 0;
-  const minMovementCost = costs.movement;
-
-  for (const [exitIndex, exit] of sourceExits.entries()) {
-    const stamp = inspectBrush(exit.position, exit.direction, width, edge, context);
-    if (!stamp.valid) continue;
-    const cellIndex = positionIndex(exit.position, plan.width);
-    const state = cellIndex * CORRIDOR_DIRECTIONS.length + exit.direction;
-    const routeCost = exit.preference * 0.04
-      + costs.movement
-      + (stamp.owners.size > 0 ? costs.reuseCorridor : costs.excavateWall);
-    if (routeCost >= bestCost[state]) continue;
-    bestCost[state] = routeCost;
-    startExitByState[state] = exitIndex;
-    const heuristicDistance = distancesToTarget[cellIndex];
-    open.push({
-      state,
-      cost: routeCost,
-      priority: routeCost + Math.max(0, heuristicDistance) * minMovementCost,
-      sequence,
-    });
-    sequence += 1;
+  // Retry with progressively wider bounds so local routes avoid scanning distant empty tiles.
+  let margin = 12;
+  const diagnostics: string[] = [];
+  while (true) {
+    const bounds = getRouteSearchBounds(plan, sourceExits, targetExits, margin);
+    const result = searchRoute(
+      plan,
+      edge,
+      routeStyle,
+      width,
+      sourceRoom,
+      targetRoom,
+      sourceExits,
+      targetExits,
+      context,
+      bounds,
+      costs,
+      maxExpandedStates,
+    );
+    diagnostics.push(...(result.diagnostics ?? []));
+    if (
+      result.route
+      || result.reachedLimit
+      || (
+        bounds.minX === 1
+        && bounds.minY === 1
+        && bounds.maxX === plan.width - 2
+        && bounds.maxY === plan.height - 2
+      )
+    ) return { ...result, diagnostics };
+    margin = Math.min(Math.max(plan.width, plan.height), margin * 2);
   }
-
-  for (const [exitIndex, exit] of targetExits.entries()) {
-    const approachDirection = (exit.direction + 2) % CORRIDOR_DIRECTIONS.length;
-    const cellIndex = positionIndex(exit.position, plan.width);
-    const state = cellIndex * CORRIDOR_DIRECTIONS.length + approachDirection;
-    const currentExit = targetExitByState[state];
-    if (currentExit < 0 || exit.preference < targetExits[currentExit].preference) {
-      targetExitByState[state] = exitIndex;
-    }
-  }
-
-  let expandedStates = 0;
-  while (open.size > 0) {
-    if (expandedStates >= maxExpandedStates) return { reachedLimit: true };
-    const entry = open.pop()!;
-    if (closed[entry.state] || entry.cost > bestCost[entry.state] + 1e-9) continue;
-    closed[entry.state] = 1;
-    expandedStates += 1;
-    const targetExitIndex = targetExitByState[entry.state];
-    if (targetExitIndex >= 0) {
-      const sourceExit = sourceExits[startExitByState[entry.state]];
-      return {
-        route: {
-          path: reconstructPath(entry.state, previous, plan.width),
-          sourceExit,
-          targetExit: targetExits[targetExitIndex],
-        },
-        reachedLimit: false,
-      };
-    }
-
-    const cellIndex = Math.floor(entry.state / CORRIDOR_DIRECTIONS.length);
-    const current = positionFromIndex(cellIndex, plan.width);
-    const incomingDirection = entry.state % CORRIDOR_DIRECTIONS.length;
-    for (let directionIndex = 0; directionIndex < CORRIDOR_DIRECTIONS.length; directionIndex += 1) {
-      if (previous[entry.state] < 0 && directionIndex !== incomingDirection) continue;
-      if ((directionIndex + 2) % CORRIDOR_DIRECTIONS.length === incomingDirection) continue;
-      const direction = CORRIDOR_DIRECTIONS[directionIndex];
-      const next = { x: current.x + direction.dx, y: current.y + direction.dy };
-      if (
-        next.x <= 0
-        || next.y <= 0
-        || next.x >= plan.width - 1
-        || next.y >= plan.height - 1
-      ) continue;
-
-      const turn = directionIndex !== incomingDirection;
-      if (turn && !inspectBrush(current, directionIndex, width, edge, context).valid) continue;
-      const nextStamp = inspectBrush(next, directionIndex, width, edge, context);
-      if (!nextStamp.valid) continue;
-      const nextCellIndex = positionIndex(next, plan.width);
-      const nextState = nextCellIndex * CORRIDOR_DIRECTIONS.length + directionIndex;
-      if (closed[nextState]) continue;
-      const existingPenalty = nextStamp.owners.size === 0
-        ? costs.excavateWall
-        : costs.reuseCorridor + (
-          [...nextStamp.owners].some((ownerId) => (
-            !getAllEdgesShareRoom(edge, context.edgeById.get(ownerId)!)
-          ))
-            ? costs.cycleJunction
-            : 0
-        );
-      const turnPenalty = turn ? getTurnCost(routeStyle, costs) : 0;
-      const bias = getSinuousBias(next, sourceRoom, targetRoom, routeStyle, plan.generation.seed, costs);
-      const targetExitIndexForNext = targetExitByState[nextState];
-      const destinationPreference = targetExitIndexForNext >= 0
-        ? targetExits[targetExitIndexForNext].preference * 0.04
-        : 0;
-      const nextCost = entry.cost
-        + costs.movement
-        + existingPenalty
-        + turnPenalty
-        + bias
-        + destinationPreference;
-      if (nextCost >= bestCost[nextState]) continue;
-      bestCost[nextState] = nextCost;
-      previous[nextState] = entry.state;
-      startExitByState[nextState] = startExitByState[entry.state];
-      const heuristicDistance = distancesToTarget[nextCellIndex];
-      open.push({
-        state: nextState,
-        cost: nextCost,
-        priority: nextCost + Math.max(0, heuristicDistance) * minMovementCost,
-        sequence,
-      });
-      sequence += 1;
-    }
-  }
-  return { reachedLimit: false };
 }
 
 function resolveConnectionOrder(
@@ -1068,6 +1171,7 @@ export function routeGenerationPlanCorridors(
   const obstacles = getObstacles(sourcePlan, roomAt);
   const edgeById = new Map(sourcePlan.connections.map((edge) => [edge.id, edge]));
   const cycleConnectionIds = new Set(sourcePlan.topology?.cycleConnectionIds ?? []);
+  const searchStateCount = sourcePlan.width * sourcePlan.height * CORRIDOR_DIRECTIONS.length;
   const context: RouterContext = {
     plan: sourcePlan,
     roomAt,
@@ -1076,6 +1180,12 @@ export function routeGenerationPlanCorridors(
     centerlineOwners: new Map(),
     edgeById,
     cycleConnectionIds,
+    searchWorkspace: {
+      bestCost: new Float64Array(searchStateCount),
+      previous: new Int32Array(searchStateCount),
+      status: new Uint32Array(searchStateCount),
+      generation: 0,
+    },
   };
   for (const intersection of sourcePlan.intersections) {
     const index = positionIndex(intersection.position, sourcePlan.width);
@@ -1126,7 +1236,7 @@ export function routeGenerationPlanCorridors(
         roomAt,
         obstacles,
       );
-      let search = searchRoute(
+      let search = searchRouteWithExpandingBounds(
         sourcePlan,
         originalEdge,
         routeStyle,
@@ -1145,7 +1255,7 @@ export function routeGenerationPlanCorridors(
           sourcePlan.width * sourcePlan.height * CORRIDOR_DIRECTIONS.length,
         );
         if (retryStateLimit > maxExpandedStates) {
-          search = searchRoute(
+          search = searchRouteWithExpandingBounds(
             sourcePlan,
             originalEdge,
             routeStyle,
@@ -1162,6 +1272,7 @@ export function routeGenerationPlanCorridors(
       }
       exitDiagnostics.push(
         `width ${width}: ${sourceExits.length} source exits, ${targetExits.length} target exits${search.reachedLimit ? ", state limit reached" : ""}`,
+        ...(search.diagnostics ?? []),
       );
       edgeSearchLimitHit ||= search.reachedLimit;
       if (!search.route) continue;

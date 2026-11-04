@@ -8,6 +8,7 @@ import {
   DUNGEON_GENERATOR_VERSION_V1,
   DOOR_TILE,
   FLOOR_TILE,
+  MAX_DUNGEON_WIDTH,
   STAIRS_UP_TILE,
   TRAP_DEFINITIONS,
 } from "./dungeon";
@@ -171,6 +172,20 @@ describe("GenerationPlan", () => {
     expect(validateGenerationPlan(createValidPlan())).toEqual({ valid: true, issues: [] });
   });
 
+  it("rejects a plan whose room count differs from the requested count", () => {
+    const plan = createValidPlan();
+    const incompletePlan = {
+      ...plan,
+      generation: {
+        ...plan.generation,
+        parameters: { ...plan.generation.parameters, roomCount: 6 },
+      },
+    };
+
+    expect(issueCodes(incompletePlan)).toContain("room-count-mismatch");
+    expect(() => generationPlanToDungeon(incompletePlan)).toThrow(GenerationPlanValidationError);
+  });
+
   it("allows distinct parallel paths between the same rooms", () => {
     const plan = createValidPlan();
     const alternativePath = [
@@ -257,6 +272,21 @@ describe("GenerationPlan", () => {
     };
     expect(issueCodes({ ...plan, rooms: [plan.rooms[0], invalidSectorRoom] }))
       .toContain("invalid-sector-reference");
+  });
+
+  it("rejects plans whose dimensions exceed the shared map budget", () => {
+    const plan = createValidPlan();
+    const width = MAX_DUNGEON_WIDTH + 1;
+    const oversizedPlan = {
+      ...plan,
+      width,
+      generation: {
+        ...plan.generation,
+        parameters: { ...plan.generation.parameters, width },
+      },
+    };
+
+    expect(issueCodes(oversizedPlan)).toContain("invalid-plan-dimensions");
   });
 
   it("requires paths for geometric connections and links for required rooms", () => {

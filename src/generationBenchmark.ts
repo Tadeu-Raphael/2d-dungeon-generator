@@ -7,6 +7,7 @@ import {
   EXTERIOR_CONNECTION_TILE,
   EXTERIOR_ENTRANCE_TILE,
   FLOOR_TILE,
+  assertSupportedDungeonDimensions,
   MAX_DUNGEON_SEED,
   PILLAR_TILE,
   ROOM_STAIRS_TILE,
@@ -39,6 +40,7 @@ import {
   validateDungeonTopology,
 } from "./generationTopology";
 import { validateGenerationPlan } from "./generationPlanValidation";
+import { generationPlanToDungeon } from "./generationPlanToDungeon";
 
 export interface GenerationBenchmarkOptions {
   baselines?: readonly DungeonGenerationBaseline[];
@@ -77,6 +79,7 @@ export interface GenerationBenchmarkRun {
   topologyStyle?: TopologyStyle;
   spatialLayoutStyle?: SpatialLayoutStyle;
   elapsedMs?: number;
+  rasterizationMs?: number;
   fallbackReason?: string;
   unsupportedReason?: string;
   dungeon?: Dungeon;
@@ -108,8 +111,8 @@ function isDungeonConcept(profile: string): profile is DungeonConcept {
   return Object.prototype.hasOwnProperty.call(DUNGEON_CONCEPTS, profile);
 }
 
-function positionKey(position: GridPosition): string {
-  return `${position.x},${position.y}`;
+function positionIndex(position: GridPosition, width: number): number {
+  return position.y * width + position.x;
 }
 
 function isTileWalkable(tile: number): boolean {
@@ -146,43 +149,56 @@ function findRoomAnchors(
 function floodTiles(
   dungeon: Dungeon,
   start: GridPosition | undefined,
-  blockedPositions: ReadonlySet<string> = new Set(),
-): Set<string> {
+  blockedPositions: ReadonlySet<number> = new Set(),
+): Uint8Array {
+  const visited = new Uint8Array(dungeon.width * dungeon.height);
   if (
     !start
-    || blockedPositions.has(positionKey(start))
+    || start.x < 0
+    || start.y < 0
+    || start.x >= dungeon.width
+    || start.y >= dungeon.height
+    || blockedPositions.has(positionIndex(start, dungeon.width))
     || !isTileWalkable(dungeon.tiles[start.y]?.[start.x] ?? WALL_TILE)
-  ) return new Set();
-  const visited = new Set<string>([positionKey(start)]);
-  const queue = [start];
-  for (let head = 0; head < queue.length; head += 1) {
-    const current = queue[head];
-    for (const next of [
-      { x: current.x + 1, y: current.y },
-      { x: current.x - 1, y: current.y },
-      { x: current.x, y: current.y + 1 },
-      { x: current.x, y: current.y - 1 },
-    ]) {
-      if (next.x < 0 || next.y < 0 || next.x >= dungeon.width || next.y >= dungeon.height) continue;
-      const key = positionKey(next);
-      if (
-        visited.has(key)
-        || blockedPositions.has(key)
-        || !isTileWalkable(dungeon.tiles[next.y][next.x])
-      ) continue;
-      visited.add(key);
-      queue.push(next);
-    }
+  ) return visited;
+  const queue = new Int32Array(visited.length);
+  let tail = 0;
+  const startIndex = positionIndex(start, dungeon.width);
+  visited[startIndex] = 1;
+  queue[tail] = startIndex;
+  tail += 1;
+  const visit = (nextIndex: number) => {
+    if (
+      nextIndex < 0
+      || visited[nextIndex]
+      || blockedPositions.has(nextIndex)
+    ) return;
+    const nextX = nextIndex % dungeon.width;
+    const nextY = Math.floor(nextIndex / dungeon.width);
+    if (!isTileWalkable(dungeon.tiles[nextY][nextX])) return;
+    visited[nextIndex] = 1;
+    queue[tail] = nextIndex;
+    tail += 1;
+  };
+  for (let head = 0; head < tail; head += 1) {
+    const currentIndex = queue[head];
+    const x = currentIndex % dungeon.width;
+    const y = Math.floor(currentIndex / dungeon.width);
+    if (y > 0) visit(currentIndex - dungeon.width);
+    if (x + 1 < dungeon.width) visit(currentIndex + 1);
+    if (y + 1 < dungeon.height) visit(currentIndex + dungeon.width);
+    if (x > 0) visit(currentIndex - 1);
   }
   return visited;
 }
 
 function getRoomIdsAtTiles(
   anchors: ReadonlyMap<string, GridPosition>,
-  visited: ReadonlySet<string>,
+  visited: Uint8Array,
+  width: number,
 ): Set<string> {
   return new Set([...anchors].flatMap(([roomId, position]) => (
-    visited.has(positionKey(position)) ? [roomId] : []
+    visited[positionIndex(position, width)] ? [roomId] : []
   )));
 }
 
@@ -238,20 +254,25 @@ export function auditGenerationConsistency(
     connections: physicalConnections,
   }).physical;
   const playerGraph = analyzeTopologyConnectivity(plan).playerAccess;
-  const physicalTiles = getRoomIdsAtTiles(anchors, floodTiles(dungeon, entryAnchor));
+  const physicalTiles = getRoomIdsAtTiles(
+    anchors,
+    floodTiles(dungeon, entryAnchor),
+    dungeon.width,
+  );
 
-  const inaccessibleDoorPositions = new Set<string>();
+  const inaccessibleDoorPositions = new Set<number>();
   for (const edge of plan.connections) {
     if (isConnectionPlayerAccessible(edge, {})) continue;
     for (const transition of plan.transitions) {
       if (transition.connectionId === edge.id) {
-        inaccessibleDoorPositions.add(positionKey(transition.position));
+        inaccessibleDoorPositions.add(positionIndex(transition.position, dungeon.width));
       }
     }
   }
   const playerTiles = getRoomIdsAtTiles(
     anchors,
     floodTiles(dungeon, entryAnchor, inaccessibleDoorPositions),
+    dungeon.width,
   );
   const physicalGraphRoomIds = new Set(physicalGraph.reachableRoomIds);
   const playerGraphRoomIds = new Set(playerGraph.reachableRoomIds);
@@ -260,21 +281,21 @@ export function auditGenerationConsistency(
   const playerGraphOnlyRoomIds = difference(playerGraphRoomIds, playerTiles);
   const playerTilesOnlyRoomIds = difference(playerTiles, playerGraphRoomIds);
 
-  const roomCells = new Set<string>();
+  const roomCells = new Set<number>();
   for (const room of plan.rooms) {
     for (const cell of room.footprint) {
-      roomCells.add(positionKey({
+      roomCells.add(positionIndex({
         x: room.position.x + cell.x,
         y: room.position.y + cell.y,
-      }));
+      }, dungeon.width));
     }
   }
-  const expectedCorridorCells = new Set<string>();
+  const expectedCorridorCells = new Set<number>();
   const routeTilesMissing: GridPosition[] = [];
   for (const edge of physicalConnections) {
     if (edge.path.length === 0 || edge.connectionType === "vertical") continue;
     for (const position of getCorridorPathBrush(edge.path, edge.width)) {
-      const key = positionKey(position);
+      const key = positionIndex(position, dungeon.width);
       expectedCorridorCells.add(key);
       if (roomCells.has(key)) continue;
       const tile = dungeon.tiles[position.y]?.[position.x] ?? WALL_TILE;
@@ -285,23 +306,23 @@ export function auditGenerationConsistency(
     const offset = Math.floor((intersection.width - 1) / 2);
     for (let y = 0; y < intersection.width; y += 1) {
       for (let x = 0; x < intersection.width; x += 1) {
-        expectedCorridorCells.add(positionKey({
+        expectedCorridorCells.add(positionIndex({
           x: intersection.position.x + x - offset,
           y: intersection.position.y + y - offset,
-        }));
+        }, dungeon.width));
       }
     }
   }
   const unmodeledCorridorTiles: GridPosition[] = [];
   for (let y = 0; y < dungeon.height; y += 1) {
     for (let x = 0; x < dungeon.width; x += 1) {
-      const position = { x, y };
+      const index = y * dungeon.width + x;
       if (
         dungeon.tiles[y][x] === CORRIDOR_TILE
-        && !roomCells.has(positionKey(position))
-        && !expectedCorridorCells.has(positionKey(position))
+        && !roomCells.has(index)
+        && !expectedCorridorCells.has(index)
       ) {
-        unmodeledCorridorTiles.push(position);
+        unmodeledCorridorTiles.push({ x, y });
       }
     }
   }
@@ -379,9 +400,12 @@ function collectMetrics(dungeon: Dungeon, plan?: GenerationPlan): GenerationBenc
       index === otherIndex ? [] : [Math.hypot(room.centerX - other.centerX, room.centerY - other.centerY)]
     )));
   });
-  const occupiedTileCount = dungeon.tiles.reduce((total, row) => (
-    total + row.filter((tile) => tile !== WALL_TILE && tile !== CAVE_CONNECTION_WALL_TILE).length
-  ), 0);
+  let occupiedTileCount = 0;
+  for (const row of dungeon.tiles) {
+    for (const tile of row) {
+      if (tile !== WALL_TILE && tile !== CAVE_CONNECTION_WALL_TILE) occupiedTileCount += 1;
+    }
+  }
   const roomTileCount = roomRects.reduce((total, room) => {
     let area = 0;
     for (let y = room.minY; y < room.maxY; y += 1) {
@@ -394,7 +418,7 @@ function collectMetrics(dungeon: Dungeon, plan?: GenerationPlan): GenerationBenc
   const anchors = findRoomAnchors(dungeon, plan);
   const startRoomId = plan?.entryRoomId ?? anchors.keys().next().value;
   const reachableTiles = floodTiles(dungeon, startRoomId ? anchors.get(startRoomId) : undefined);
-  const connectedRoomCount = getRoomIdsAtTiles(anchors, reachableTiles).size;
+  const connectedRoomCount = getRoomIdsAtTiles(anchors, reachableTiles, dungeon.width).size;
   const corridorLengths = plan?.connections
     .filter((edge) => (
       !edge.isBlocked
@@ -474,6 +498,19 @@ function generateBaselineRun(
     fallbackReason = result.fallbackReason;
   }
   const elapsedMs = globalThis.performance.now() - startedAt;
+  let rasterizationMs: number | undefined;
+  if (plan) {
+    const rasterizationStartedAt = globalThis.performance.now();
+    const rasterizedDungeon = generationPlanToDungeon(plan);
+    rasterizationMs = globalThis.performance.now() - rasterizationStartedAt;
+    if (
+      rasterizedDungeon.width !== generation.dungeon.width
+      || rasterizedDungeon.height !== generation.dungeon.height
+      || rasterizedDungeon.rooms !== generation.dungeon.rooms
+    ) {
+      throw new Error("Benchmark rasterization did not preserve the generated dungeon dimensions and room count.");
+    }
+  }
   const audit = plan ? auditGenerationConsistency(plan, generation.dungeon) : undefined;
   return {
     baselineId: baseline.id,
@@ -485,6 +522,7 @@ function generateBaselineRun(
     topologyStyle: plan?.topology?.style,
     spatialLayoutStyle: plan?.spatialLayout?.style,
     elapsedMs,
+    rasterizationMs,
     fallbackReason,
     dungeon: generation.dungeon,
     plan,
@@ -512,12 +550,7 @@ export function createCustomBenchmarkBaselines(options: {
   if (options.firstSeed > MAX_DUNGEON_SEED - options.seedCount + 1) {
     throw new RangeError(`Benchmark seeds must not exceed ${MAX_DUNGEON_SEED}.`);
   }
-  if (!Number.isSafeInteger(options.width) || options.width < 20 || options.width > 160) {
-    throw new RangeError("Benchmark width must be between 20 and 160.");
-  }
-  if (!Number.isSafeInteger(options.height) || options.height < 20 || options.height > 120) {
-    throw new RangeError("Benchmark height must be between 20 and 120.");
-  }
+  assertSupportedDungeonDimensions(options.width, options.height);
   if (!Number.isSafeInteger(options.roomCount) || options.roomCount < 1 || options.roomCount > 24) {
     throw new RangeError("Benchmark room count must be between 1 and 24.");
   }
@@ -617,7 +650,7 @@ export function createGenerationBenchmarkGalleryHtml(runs: readonly GenerationBe
       : run.fallbackReason
         ? `${run.requestedVersion.toUpperCase()} → ${run.effectiveVersion?.toUpperCase()}`
         : run.effectiveVersion?.toUpperCase() ?? "—";
-    return `<article class="card"><header><strong>${escapeHtml(run.baselineId)}</strong><span>${status}</span></header>${map}<dl><dt>Seed / perfil</dt><dd>${run.seed} / ${escapeHtml(run.profile)}</dd><dt>Salas / conexões</dt><dd>${metrics?.roomCount ?? "—"} / ${metrics?.connectionCount ?? "—"}</dd><dt>Ramos / ciclos / folhas</dt><dd>${metrics?.branchCount ?? "—"} / ${metrics?.cycleCount ?? "—"} / ${metrics?.deadEndCount ?? "—"}</dd><dt>Corredor médio</dt><dd>${formatMetric(metrics?.averageCorridorLength)}</dd><dt>Isoladas / área ocupada</dt><dd>${metrics?.isolatedRoomCount ?? "—"} / ${metrics ? `${formatMetric(metrics.occupiedAreaPercent)}%` : "—"}</dd><dt>Compactação / distância NN</dt><dd>${formatMetric(metrics?.compactness, 2)} / ${formatMetric(metrics?.averageNearestRoomDistance)}</dd><dt>Tempo</dt><dd>${formatMetric(run.elapsedMs, 2)} ms</dd></dl>${fallback}</article>`;
+    return `<article class="card"><header><strong>${escapeHtml(run.baselineId)}</strong><span>${status}</span></header>${map}<dl><dt>Seed / perfil</dt><dd>${run.seed} / ${escapeHtml(run.profile)}</dd><dt>Salas / conexões</dt><dd>${metrics?.roomCount ?? "—"} / ${metrics?.connectionCount ?? "—"}</dd><dt>Ramos / ciclos / folhas</dt><dd>${metrics?.branchCount ?? "—"} / ${metrics?.cycleCount ?? "—"} / ${metrics?.deadEndCount ?? "—"}</dd><dt>Corredor médio</dt><dd>${formatMetric(metrics?.averageCorridorLength)}</dd><dt>Isoladas / área ocupada</dt><dd>${metrics?.isolatedRoomCount ?? "—"} / ${metrics ? `${formatMetric(metrics.occupiedAreaPercent)}%` : "—"}</dd><dt>Compactação / distância NN</dt><dd>${formatMetric(metrics?.compactness, 2)} / ${formatMetric(metrics?.averageNearestRoomDistance)}</dd><dt>Geração</dt><dd>${formatMetric(run.elapsedMs, 2)} ms</dd><dt>Rasterização V2</dt><dd>${formatMetric(run.rasterizationMs, 2)} ms</dd></dl>${fallback}</article>`;
   }).join("");
   return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Benchmark de geração procedural</title><style>*{box-sizing:border-box}body{margin:0;padding:24px;background:#11151b;color:#e8e1d5;font:14px/1.5 system-ui,sans-serif}h1{font-size:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{padding:14px;border:1px solid #39414d;border-radius:10px;background:#1a2029}.card header{display:flex;justify-content:space-between;gap:8px;margin-bottom:12px}.card svg{display:block;width:100%;max-height:300px;image-rendering:pixelated;background:#15191f}.card dl{display:grid;grid-template-columns:1fr auto;gap:4px 12px}.card dt{color:#aaa}.card dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.notice{color:#e7b66c;font-size:12px}</style><h1>Benchmark de geração procedural</h1><p>${runs.length} resultados; as métricas topológicas são indisponíveis para o grafo legado V1.</p><main class="grid">${rows}</main></html>`;
 }

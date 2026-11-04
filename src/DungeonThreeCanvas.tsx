@@ -67,17 +67,14 @@ function getVisibleTile(tile: Tile, showWater: boolean, showLava: boolean): Tile
   return tile;
 }
 
-function createRoomCategoryGrid(dungeon: Dungeon): Array<Array<RoomTypeCategory | undefined>> {
-  const categories = Array.from(
-    { length: dungeon.height },
-    () => Array<RoomTypeCategory | undefined>(dungeon.width).fill(undefined),
-  );
+function createRoomCategoryGrid(dungeon: Dungeon): ReadonlyMap<number, RoomTypeCategory> {
+  const categories = new Map<number, RoomTypeCategory>();
 
   for (const room of dungeon.roomDetails) {
     for (let y = room.y; y < room.y + room.height; y += 1) {
       for (let x = room.x; x < room.x + room.width; x += 1) {
-        if (categories[y] && x >= 0 && x < dungeon.width) {
-          categories[y][x] = room.roomType.category;
+        if (y >= 0 && y < dungeon.height && x >= 0 && x < dungeon.width) {
+          categories.set(y * dungeon.width + x, room.roomType.category);
         }
       }
     }
@@ -388,7 +385,7 @@ export default function DungeonThreeCanvas({
         const coordinate = { x, y };
         floors.push({
           coordinate,
-          color: getFloorColor(tile, categories[y]?.[x]),
+          color: getFloorColor(tile, categories.get(y * dungeon.width + x)),
         });
         if (tile === PILLAR_TILE) pillars.push(coordinate);
         if (tile === WATER_TILE || CAVE_WATER_TILES.has(tile)) waterTiles.push(coordinate);

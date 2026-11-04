@@ -188,7 +188,16 @@ function getVisibleTile(tile: Tile, showWater: boolean, showLava: boolean): Tile
   return tile;
 }
 
-type RoomCategoryGrid = Array<Array<RoomTypeCategory | undefined>>;
+type RoomCategoryGrid = ReadonlyMap<number, RoomTypeCategory>;
+
+function getRoomCategory(
+  roomCategories: RoomCategoryGrid,
+  width: number,
+  x: number,
+  y: number,
+): RoomTypeCategory | undefined {
+  return roomCategories.get(y * width + x);
+}
 
 function isOpenCaveConnection(
   dungeon: Dungeon,
@@ -196,17 +205,24 @@ function isOpenCaveConnection(
   x: number,
   y: number,
 ): boolean {
-  return [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].some(([neighborX, neighborY]) => (
-    roomCategories[neighborY]?.[neighborX] !== undefined
-    && dungeon.tiles[neighborY]?.[neighborX] !== 0
-  ));
+  return (
+    (x + 1 < dungeon.width
+      && roomCategories.has(y * dungeon.width + x + 1)
+      && dungeon.tiles[y]?.[x + 1] !== 0)
+    || (x > 0
+      && roomCategories.has(y * dungeon.width + x - 1)
+      && dungeon.tiles[y]?.[x - 1] !== 0)
+    || (y + 1 < dungeon.height
+      && roomCategories.has((y + 1) * dungeon.width + x)
+      && dungeon.tiles[y + 1]?.[x] !== 0)
+    || (y > 0
+      && roomCategories.has((y - 1) * dungeon.width + x)
+      && dungeon.tiles[y - 1]?.[x] !== 0)
+  );
 }
 
 function createRoomCategoryGrid(dungeon: Dungeon): RoomCategoryGrid {
-  const categories: RoomCategoryGrid = Array.from(
-    { length: dungeon.height },
-    () => Array<RoomTypeCategory | undefined>(dungeon.width).fill(undefined),
-  );
+  const categories = new Map<number, RoomTypeCategory>();
   for (const room of dungeon.roomDetails) {
     const category = room.roomType.category;
     for (let y = room.y; y < room.y + room.height; y += 1) {
@@ -220,7 +236,7 @@ function createRoomCategoryGrid(dungeon: Dungeon): RoomCategoryGrid {
           && tile !== CAVE_BREACH_TILE
           && !CAVE_WATER_TILES.has(tile)
           && !CAVE_LAVA_TILES.has(tile)
-        ) categories[y][x] = category;
+        ) categories.set(y * dungeon.width + x, category);
       }
     }
   }
@@ -244,13 +260,8 @@ function createDungeonTileCanvas(
   for (let y = 0; y < dungeon.height; y += 1) {
     for (let x = 0; x < dungeon.width; x += 1) {
       const tile = getVisibleTile(dungeon.tiles[y][x], showWater, showLava);
-      const category = roomCategories[y][x];
-      const wallEdges = tile === 0 ? getWallEdges(dungeon.tiles, x, y) : [];
-      const wallColor = wallEdges.some((edge) => edge.bordersCave)
-        ? [107, 132, 108] as const
-        : wallEdges.length > 0
-          ? [66, 81, 95] as const
-          : null;
+      const category = getRoomCategory(roomCategories, dungeon.width, x, y);
+      const wallColor = tile === 0 ? getRasterWallColor(dungeon.tiles, x, y) : null;
       const [red, green, blue] = tile === 1 && category
         ? ROOM_TYPE_CATEGORIES[category].rgb
         : tile === CAVE_TILE && isOpenCaveConnection(dungeon, roomCategories, x, y)
@@ -276,6 +287,37 @@ type WallSide = "top" | "right" | "bottom" | "left";
 interface WallEdge {
   side: WallSide;
   bordersCave: boolean;
+}
+
+function isWallEdgeNeighbor(tile: Tile): boolean {
+  return tile !== 0 && tile !== CAVE_CONNECTION_WALL_TILE && tile !== PILLAR_TILE;
+}
+
+function isCaveEdgeNeighbor(tile: Tile): boolean {
+  return tile === CAVE_TILE
+    || tile === CAVE_BREACH_TILE
+    || CAVE_WATER_TILES.has(tile)
+    || CAVE_LAVA_TILES.has(tile);
+}
+
+function getRasterWallColor(tiles: Tile[][], x: number, y: number): readonly [number, number, number] | null {
+  const top = tiles[y - 1]?.[x] ?? 0;
+  const right = tiles[y]?.[x + 1] ?? 0;
+  const bottom = tiles[y + 1]?.[x] ?? 0;
+  const left = tiles[y]?.[x - 1] ?? 0;
+  if (
+    isCaveEdgeNeighbor(top)
+    || isCaveEdgeNeighbor(right)
+    || isCaveEdgeNeighbor(bottom)
+    || isCaveEdgeNeighbor(left)
+  ) return [107, 132, 108];
+  if (
+    isWallEdgeNeighbor(top)
+    || isWallEdgeNeighbor(right)
+    || isWallEdgeNeighbor(bottom)
+    || isWallEdgeNeighbor(left)
+  ) return [66, 81, 95];
+  return null;
 }
 
 function getWallEdges(tiles: Tile[][], x: number, y: number): WallEdge[] {
@@ -964,7 +1006,7 @@ export function createDungeonSvg(dungeon: Dungeon): string {
       const tile = dungeon.tiles[y][x];
       const tileX = x * tileSize;
       const tileY = y * tileSize;
-      const category = roomCategories[y][x];
+      const category = getRoomCategory(roomCategories, dungeon.width, x, y);
       const roomFloorColor = category ? ROOM_TYPE_CATEGORIES[category].color : "#d1b987";
       const rect = (rx: number, ry: number, rw: number, rh: number, fill: string, extra = "") =>
         `<rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" fill="${fill}" ${extra}/>`;
@@ -1341,12 +1383,26 @@ export default function DungeonCanvas({
         sprite.height = mapHeight;
         map.addChild(sprite);
       }
-      for (let y = 0; y < dungeon.height; y += 1) {
-        for (let x = 0; x < dungeon.width; x += 1) {
+      const displayedTileSize = tileSize * zoom;
+      const firstVisibleX = useRasterBase && showFeatures
+        ? Math.max(0, Math.floor(-map.x / displayedTileSize) - 1)
+        : 0;
+      const lastVisibleX = useRasterBase && showFeatures
+        ? Math.min(dungeon.width, Math.ceil((app.screen.width - map.x) / displayedTileSize) + 1)
+        : dungeon.width;
+      const firstVisibleY = useRasterBase && showFeatures
+        ? Math.max(0, Math.floor(-map.y / displayedTileSize) - 1)
+        : 0;
+      const lastVisibleY = useRasterBase && showFeatures
+        ? Math.min(dungeon.height, Math.ceil((app.screen.height - map.y) / displayedTileSize) + 1)
+        : dungeon.height;
+      if (!useRasterBase || showFeatures) {
+        for (let y = firstVisibleY; y < lastVisibleY; y += 1) {
+          for (let x = firstVisibleX; x < lastVisibleX; x += 1) {
           const tile = getVisibleTile(dungeon.tiles[y][x], showWater, showLava);
           const tileX = x * tileSize;
           const tileY = y * tileSize;
-          const category = roomCategories[y][x];
+          const category = getRoomCategory(roomCategories, dungeon.width, x, y);
           const roomFloorColor = category ? ROOM_TYPE_CATEGORIES[category].color : "#d1b987";
           if (useRasterBase) {
             if (showFeatures) {
@@ -1392,6 +1448,7 @@ export default function DungeonCanvas({
             }
           } else {
             drawTileFeature(features, tile, tileX, tileY, tileSize);
+          }
           }
         }
       }

@@ -12,7 +12,7 @@ Aplicação web interativa para gerar, explorar e exportar mapas de masmorras pa
 - **Oito conceitos de masmorra**, cada um com regras próprias para geração e distribuição de salas, armadilhas e tesouros.
 - **Geração procedural combinável** com BSP, Cellular Automata e Drunkard's Walk.
 - **Dois pipelines disponíveis**: V1 permanece como padrão; V2 gera topologia, layout e corredores por meio de `GenerationPlan`.
-- **Seed reproduzível** e dimensões configuráveis: de 20 a 160 tiles de largura e de 20 a 120 tiles de altura.
+- **Seed reproduzível** e dimensões configuráveis: de 20 a 1.000 tiles por eixo, com orçamento máximo de 250.000 tiles.
 - **Salas ajustáveis**: de 4 a 24 salas, 13 formatos, sete portes, proporções retangulares e frequências personalizáveis para 11 categorias e 168 funções.
 - **Cavernas naturais opcionais**, além do conceito Caverna natural, que gera cavernas sem salas estruturadas.
 - **Elementos de mapa** como portas, escadas, colunas, água e lava; as camadas de água e lava podem ser exibidas ou ocultadas.
@@ -20,6 +20,22 @@ Aplicação web interativa para gerar, explorar e exportar mapas de masmorras pa
 - **Guia de salas, armadilhas e tesouros** com detalhes, metadados e resumos por mapa. O catálogo inclui 138 armadilhas em nove categorias e tesouros em dez categorias.
 - **Reposicionamento de salas** por arraste, ajustado à grade, sem sobreposição ou saída dos limites; os corredores são recalculados e a conectividade é preservada.
 - **Exportação do mapa em SVG e PNG.**
+
+## Limites de escala
+
+A aplicação aceita mapas de 20 a 1.000 tiles em cada eixo, limitados também a 250.000 tiles no total. O limite de área foi definido por benchmark: 500×500 foi gerado pela V2 em cerca de 630 ms, enquanto 1000×1000 levou cerca de 452 s, falhou no roteamento V2 e caiu para V1. O teto preserva a matriz legada `Dungeon.tiles` e limita o roteador direcional a, no máximo, um milhão de estados A*; dimensões fora desses limites são rejeitadas antes da geração, em vez de alocar matrizes sem limite. A exportação reduz a escala para permanecer abaixo de 16 milhões de pixels.
+
+No V2, salas e conexões permanecem no `GenerationPlan` até a conversão final. A busca de posições adapta sua resolução ao tamanho do mapa e refina localmente cada candidato; o roteador mantém índices compactos de salas/obstáculos e reutiliza buffers tipados entre conexões. O benchmark verifica o grafo contra um BFS em tiles com filas tipadas e mede separadamente a rasterização:
+
+| Dimensões | Salas | Conexões | Geração | Rasterização V2 | Resultado |
+|---|---:|---:|---:|---:|---|
+| 160×120 | 6 | 6 | 177 ms | 1,2 ms | V2, sem falhas |
+| 250×250 | 8 | 8 | 472 ms | 3,1 ms | V2, sem falhas |
+| 400×300 | 12 | 12 | 740 ms | 3,7 ms | V2, sem falhas |
+| 500×500 | 16 | 17 | 630 ms | 5,3 ms | V2, sem falhas |
+| 1000×1000 | 24 req./— ger. | — | 452.301 ms | — | Quatro layouts sem rota; fallback V1; acima do limite atual |
+
+As medições usam seeds fixas da suíte de benchmark e representam o ambiente local, não uma garantia de tempo em todos os dispositivos. Memória e tempo de renderização Three.js não foram medidos. A prévia 2D usa uma base rasterizada e desenha detalhes apenas na região visível em mapas grandes.
 
 ## Conceitos
 
@@ -56,7 +72,7 @@ O despacho V1 respeita os algoritmos declarados em `dungeonProfiles.ts`: o templ
 
 ### Integração do pipeline V2
 
-`generateDungeonPipeline` é o ponto de entrada usado pela interface para V1 e V2. A V2 utiliza BSP como receita de dimensões e conteúdo de salas; em seguida cria `RoomNode`s, aplica as afinidades probabilísticas do perfil, gera topologia e caminho principal, posiciona as salas, transfere armadilhas/elementos de sala, roteia corredores, valida o plano e converte o resultado para `Dungeon`. O perfil influencia estilo espacial, porte das salas, densidade e largura dos corredores sem substituir as categorias ou os pesos temáticos existentes.
+`generateDungeonPipeline` é o ponto de entrada usado pela interface para V1 e V2. A V2 usa o BSP V1 para produzir uma receita de dimensões e conteúdo de salas; esse estágio cria uma `Dungeon` intermediária cujos dados são extraídos para `RoomNode`s. Em seguida, a V2 aplica as afinidades probabilísticas do perfil, gera topologia e caminho principal, posiciona as salas, transfere armadilhas/elementos de sala, roteia corredores, valida o plano e converte o resultado para `Dungeon`. O perfil influencia estilo espacial, porte das salas, densidade e largura dos corredores sem substituir as categorias ou os pesos temáticos existentes.
 
 Os controles V2 permitem substituir a topologia e o estilo espacial sugeridos pelo perfil, ajustar conexões/ciclos, compactação e variação das larguras. A seed reproduz grafo, layout, rotas e tiles. `metadata.generatorVersion` identifica a versão efetivamente usada; em um fallback V2→V1, `requestedGeneratorVersion`, `fallbackReason` e `fallbackStage` tornam a decisão explícita.
 
@@ -99,7 +115,7 @@ layout.spatialLayout?.metrics.score;
 
 O posicionamento combina âncoras por estilo, relaxação force-directed de atrações/repulsões e empacotamento de retângulos com footprints como aproximação conservadora de colisão. O estilo `clusters` divide zonas por BSP apenas para posicionar setores/agrupamentos; os outros estilos não usam zoneamento BSP. As distâncias de conexões influenciam o layout e são verificadas contra `maximumConnectionDistance`. A busca é limitada, determinística pela seed e pelo subfluxo `placement`; tenta reduzir o espaçamento e, como último recurso, girar ou reduzir salas somente dentro dos limites registrados em `generationBounds`. Se não for possível posicionar todas as salas ou respeitar o limite de distância, `SpatialLayoutError` informa as salas/conexões afetadas — elas não são descartadas silenciosamente.
 
-`spatialLayout` registra `layout-v1`, estilo, contagem de tentativas, ajustes aplicados e métricas de sobreposição, distâncias, compactação, cobertura, topologia, espaço para corredores, agrupamento por setor e pontuação ponderada. A busca é limitada pela área do mapa, pelas variantes de cada sala e por até cinco tentativas; cada candidato compara no máximo 24 retângulos. Como o projeto limita a dungeon a 24 salas e 160 × 120 tiles, esse limite foi preferido a um índice espacial adicional. A divisão de zonas BSP serve apenas como âncora de clusters e não substitui o gerador legado.
+`spatialLayout` registra `layout-v1`, estilo, contagem de tentativas, ajustes aplicados e métricas de sobreposição, distâncias, compactação, cobertura, topologia, espaço para corredores, agrupamento por setor e pontuação ponderada. A busca é limitada pela área do mapa, pelas variantes de cada sala e por até cinco tentativas; cada candidato compara no máximo 24 retângulos. Como o projeto limita a dungeon a 24 salas, essa comparação limitada foi preferida a um índice espacial adicional. A divisão de zonas BSP serve apenas como âncora de clusters e não substitui o gerador legado.
 
 O layout ainda não roteia corredores: as arestas ficam com `path` vazio e `geometryStatus: "unrouted"`. O roteador descrito a seguir transforma esse layout em uma planta física. O fluxo V1, seus perfis, o reposicionamento/BFS e os renderizadores existentes permanecem inalterados.
 

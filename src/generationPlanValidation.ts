@@ -1,7 +1,5 @@
 import {
-  MAX_DUNGEON_HEIGHT,
-  MAX_DUNGEON_WIDTH,
-  MIN_DUNGEON_DIMENSION,
+  isSupportedDungeonDimensions,
 } from "./dungeon";
 import { getCorridorPathBrush } from "./generationCorridorGeometry";
 import type {
@@ -16,6 +14,7 @@ export type GenerationPlanValidationIssueCode =
   | "invalid-plan-id"
   | "invalid-plan-dimensions"
   | "generation-dimension-mismatch"
+  | "room-count-mismatch"
   | "invalid-entity-id"
   | "duplicate-entity-id"
   | "invalid-room-dimensions"
@@ -242,17 +241,12 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
     addIssue("invalid-plan-id", "id", "The GenerationPlan ID cannot be empty.");
   }
   if (
-    !Number.isSafeInteger(plan.width)
-    || !Number.isSafeInteger(plan.height)
-    || plan.width < MIN_DUNGEON_DIMENSION
-    || plan.height < MIN_DUNGEON_DIMENSION
-    || plan.width > MAX_DUNGEON_WIDTH
-    || plan.height > MAX_DUNGEON_HEIGHT
+    !isSupportedDungeonDimensions(plan.width, plan.height)
   ) {
     addIssue(
       "invalid-plan-dimensions",
       "dimensions",
-      `GenerationPlan dimensions must be between ${MIN_DUNGEON_DIMENSION} and the supported map limits.`,
+      "GenerationPlan dimensions exceed the supported per-axis or total-tile limits.",
     );
   }
   if (
@@ -263,6 +257,13 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
       "generation-dimension-mismatch",
       "generation.parameters",
       "Generation metadata dimensions must match the GenerationPlan dimensions.",
+    );
+  }
+  if (plan.rooms.length !== plan.generation.parameters.roomCount) {
+    addIssue(
+      "room-count-mismatch",
+      "rooms",
+      `GenerationPlan contains ${plan.rooms.length} rooms, but ${plan.generation.parameters.roomCount} were requested.`,
     );
   }
 

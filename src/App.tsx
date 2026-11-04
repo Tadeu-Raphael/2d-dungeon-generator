@@ -26,9 +26,11 @@ import {
   MAX_DUNGEON_HEIGHT,
   MAX_DUNGEON_ROOM_COUNT,
   MAX_DUNGEON_SEED,
+  MAX_DUNGEON_TILE_COUNT,
   MAX_DUNGEON_WIDTH,
   MIN_DUNGEON_DIMENSION,
   PILLAR_TILE,
+  isSupportedDungeonDimensions,
   repositionDungeonRooms,
   ROOM_STAIRS_TILE,
   ROOM_SHAPE_DEFINITIONS,
@@ -852,6 +854,25 @@ function createSeed(): number {
   return Math.floor(Math.random() * 900_000_000) + 100_000_000;
 }
 
+function getDimensionValidationMessage(width: number, height: number): string | undefined {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
+    return "Informe largura e altura como números inteiros.";
+  }
+  if (width < MIN_DUNGEON_DIMENSION || height < MIN_DUNGEON_DIMENSION) {
+    return `Cada dimensão deve ter pelo menos ${MIN_DUNGEON_DIMENSION} tiles.`;
+  }
+  if (width > MAX_DUNGEON_WIDTH) {
+    return `A largura máxima é ${MAX_DUNGEON_WIDTH.toLocaleString("pt-BR")} tiles.`;
+  }
+  if (height > MAX_DUNGEON_HEIGHT) {
+    return `A altura máxima é ${MAX_DUNGEON_HEIGHT.toLocaleString("pt-BR")} tiles.`;
+  }
+  if (width * height > MAX_DUNGEON_TILE_COUNT) {
+    return `A área máxima é ${MAX_DUNGEON_TILE_COUNT.toLocaleString("pt-BR")} tiles.`;
+  }
+  return undefined;
+}
+
 export default function App() {
   const [concept, setConcept] = useState<DungeonConcept>("military-fortress");
   const [generatorVersion, setGeneratorVersion] = useState<
@@ -867,6 +888,7 @@ export default function App() {
   const [parameters, setParameters] = useState<DungeonParameters>(DEFAULT_DUNGEON_PARAMETERS);
   const [widthDraft, setWidthDraft] = useState(String(DEFAULT_DUNGEON_PARAMETERS.width));
   const [heightDraft, setHeightDraft] = useState(String(DEFAULT_DUNGEON_PARAMETERS.height));
+  const [dimensionDraftError, setDimensionDraftError] = useState<string>();
   const [focusRequest, setFocusRequest] = useState<MapFocusRequest | null>(null);
   const [roomDetailNumber, setRoomDetailNumber] = useState<number | null>(null);
   const [roomDetailSection, setRoomDetailSection] = useState<RoomMetadataSection | null>(null);
@@ -1012,9 +1034,13 @@ export default function App() {
     else setHeightDraft(value);
 
     const parsed = Number(value);
-    const maximum = key === "width" ? MAX_DUNGEON_WIDTH : MAX_DUNGEON_HEIGHT;
-    if (Number.isInteger(parsed) && parsed >= MIN_DUNGEON_DIMENSION && parsed <= maximum) {
+    const nextWidth = key === "width" ? parsed : parameters.width;
+    const nextHeight = key === "height" ? parsed : parameters.height;
+    if (isSupportedDungeonDimensions(nextWidth, nextHeight)) {
+      setDimensionDraftError(undefined);
       setParameters((current) => ({ ...current, [key]: parsed }));
+    } else {
+      setDimensionDraftError(getDimensionValidationMessage(nextWidth, nextHeight));
     }
   };
   const updateSeedDraft = (value: string) => {
@@ -1070,8 +1096,15 @@ export default function App() {
     const value = Number.isFinite(parsed)
       ? Math.min(maximum, Math.max(MIN_DUNGEON_DIMENSION, Math.round(parsed)))
       : parameters[key];
+    const nextWidth = key === "width" ? value : parameters.width;
+    const nextHeight = key === "height" ? value : parameters.height;
+    if (!isSupportedDungeonDimensions(nextWidth, nextHeight)) {
+      setDimensionDraftError(getDimensionValidationMessage(nextWidth, nextHeight));
+      return;
+    }
     if (key === "width") setWidthDraft(String(value));
     else setHeightDraft(String(value));
+    setDimensionDraftError(undefined);
     setParameters((current) => ({ ...current, [key]: value }));
   };
   const updateRoomShapeFrequency = (key: keyof RoomShapeFrequencies, value: number) => {
@@ -1453,6 +1486,7 @@ export default function App() {
                       max={MAX_DUNGEON_WIDTH}
                       step={1}
                       value={widthDraft}
+                      aria-invalid={Boolean(dimensionDraftError)}
                       onChange={(event) => updateDimensionDraft("width", event.currentTarget.value)}
                       onBlur={() => commitDimension("width")}
                       aria-describedby="dimension-hint"
@@ -1467,6 +1501,7 @@ export default function App() {
                       max={MAX_DUNGEON_HEIGHT}
                       step={1}
                       value={heightDraft}
+                      aria-invalid={Boolean(dimensionDraftError)}
                       onChange={(event) => updateDimensionDraft("height", event.currentTarget.value)}
                       onBlur={() => commitDimension("height")}
                       aria-describedby="dimension-hint"
@@ -1474,8 +1509,11 @@ export default function App() {
                   </label>
                 </div>
                 <p className="dimension-hint" id="dimension-hint">
-                  Largura: {MIN_DUNGEON_DIMENSION}–{MAX_DUNGEON_WIDTH} · altura: {MIN_DUNGEON_DIMENSION}–{MAX_DUNGEON_HEIGHT} tiles.
+                  Largura e altura: {MIN_DUNGEON_DIMENSION}–{MAX_DUNGEON_WIDTH.toLocaleString("pt-BR")} tiles; área máxima: {MAX_DUNGEON_TILE_COUNT.toLocaleString("pt-BR")} tiles.
                 </p>
+                {dimensionDraftError && (
+                  <p className="generation-notice" role="alert">{dimensionDraftError}</p>
+                )}
                 {generationRun.metadata.generatorVersion === DUNGEON_GENERATOR_VERSION_V1
                   && algorithmControls[algorithm].length > 0 && (
                   <div className="parameter-list">

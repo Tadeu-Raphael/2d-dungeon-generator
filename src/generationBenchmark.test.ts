@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_DUNGEON_PARAMETERS,
   DUNGEON_GENERATOR_VERSION_V1,
   DUNGEON_GENERATOR_VERSION_V2,
+  MAX_DUNGEON_HEIGHT,
   MAX_DUNGEON_SEED,
+  MAX_DUNGEON_TILE_COUNT,
+  MAX_DUNGEON_WIDTH,
   generateDungeonVersioned,
 } from "./dungeon";
 import { DUNGEON_CONCEPTS } from "./dungeonProfiles";
@@ -75,7 +79,16 @@ describe("generation benchmark and dual connectivity audit", () => {
         expect(v2.fallbackReason).toMatch(/Caverna natural/);
         continue;
       }
-      expect(v2.metrics?.isolatedRoomCount, v2.fallbackReason).toBe(0);
+      if (baselineRun.baseline.id === "small-fortress-bsp") {
+        expect(v2.effectiveVersion, v2.fallbackReason).toBe(DUNGEON_GENERATOR_VERSION_V2);
+        expect(v2.plan?.rooms).toHaveLength(6);
+        expect(v2.metadata?.settings).toMatchObject({
+          requestedRoomCount: 6,
+          generatedRoomCount: 6,
+          roomCountComplete: true,
+        });
+      }
+      expect(v2.metrics?.isolatedRoomCount, `${baselineRun.baseline.id}: ${v2.fallbackReason ?? ""}`).toBe(0);
       if (v2.plan) {
         expect(v2.audit?.issues, v2.baselineId).toEqual([]);
         expect(v2.audit?.physicalConnectivityMatchesTiles).toBe(true);
@@ -237,6 +250,26 @@ describe("generation benchmark and dual connectivity audit", () => {
       corridorWidth: 1,
     }));
     const runs = runGenerationBenchmark({ baselines });
+    const maximumV2 = getRun(
+      runs,
+      "custom-military-fortress-81004",
+      DUNGEON_GENERATOR_VERSION_V2,
+    );
+    expect(maximumV2.effectiveVersion, maximumV2.fallbackReason).toBe(DUNGEON_GENERATOR_VERSION_V2);
+    expect(maximumV2.plan?.rooms).toHaveLength(24);
+    expect(maximumV2.metadata?.settings).toMatchObject({
+      requestedRoomCount: 24,
+      generatedRoomCount: 24,
+      roomCountComplete: true,
+    });
+    const recoveredSmallMap = getRun(
+      runs,
+      "custom-military-fortress-81001",
+      DUNGEON_GENERATOR_VERSION_V2,
+    );
+    expect(recoveredSmallMap.effectiveVersion, recoveredSmallMap.fallbackReason)
+      .toBe(DUNGEON_GENERATOR_VERSION_V2);
+    expect(recoveredSmallMap.metadata?.settings.roomRecipeAttempts).toBeGreaterThan(1);
 
     for (const run of runs) {
       expect(Number.isFinite(run.elapsedMs)).toBe(true);
@@ -256,6 +289,112 @@ describe("generation benchmark and dual connectivity audit", () => {
       fallback: Boolean(run.fallbackReason),
     }))));
   });
+
+  it("benchmarks large V2 maps with graph, tile, and rasterization checks", () => {
+    const cases = [
+      { width: 160, height: 120, roomCount: 6, seed: 83001 },
+      { width: 250, height: 250, roomCount: 8, seed: 83002 },
+      { width: 400, height: 300, roomCount: 12, seed: 83003 },
+      { width: 500, height: 500, roomCount: 16, seed: 83004 },
+    ];
+    expect(MAX_DUNGEON_WIDTH).toBe(1_000);
+    expect(MAX_DUNGEON_HEIGHT).toBe(1_000);
+    expect(MAX_DUNGEON_TILE_COUNT).toBe(250_000);
+    expect(() => createCustomBenchmarkBaselines({
+      profile: "military-fortress",
+      firstSeed: 83006,
+      seedCount: 1,
+      width: MAX_DUNGEON_WIDTH + 1,
+      height: 250,
+      roomCount: 8,
+      corridorWidth: 1,
+    })).toThrow(/width must not exceed 1000/i);
+    expect(() => createCustomBenchmarkBaselines({
+      profile: "military-fortress",
+      firstSeed: 83005,
+      seedCount: 1,
+      width: 1_000,
+      height: 1_000,
+      roomCount: 24,
+      corridorWidth: 1,
+    })).toThrow(/area must not exceed 250000/i);
+    expect(() => generateDungeonVersioned({
+      generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
+      algorithm: "bsp",
+      seed: 83005,
+      profile: "military-fortress",
+      parameters: {
+        ...DEFAULT_DUNGEON_PARAMETERS,
+        width: 1_000,
+        height: 1_000,
+        roomCount: 24,
+      },
+    })).toThrow(/area must not exceed 250000/i);
+
+    for (const requested of cases) {
+      const [baseline] = createCustomBenchmarkBaselines({
+        profile: "military-fortress",
+        firstSeed: requested.seed,
+        seedCount: 1,
+        width: requested.width,
+        height: requested.height,
+        roomCount: requested.roomCount,
+        corridorWidth: 1,
+      });
+      const [run] = runGenerationBenchmark({
+        baselines: [baseline],
+        versions: [DUNGEON_GENERATOR_VERSION_V2],
+      });
+      console.log("Large-map benchmark:", JSON.stringify({
+        size: `${requested.width}×${requested.height}`,
+        rooms: run.metrics?.roomCount,
+        connections: run.metrics?.connectionCount,
+        generationMs: run.elapsedMs?.toFixed(2),
+        rasterizationMs: run.rasterizationMs?.toFixed(2),
+        routeFailures: run.audit?.issues.length,
+        fallback: Boolean(run.fallbackReason),
+      }));
+      expect(run.effectiveVersion, run.fallbackReason).toBe(DUNGEON_GENERATOR_VERSION_V2);
+      expect(run.dungeon).toMatchObject({
+        width: requested.width,
+        height: requested.height,
+        rooms: requested.roomCount,
+      });
+      expect(run.plan?.rooms).toHaveLength(requested.roomCount);
+      expect(run.metrics?.connectionCount).toBeGreaterThan(0);
+      expect(run.elapsedMs).toEqual(expect.any(Number));
+      expect(run.rasterizationMs).toEqual(expect.any(Number));
+      expect(run.audit).toMatchObject({
+        planValid: true,
+        topologyValid: true,
+        physicalConnectivityMatchesTiles: true,
+        playerAccessibilityMatchesTiles: true,
+        roomCountMatchesTiles: true,
+        routeTilesMissing: [],
+        unmodeledCorridorTiles: [],
+        invalidDoorTransitions: [],
+        physicalGraphOnlyRoomIds: [],
+        physicalTilesOnlyRoomIds: [],
+        playerGraphOnlyRoomIds: [],
+        playerTilesOnlyRoomIds: [],
+        issues: [],
+      });
+    }
+
+    const legacy = generateDungeonVersioned({
+      generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
+      algorithm: "bsp",
+      seed: 83007,
+      profile: "military-fortress",
+      parameters: {
+        ...DEFAULT_DUNGEON_PARAMETERS,
+        width: 250,
+        height: 250,
+        roomCount: 8,
+      },
+    });
+    expect(legacy.dungeon).toMatchObject({ width: 250, height: 250, rooms: 8 });
+  }, 120_000);
 
   it("covers every profile, corridor width, and baseline V2 accessibility", () => {
     const profiles = Object.keys(DUNGEON_CONCEPTS) as Array<keyof typeof DUNGEON_CONCEPTS>;

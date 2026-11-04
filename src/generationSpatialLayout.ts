@@ -1,8 +1,6 @@
 import {
-  MAX_DUNGEON_HEIGHT,
-  MAX_DUNGEON_WIDTH,
-  MIN_DUNGEON_DIMENSION,
   createGenerationRandomStreams,
+  isSupportedDungeonDimensions,
 } from "./dungeon";
 import type { RoomGenerationBounds } from "./dungeon";
 import type {
@@ -104,6 +102,7 @@ const MAX_PLACEMENT_ATTEMPTS = 5;
 const MAX_FORCE_ITERATIONS = 100;
 const DEFAULT_FORCE_ITERATIONS = 42;
 const MAX_IMPORTANT_CLEARANCE = 8;
+const MAX_PLACEMENT_SEARCH_POINTS = 16_384;
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
@@ -867,6 +866,11 @@ function buildPlacementAttempt(
     const variants = createRoomVariants(room, allowRotation, allowResize);
     let bestPlacement: RoomPlacement | undefined;
     let bestScore = Number.POSITIVE_INFINITY;
+    const placementStep = plan.width * plan.height <= 160 * 120
+      ? 1
+      : Math.max(1, Math.ceil(Math.sqrt(
+        plan.width * plan.height / MAX_PLACEMENT_SEARCH_POINTS,
+      )));
     const target = targetCenters.get(room.id) ?? { x: plan.width / 2, y: plan.height / 2 };
     for (const variant of variants) {
       const maxX = plan.width - variant.width - 1;
@@ -884,46 +888,105 @@ function buildPlacementAttempt(
         targetY - 1,
         maxY - targetY,
       );
-      for (let radius = 0; radius <= maxRadius; radius += 1) {
-        const minY = Math.max(1, targetY - radius);
-        const maxRingY = Math.min(maxY, targetY + radius);
-        const minX = Math.max(1, targetX - radius);
-        const maxRingX = Math.min(maxX, targetX + radius);
-        for (let y = minY; y <= maxRingY; y += 1) {
-          for (let x = minX; x <= maxRingX; x += 1) {
-            if (Math.max(Math.abs(x - targetX), Math.abs(y - targetY)) !== radius) continue;
-            const rectangle = { x, y, width: variant.width, height: variant.height };
-            if (doesPlacementConflict(
-              room,
-              rectangle,
-              placements,
-              pairByKey,
-              baseGap,
-              corridorWidth,
-              importantRoomClearance,
-            )) {
-              continue;
-            }
-            const score = scoreCandidate(
-              room,
-              rectangle,
-              variant,
-              target,
-              sectorCenterByRoomId.get(room.id),
-              placements,
-              pairByKey,
-              baseGap,
-              corridorWidth,
-              maximumConnectionDistance,
-              random,
-            );
-            if (score < bestScore) {
-              bestScore = score;
-              bestPlacement = { room, rectangle, variant };
+      const maxRing = Math.ceil(maxRadius / placementStep);
+      const visited = new Set<number>();
+      let variantBestPlacement: RoomPlacement | undefined;
+      let variantBestScore = Number.POSITIVE_INFINITY;
+      const evaluateCandidate = (x: number, y: number): void => {
+        const candidateX = clamp(x, 1, maxX);
+        const candidateY = clamp(y, 1, maxY);
+        const candidateIndex = candidateY * (maxX + 1) + candidateX;
+        if (visited.has(candidateIndex)) return;
+        visited.add(candidateIndex);
+        const rectangle = {
+          x: candidateX,
+          y: candidateY,
+          width: variant.width,
+          height: variant.height,
+        };
+        if (doesPlacementConflict(
+          room,
+          rectangle,
+          placements,
+          pairByKey,
+          baseGap,
+          corridorWidth,
+          importantRoomClearance,
+        )) return;
+        const score = scoreCandidate(
+          room,
+          rectangle,
+          variant,
+          target,
+          sectorCenterByRoomId.get(room.id),
+          placements,
+          pairByKey,
+          baseGap,
+          corridorWidth,
+          maximumConnectionDistance,
+          random,
+        );
+        if (score < variantBestScore) {
+          variantBestScore = score;
+          variantBestPlacement = { room, rectangle, variant };
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          bestPlacement = { room, rectangle, variant };
+        }
+      };
+
+      if (placementStep === 1) {
+        for (let radius = 0; radius <= maxRadius; radius += 1) {
+          const minY = Math.max(1, targetY - radius);
+          const maxRingY = Math.min(maxY, targetY + radius);
+          const minX = Math.max(1, targetX - radius);
+          const maxRingX = Math.min(maxX, targetX + radius);
+          for (let y = minY; y <= maxRingY; y += 1) {
+            for (let x = minX; x <= maxRingX; x += 1) {
+              if (Math.max(Math.abs(x - targetX), Math.abs(y - targetY)) !== radius) continue;
+              evaluateCandidate(x, y);
             }
           }
+          if (bestPlacement && 1.4 * Math.max(0, radius + 1 - targetOffset) >= bestScore) break;
         }
-        if (bestPlacement && 1.4 * Math.max(0, radius + 1 - targetOffset) >= bestScore) break;
+      } else {
+        for (let ring = 0; ring <= maxRing; ring += 1) {
+          const radius = ring * placementStep;
+          for (let offset = -radius; offset <= radius; offset += placementStep) {
+            evaluateCandidate(targetX - radius, targetY + offset);
+            evaluateCandidate(targetX + radius, targetY + offset);
+            if (offset !== -radius && offset !== radius) {
+              evaluateCandidate(targetX + offset, targetY - radius);
+              evaluateCandidate(targetX + offset, targetY + radius);
+            }
+          }
+          if (
+            variantBestPlacement
+            && 1.4 * Math.max(0, radius + placementStep - targetOffset) >= variantBestScore
+          ) break;
+        }
+      }
+
+      if (variantBestPlacement && placementStep > 1) {
+        const coarsePlacement = variantBestPlacement.rectangle;
+        for (
+          let y = Math.max(1, coarsePlacement.y - placementStep);
+          y <= Math.min(maxY, coarsePlacement.y + placementStep);
+          y += 1
+        ) {
+          for (
+            let x = Math.max(1, coarsePlacement.x - placementStep);
+            x <= Math.min(maxX, coarsePlacement.x + placementStep);
+            x += 1
+          ) {
+            evaluateCandidate(x, y);
+          }
+        }
+      }
+      if (variantBestScore < bestScore) {
+        bestScore = variantBestScore;
+        bestPlacement = variantBestPlacement;
       }
     }
     if (!bestPlacement) {
@@ -1146,17 +1209,10 @@ function createGapAttempts(
 }
 
 function validateInputPlan(plan: GenerationPlan): void {
-  if (
-    !Number.isSafeInteger(plan.width)
-    || !Number.isSafeInteger(plan.height)
-    || plan.width < MIN_DUNGEON_DIMENSION
-    || plan.height < MIN_DUNGEON_DIMENSION
-    || plan.width > MAX_DUNGEON_WIDTH
-    || plan.height > MAX_DUNGEON_HEIGHT
-  ) {
+  if (!isSupportedDungeonDimensions(plan.width, plan.height)) {
     throw new SpatialLayoutError(
       "invalid-plan",
-      "The GenerationPlan dimensions are outside the supported dungeon bounds.",
+      "The GenerationPlan dimensions exceed the supported per-axis or total-tile limits.",
     );
   }
   if (plan.topology?.geometryStatus !== "unrouted") {

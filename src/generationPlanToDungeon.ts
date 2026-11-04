@@ -255,12 +255,12 @@ export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
 
   const roomDetails = createRoomDetails(plan);
   const parameters = cloneParameters(plan.generation.parameters);
-  const floorCount = tiles.reduce(
-    (total, row) => total + row.filter(
-      (tile) => tile !== WALL_TILE && tile !== CAVE_CONNECTION_WALL_TILE,
-    ).length,
-    0,
-  );
+  let floorCount = 0;
+  for (const row of tiles) {
+    for (const tile of row) {
+      if (tile !== WALL_TILE && tile !== CAVE_CONNECTION_WALL_TILE) floorCount += 1;
+    }
+  }
   return {
     width: plan.width,
     height: plan.height,

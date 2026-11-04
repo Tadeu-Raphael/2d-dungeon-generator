@@ -20,7 +20,7 @@ import type {
   VersionedDungeonGeneration,
 } from "./dungeon";
 import { DUNGEON_CONCEPTS, resolveDungeonGenerationAlgorithm } from "./dungeonProfiles";
-import type { DungeonConcept } from "./dungeonProfiles";
+import type { DungeonConcept, DungeonConceptProfile } from "./dungeonProfiles";
 import {
   createStableGenerationId,
 } from "./generationPlan";
@@ -58,6 +58,19 @@ export interface DungeonGenerationPipelineResult extends VersionedDungeonGenerat
   plan?: GenerationPlan;
   fallbackReason?: string;
   algorithmNote?: string;
+  roomCountReport?: RoomCountReport;
+}
+
+export interface RoomCountReport {
+  requested: number;
+  generated: number;
+  minimumAcceptable: number;
+  complete: boolean;
+  meetsMinimum: boolean;
+  recipeGenerated: number;
+  recoveryAttempts: number;
+  recipeCompactness: number;
+  failureReason?: string;
 }
 
 interface RoomFeatureBlueprint {
@@ -92,7 +105,25 @@ const TOPOLOGY_SPATIAL_STYLE: Record<TopologyStyle, SpatialLayoutStyle> = {
 };
 
 const WALL_TILE: Tile = 0;
-const MAX_V2_ROUTING_STATES_PER_CONNECTION = 16_384;
+const MAX_V2_ROOM_RECIPE_ATTEMPTS = 5;
+const V2_ROOM_RECIPE_COMPACTNESS_FALLBACKS = [70, 50, 30, 0] as const;
+
+interface RoomRecipeResult {
+  generation: DungeonGenerationMetadata;
+  dungeon: Dungeon;
+  roomCount: number;
+  recoveryAttempts: number;
+  recipeCompactness: number;
+}
+
+interface RoomCountReportContext {
+  requested: number;
+  minimumAcceptable: number;
+  recipeGenerated: number;
+  recoveryAttempts: number;
+  recipeCompactness: number;
+  failureReason?: string;
+}
 
 function assertSpatialDensity(value: number): void {
   if (!Number.isFinite(value) || value < 0 || value > 100) {
@@ -156,6 +187,70 @@ function applyRoomSizeBias(
       ...normalized,
       medium: Math.max(0, normalized.medium + roundingDifference),
     },
+  };
+}
+
+function generateV2RoomRecipe(
+  request: DungeonGenerationPipelineRequest,
+  parameters: DungeonParameters,
+  profile: DungeonConceptProfile,
+): RoomRecipeResult {
+  const biasedParameters = applyRoomSizeBias(parameters, profile.v2Preferences.roomSizeBias);
+  const compactnessAttempts = [
+    ...new Set([
+      biasedParameters.corridorCompactness,
+      ...V2_ROOM_RECIPE_COMPACTNESS_FALLBACKS.filter(
+        (value) => value < biasedParameters.corridorCompactness,
+      ),
+    ]),
+  ].slice(0, MAX_V2_ROOM_RECIPE_ATTEMPTS);
+  let bestResult: RoomRecipeResult | undefined;
+
+  for (const [index, recipeCompactness] of compactnessAttempts.entries()) {
+    const recipeSeed = index === 0
+      ? request.seed
+      : (request.seed + Math.imul(index, 0x9e3779b9)) >>> 0;
+    const recipeParameters = {
+      ...biasedParameters,
+      corridorCompactness: recipeCompactness,
+    };
+    const generated = generateDungeonVersioned({
+      generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
+      algorithm: "bsp",
+      seed: recipeSeed,
+      profile: request.profile,
+      parameters: recipeParameters,
+      settings: {
+        role: "v2-room-and-content-recipe",
+        roomRecipeAttempt: index + 1,
+        roomRecipeCompactness: recipeCompactness,
+        roomRecipeSeed: recipeSeed,
+      },
+    });
+    const candidate: RoomRecipeResult = {
+      dungeon: generated.dungeon,
+      generation: {
+        ...generated.metadata,
+        seed: request.seed,
+        parameters: biasedParameters,
+        settings: {
+          ...generated.metadata.settings,
+          roomRecipeAttempt: index + 1,
+          roomRecipeCompactness: recipeCompactness,
+        },
+      },
+      roomCount: generated.dungeon.roomDetails.length,
+      recoveryAttempts: index + 1,
+      recipeCompactness,
+    };
+    if (!bestResult || candidate.roomCount > bestResult.roomCount) bestResult = candidate;
+    if (candidate.roomCount >= parameters.roomCount) return candidate;
+  }
+
+  if (!bestResult) throw new Error("The bounded V2 room recipe did not run.");
+  return {
+    ...bestResult,
+    recoveryAttempts: compactnessAttempts.length,
   };
 }
 
@@ -312,7 +407,7 @@ function addProfileCorridorWidths(
       width,
       metadata: {
         ...edge.metadata,
-        widthIsFixed: true,
+        widthIsFixed: !varyCorridorWidths || Boolean(edge.metadata.widthIsFixed),
         requestedWidth: width,
       },
     };
@@ -586,6 +681,7 @@ function createFallbackResult(
   request: DungeonGenerationPipelineRequest,
   reason: string,
   stage: string,
+  roomCountContext?: RoomCountReportContext,
 ): DungeonGenerationPipelineResult {
   const profile = DUNGEON_CONCEPTS[request.profile];
   const cavesEnabled = Boolean(request.cavesEnabled || request.profile === "natural-cavern");
@@ -601,12 +697,45 @@ function createFallbackResult(
       requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V2,
       fallbackStage: stage,
       fallbackReason: reason,
+      ...(roomCountContext ? {
+        requestedRoomCount: roomCountContext.requested,
+        minimumAcceptableRoomCount: roomCountContext.minimumAcceptable,
+        roomRecipeRoomCount: roomCountContext.recipeGenerated,
+        roomRecipeAttempts: roomCountContext.recoveryAttempts,
+        roomRecipeCompactness: roomCountContext.recipeCompactness,
+        incompleteGenerationReason: roomCountContext.failureReason ?? reason,
+      } : {}),
     },
   });
+  const roomCountReport: RoomCountReport | undefined = roomCountContext
+    ? {
+      requested: roomCountContext.requested,
+      generated: fallback.dungeon.roomDetails.length,
+      minimumAcceptable: roomCountContext.minimumAcceptable,
+      complete: fallback.dungeon.roomDetails.length === roomCountContext.requested,
+      meetsMinimum: fallback.dungeon.roomDetails.length >= roomCountContext.minimumAcceptable,
+      recipeGenerated: roomCountContext.recipeGenerated,
+      recoveryAttempts: roomCountContext.recoveryAttempts,
+      recipeCompactness: roomCountContext.recipeCompactness,
+      failureReason: roomCountContext.failureReason ?? reason,
+    }
+    : undefined;
+  const metadata = roomCountReport
+    ? {
+      ...fallback.metadata,
+      settings: {
+        ...fallback.metadata.settings,
+        generatedRoomCount: roomCountReport.generated,
+        roomCountComplete: roomCountReport.complete,
+      },
+    }
+    : fallback.metadata;
   return {
     ...fallback,
+    metadata,
     requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V2,
     fallbackReason: reason,
+    ...(roomCountReport ? { roomCountReport } : {}),
   };
 }
 
@@ -666,22 +795,31 @@ function generateDungeonV2Pipeline(
   }
 
   if (request.spatialDensity !== undefined) assertSpatialDensity(request.spatialDensity);
-  const roomRecipeParameters = applyRoomSizeBias(parameters, profile.v2Preferences.roomSizeBias);
-  const v1RoomRecipe = generateDungeonVersioned({
-    generatorVersion: DUNGEON_GENERATOR_VERSION_V1,
-    algorithm: "bsp",
-    seed: request.seed,
-    profile: request.profile,
-    parameters: roomRecipeParameters,
-    settings: { role: "v2-room-and-content-recipe" },
-  });
-  if (v1RoomRecipe.dungeon.roomDetails.length < parameters.roomCount) {
+  const roomRecipe = generateV2RoomRecipe(request, parameters, profile);
+  const roomCountContext: RoomCountReportContext = {
+    requested: parameters.roomCount,
+    minimumAcceptable: 2,
+    recipeGenerated: roomRecipe.roomCount,
+    recoveryAttempts: roomRecipe.recoveryAttempts,
+    recipeCompactness: roomRecipe.recipeCompactness,
+  };
+  const minimumRoomCount = Math.max(parameters.roomCount, roomCountContext.minimumAcceptable);
+  if (roomRecipe.roomCount < minimumRoomCount) {
+    const countFailureReason = roomRecipe.roomCount < parameters.roomCount
+      ? `A receita BSP gerou no máximo ${roomRecipe.roomCount} de ${parameters.roomCount} salas solicitadas após ${roomRecipe.recoveryAttempts} tentativas limitadas;`
+      : `A V2 precisa de pelo menos ${roomCountContext.minimumAcceptable} salas para formar uma progressão;`;
+    const reason = `${countFailureReason} a quantidade mínima aceitável é ${roomCountContext.minimumAcceptable}.`;
     return createFallbackResult(
       request,
-      `A receita de salas V2 posicionou ${v1RoomRecipe.dungeon.roomDetails.length} de ${parameters.roomCount} salas solicitadas; foi usado o gerador V1 do perfil sem ocultar a redução.`,
+      `${reason} Foi usado o gerador V1 do perfil.`,
       "room-recipe-capacity",
+      { ...roomCountContext, failureReason: reason },
     );
   }
+  const v1RoomRecipe = {
+    dungeon: roomRecipe.dungeon,
+    metadata: roomRecipe.generation,
+  };
   const profileAlgorithmNote = profile.algorithm === "bsp"
     ? undefined
     : `O perfil declara ${profile.algorithm} no V1. No V2, o BSP é usado somente como receita de salas e conteúdo; topologia, layout e corredores vêm do GenerationPlan.`;
@@ -719,6 +857,7 @@ function generateDungeonV2Pipeline(
         request,
         `${error.message} Foi usado o gerador V1 do perfil.`,
         error.stage,
+        roomCountContext,
       );
     }
     throw error;
@@ -738,10 +877,7 @@ function generateDungeonV2Pipeline(
   const layoutStyles = request.spatialLayoutStyle
     ? [style]
     : [style, ...SPATIAL_STYLE_ORDER.filter((candidate) => candidate !== style)];
-  const maxExpandedStates = Math.min(
-    parameters.width * parameters.height * 4,
-    MAX_V2_ROUTING_STATES_PER_CONNECTION,
-  );
+  const maxExpandedStates = parameters.width * parameters.height * 4;
   let routedPlan: GenerationPlan | undefined;
   let lastSpatialError: SpatialLayoutError | undefined;
   let lastContentSignal: V2FallbackSignal | undefined;
@@ -811,6 +947,7 @@ function generateDungeonV2Pipeline(
         request,
         `O roteamento ou a validação geométrica V2 falhou em ${layoutStyles.length} layouts (${lastRouteError.message}${details ? ` ${details}` : ""}); foi usado o gerador V1 do perfil.`,
         "corridor-routing",
+        roomCountContext,
       );
     }
     if (lastContentSignal) {
@@ -818,6 +955,7 @@ function generateDungeonV2Pipeline(
         request,
         `${lastContentSignal.message} Foi usado o gerador V1 do perfil.`,
         lastContentSignal.stage,
+        roomCountContext,
       );
     }
     if (lastSpatialError) {
@@ -825,6 +963,7 @@ function generateDungeonV2Pipeline(
         request,
         `O posicionamento V2 não encontrou um layout válido (${lastSpatialError.message}); foi usado o gerador V1 do perfil.`,
         "spatial-layout",
+        roomCountContext,
       );
     }
     throw new Error("V2 layout did not produce a routed plan or a failure reason.");
@@ -835,6 +974,7 @@ function generateDungeonV2Pipeline(
       request,
       `A validação final do GenerationPlan V2 falhou: ${validation.issues.map((issue) => issue.message).join("; ")}.`,
       "plan-validation",
+      roomCountContext,
     );
   }
   const stats = getDungeonTopologyStatistics(routedPlan);
@@ -851,6 +991,13 @@ function generateDungeonV2Pipeline(
       mainPathLength: routedPlan.mainPathRoomIds?.length ?? 0,
       corridorLength: routedPlan.corridorRouting?.totalPathLength ?? 0,
       layoutScore: routedPlan.spatialLayout?.metrics.score.total ?? 0,
+      requestedRoomCount: parameters.roomCount,
+      generatedRoomCount: routedPlan.rooms.length,
+      minimumAcceptableRoomCount: roomCountContext.minimumAcceptable,
+      roomCountComplete: routedPlan.rooms.length === parameters.roomCount,
+      roomRecipeRoomCount: roomRecipe.roomCount,
+      roomRecipeAttempts: roomRecipe.recoveryAttempts,
+      roomRecipeCompactness: roomRecipe.recipeCompactness,
       ...(profileAlgorithmNote ? { algorithmNote: profileAlgorithmNote } : {}),
     },
     generatedAt,
@@ -865,6 +1012,16 @@ function generateDungeonV2Pipeline(
       metadata: routedMetadata,
       requestedGeneratorVersion: DUNGEON_GENERATOR_VERSION_V2,
       plan: completePlan,
+      roomCountReport: {
+        requested: parameters.roomCount,
+        generated: routedPlan.rooms.length,
+        minimumAcceptable: roomCountContext.minimumAcceptable,
+        complete: routedPlan.rooms.length === parameters.roomCount,
+        meetsMinimum: routedPlan.rooms.length >= roomCountContext.minimumAcceptable,
+        recipeGenerated: roomRecipe.roomCount,
+        recoveryAttempts: roomRecipe.recoveryAttempts,
+        recipeCompactness: roomRecipe.recipeCompactness,
+      },
       ...(profileAlgorithmNote ? { algorithmNote: profileAlgorithmNote } : {}),
     };
   } catch (error) {
@@ -873,6 +1030,7 @@ function generateDungeonV2Pipeline(
         request,
         `A conversão ou preservação de conteúdo V2 falhou (${error.message}); foi usado o gerador V1 do perfil.`,
         error instanceof V2FallbackSignal ? error.stage : "dungeon-conversion",
+        roomCountContext,
       );
     }
     throw error;

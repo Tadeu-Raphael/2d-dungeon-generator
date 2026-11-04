@@ -577,10 +577,39 @@ export const TRAP_DEFINITIONS: Record<TrapType, {
   adaptiveTrap: { tile: 160, label: "Armadilha adaptativa", description: "O mecanismo modifica seu comportamento após cada tentativa.", category: "complex" },
 };
 export const MIN_DUNGEON_DIMENSION = 20;
-export const MAX_DUNGEON_WIDTH = 160;
-export const MAX_DUNGEON_HEIGHT = 120;
+export const MAX_DUNGEON_WIDTH = 1_000;
+export const MAX_DUNGEON_HEIGHT = 1_000;
+export const MAX_DUNGEON_TILE_COUNT = 250_000;
 export const MAX_DUNGEON_ROOM_COUNT = 24;
 export const MAX_DUNGEON_SEED = 4_294_967_295;
+
+export function getDungeonDimensionError(width: number, height: number): string | undefined {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
+    return "Dungeon width and height must be safe integer tile counts.";
+  }
+  if (width < MIN_DUNGEON_DIMENSION || height < MIN_DUNGEON_DIMENSION) {
+    return `Dungeon width and height must be at least ${MIN_DUNGEON_DIMENSION} tiles.`;
+  }
+  if (width > MAX_DUNGEON_WIDTH) {
+    return `Dungeon width must not exceed ${MAX_DUNGEON_WIDTH} tiles.`;
+  }
+  if (height > MAX_DUNGEON_HEIGHT) {
+    return `Dungeon height must not exceed ${MAX_DUNGEON_HEIGHT} tiles.`;
+  }
+  if (width * height > MAX_DUNGEON_TILE_COUNT) {
+    return `Dungeon area must not exceed ${MAX_DUNGEON_TILE_COUNT} tiles.`;
+  }
+  return undefined;
+}
+
+export function isSupportedDungeonDimensions(width: number, height: number): boolean {
+  return getDungeonDimensionError(width, height) === undefined;
+}
+
+export function assertSupportedDungeonDimensions(width: number, height: number): void {
+  const error = getDungeonDimensionError(width, height);
+  if (error) throw new RangeError(error);
+}
 
 export interface Dungeon {
   width: number;
@@ -2956,6 +2985,7 @@ export function generateDungeon(
   seed: number,
   parameters: DungeonParameters = DEFAULT_DUNGEON_PARAMETERS,
 ): Dungeon {
+  assertSupportedDungeonDimensions(parameters.width, parameters.height);
   const random = createRandom(seed);
   let tiles: Tile[][];
   let roomRects: GeneratedRoom[] = [];
@@ -3032,12 +3062,12 @@ export function generateDungeon(
     parameters.corridorTrapChancePercent,
   );
 
-  const floorCount = tiles.reduce(
-    (total, row) => total + row.filter(
-      (tile) => tile !== WALL && tile !== CAVE_CONNECTION_WALL_TILE,
-    ).length,
-    0,
-  );
+  let floorCount = 0;
+  for (const row of tiles) {
+    for (const tile of row) {
+      if (tile !== WALL && tile !== CAVE_CONNECTION_WALL_TILE) floorCount += 1;
+    }
+  }
   const roomOrder = getRoomTraversalOrder(tiles, roomRects);
   const roomTypes = getRoomTypeDefinitions(
     roomOrder.length,
@@ -3786,12 +3816,12 @@ export function repositionDungeonRooms(
     dungeon.corridorTrapChancePercent,
   );
 
-  const floorCount = tiles.reduce(
-    (total, row) => total + row.filter(
-      (tile) => tile !== WALL && tile !== CAVE_CONNECTION_WALL_TILE,
-    ).length,
-    0,
-  );
+  let floorCount = 0;
+  for (const row of tiles) {
+    for (const tile of row) {
+      if (tile !== WALL && tile !== CAVE_CONNECTION_WALL_TILE) floorCount += 1;
+    }
+  }
   return {
     ...dungeon,
     tiles,
