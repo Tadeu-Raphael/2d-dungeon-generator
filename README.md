@@ -53,6 +53,14 @@ A V1 continua usando o fluxo aleatório original. `createGenerationRandomStreams
 
 Na interface V1, o perfil **Caverna natural** usa Cellular Automata; os demais perfis usam BSP e o controle **Incluir cavernas** alterna entre BSP e BSP + Cellular Automata. Embora os perfis também declarem `bsp-drunkard` e `hybrid`, esse encaminhamento não chega à interface atualmente; `generateDungeon` ainda oferece esses algoritmos para chamadas diretas. O histórico simplificou o despacho, mas não registra uma justificativa, e o gerador não tem uma limitação técnica que impeça essas combinações. Para preservar mapas V1, o despacho atual é mantido; recomenda-se revisar o encaminhamento dos perfis como uma mudança explícita da futura V2.
 
+### Modelo lógico GenerationPlan
+
+`GenerationPlan` é uma camada adicional e independente da renderização; nesta fase, ela não substitui nem altera os algoritmos V1. `RoomNode.roomRole` descreve a função estrutural da sala (como entrada ou objetivo), enquanto `roomType` continua usando as categorias temáticas existentes (como religiosa ou arcana). Cada sala fornece um `footprint` de tiles locais explícitos, e cada conexão geométrica fornece seu próprio caminho absoluto; a camada não calcula posicionamento nem roteamento. Caminhos duplicados são rejeitados, mas conexões paralelas intencionais podem declarar `metadata.allowParallel: true`.
+
+O plano também registra setores, interseções, transições, recursos, versão e metadados completos da geração. `validateGenerationPlan` verifica IDs e referências, dimensões, setores, sobreposições de footprints e geometrias obrigatórias. Essa validação é estrutural: ela não promete acessibilidade nem altera o BFS existente usado ao reposicionar salas.
+
+`generationPlanToDungeon` rasteriza os footprints e caminhos informados no contrato atual `Dungeon.tiles`, além de preencher `roomDetails`, armadilhas e tiles existentes de portas, escadas e outros elementos. PixiJS, Three.js e as exportações SVG continuam consumindo somente `Dungeon`. O modelo retém flags como conexão secreta, bloqueada, opcional e trancada; o formato `Dungeon` atual não possui campos para todos esses estados. A conversão mantém essas informações no `GenerationPlan`, sem inferir uma regra de navegação. O reposicionamento legado trabalha com limites retangulares de salas, portanto não preserva necessariamente todos os detalhes de footprints irregulares após arrastar uma sala.
+
 ## Controles e interação
 
 As configurações estão organizadas nas abas **Geração**, **Salas**, **Tipos**, **Armadilhas**, **Tesouros** e **Acesso**. Elas permitem ajustar o conceito, as dimensões, a compactação do mapa, as proporções e os formatos das salas, as categorias funcionais e as chances de geração.
@@ -148,6 +156,10 @@ Os arquivos de produção são gerados em `dist/`.
 | `src/dungeonProfiles.ts` | Conceitos e perfis de geração |
 | `src/generationBaselines.ts` | Casos V1 de referência e gerador da coleção |
 | `src/dungeon.test.ts` | Testes de regressão e contrato da geração |
+| `src/generationPlan.ts` | Modelo lógico de salas, conexões, setores e transições |
+| `src/generationPlanValidation.ts` | Validação estrutural do GenerationPlan |
+| `src/generationPlanToDungeon.ts` | Conversão de GenerationPlan para Dungeon |
+| `src/generationPlan.test.ts` | Testes do modelo, validador e conversor |
 | `src/roomTypes.ts` | Categorias e funções de salas |
 | `src/treasures.ts` | Categorias e catálogo de tesouros |
 | `src/DungeonCanvas.tsx` | Renderização do mapa e exportação |
