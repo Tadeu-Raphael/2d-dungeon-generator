@@ -13,6 +13,8 @@ import type { Dungeon, DoorVariant, Tile } from "../dungeon";
 import type { RoomTypeCategory } from "../roomTypes";
 import type { VerticalConnection, VerticalConnectionKind } from "../dungeonStructure";
 import { getDoorwayGroups } from "./doorwayLayout";
+import type { CartographicTextureSet3D } from "./cartographicMaterials3d";
+import { createCartographicTextureSet3D } from "./cartographicMaterials3d";
 import { createSmoothWallMeshes } from "./smoothWalls";
 import {
   createRoomCategoryGrid,
@@ -116,8 +118,18 @@ function getFloorColor(tile: Tile, category: RoomTypeCategory | undefined): THRE
   return new THREE.Color().setRGB(red / 255, green / 255, blue / 255, THREE.SRGBColorSpace);
 }
 
-function createMaterial(color: string, roughness: number, opacity: number): THREE.MeshStandardMaterial {
-  const material = new THREE.MeshStandardMaterial({ color, roughness });
+type TextureMaterialOptions = Pick<
+  THREE.MeshStandardMaterialParameters,
+  "map" | "bumpMap" | "bumpScale" | "metalness" | "emissiveMap"
+>;
+
+function createMaterial(
+  color: string,
+  roughness: number,
+  opacity: number,
+  textureOptions: TextureMaterialOptions = {},
+): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({ color, roughness, ...textureOptions });
   if (opacity < 1) {
     material.transparent = true;
     material.opacity = opacity;
@@ -161,13 +173,16 @@ function createInstanced(
  * the same Dungeon tiles as the 2D view. The active level keeps the richer builder in
  * DungeonThreeCanvas; this one renders every other level with shared instancing.
  */
-const DOOR_VARIANT_3D: Record<DoorVariant, { color: string; roughness: number; heightScale: number; opacity: number }> = {
-  reinforced: { color: "#4f5660", roughness: 0.55, heightScale: 1, opacity: 1 },
-  locked: { color: "#6f4b2e", roughness: 0.8, heightScale: 1, opacity: 1 },
-  gate: { color: "#8d98a5", roughness: 0.5, heightScale: 1, opacity: 0.6 },
-  grate: { color: "#7c8794", roughness: 0.5, heightScale: 1, opacity: 0.45 },
-  destroyed: { color: "#4a3a2b", roughness: 0.95, heightScale: 0.28, opacity: 1 },
-  open: { color: "#8f7a58", roughness: 0.9, heightScale: 0, opacity: 1 },
+const DOOR_VARIANT_3D: Record<
+  DoorVariant,
+  { color: string; roughness: number; heightScale: number; opacity: number; surface: "wood" | "metal" }
+> = {
+  reinforced: { color: "#687078", roughness: 0.55, heightScale: 1, opacity: 1, surface: "metal" },
+  locked: { color: "#6f4b2e", roughness: 0.8, heightScale: 1, opacity: 1, surface: "wood" },
+  gate: { color: "#aebac2", roughness: 0.5, heightScale: 1, opacity: 0.72, surface: "metal" },
+  grate: { color: "#9da8ae", roughness: 0.5, heightScale: 1, opacity: 0.55, surface: "metal" },
+  destroyed: { color: "#6a5039", roughness: 0.95, heightScale: 0.28, opacity: 1, surface: "wood" },
+  open: { color: "#8f7a58", roughness: 0.9, heightScale: 0, opacity: 1, surface: "wood" },
 };
 
 /**
@@ -177,12 +192,25 @@ const DOOR_VARIANT_3D: Record<DoorVariant, { color: string; roughness: number; h
 export function addDoorVariantMeshes(
   group: THREE.Group,
   placementsByVariant: ReadonlyMap<DoorVariant, readonly Placement[]>,
+  textures: CartographicTextureSet3D,
   opacityScale = 1,
   levelId = "",
 ): void {
   for (const [variant, placements] of placementsByVariant) {
     if (placements.length === 0) continue;
     const style = DOOR_VARIANT_3D[variant];
+    const surface = style.surface === "metal"
+      ? {
+        map: textures.metal,
+        bumpMap: textures.metalBump,
+        bumpScale: 0.012,
+        metalness: 0.42,
+      }
+      : {
+        map: textures.wood,
+        bumpMap: textures.woodBump,
+        bumpScale: 0.028,
+      };
     if (style.heightScale === 0) {
       const posts = placements.flatMap((placement) => {
         const half = (placement.scaleX ?? 1) / 2 - 0.06;
@@ -197,7 +225,7 @@ export function addDoorVariantMeshes(
       group.add(createInstanced(
         `door-jambs-${variant}`,
         new THREE.BoxGeometry(0.12, 0.8, 0.12),
-        createMaterial(style.color, style.roughness, opacityScale),
+        createMaterial(style.color, style.roughness, opacityScale, surface),
         posts,
         levelId,
       ));
@@ -207,7 +235,12 @@ export function addDoorVariantMeshes(
     group.add(createInstanced(
       `door-${variant}`,
       new THREE.BoxGeometry(1, height, 0.08),
-      createMaterial(style.color, style.roughness, Math.min(style.opacity, 1) * opacityScale),
+      createMaterial(
+        style.color,
+        style.roughness,
+        Math.min(style.opacity, 1) * opacityScale,
+        surface,
+      ),
       placements.map((placement) => ({ ...placement, y: 0.03 + height / 2 })),
       levelId,
     ));
@@ -218,12 +251,14 @@ export function buildLevelContextGroup(
   level: ThreeLevelDescriptor,
   offsetY: number,
   opacity: number,
+  textures: CartographicTextureSet3D = createCartographicTextureSet3D(),
 ): THREE.Group {
   const { dungeon } = level;
   const group = new THREE.Group();
   group.name = `level-${level.id}`;
   group.position.y = offsetY;
   group.userData.levelId = level.id;
+  group.userData.ownedTextures = Object.values(textures);
   if (opacity <= 0) {
     group.visible = false;
     return group;
@@ -284,7 +319,11 @@ export function buildLevelContextGroup(
     const floorMesh = createInstanced(
       "level-floor",
       new THREE.BoxGeometry(0.97, 0.08, 0.97),
-      createMaterial("#ffffff", 0.92, opacity),
+      createMaterial("#ffffff", 0.96, opacity, {
+        map: textures.floor,
+        bumpMap: textures.floorBump,
+        bumpScale: 0.026,
+      }),
       floors,
       level.id,
     );
@@ -292,14 +331,23 @@ export function buildLevelContextGroup(
     floorMesh.userData.pickable = opacity >= 0.5;
     group.add(floorMesh);
   }
-  for (const wallMesh of createSmoothWallMeshes(dungeon, { opacity, levelId: level.id, namePrefix: "level" })) {
+  for (const wallMesh of createSmoothWallMeshes(dungeon, {
+    opacity,
+    levelId: level.id,
+    namePrefix: "level",
+    textures,
+  })) {
     group.add(wallMesh);
   }
   if (pillars.length > 0) {
     group.add(createInstanced(
       "level-pillars",
       new THREE.CylinderGeometry(0.25, 0.34, 0.92, 10),
-      createMaterial("#9b9585", 0.86, opacity),
+      createMaterial("#9b9585", 0.9, opacity, {
+        map: textures.wall,
+        bumpMap: textures.wallBump,
+        bumpScale: 0.03,
+      }),
       pillars,
       level.id,
     ));
@@ -308,7 +356,11 @@ export function buildLevelContextGroup(
     group.add(createInstanced(
       "level-stairs",
       new THREE.BoxGeometry(0.76, 0.07, 0.15),
-      createMaterial("#ffffff", 0.88, opacity),
+      createMaterial("#ffffff", 0.9, opacity, {
+        map: textures.floor,
+        bumpMap: textures.floorBump,
+        bumpScale: 0.022,
+      }),
       treads,
       level.id,
     ));
@@ -317,7 +369,11 @@ export function buildLevelContextGroup(
     group.add(createInstanced(
       "level-doors",
       new THREE.BoxGeometry(1, 0.86, 0.08),
-      createMaterial("#8f6b49", 0.82, opacity),
+      createMaterial("#8f6b49", 0.86, opacity, {
+        map: textures.wood,
+        bumpMap: textures.woodBump,
+        bumpScale: 0.028,
+      }),
       doors,
       level.id,
     ));
@@ -326,12 +382,16 @@ export function buildLevelContextGroup(
     group.add(createInstanced(
       "level-secret-doors",
       new THREE.BoxGeometry(1, 0.86, 0.08),
-      createMaterial("#56616a", 0.92, opacity),
+      createMaterial("#d4d0c4", 0.94, opacity, {
+        map: textures.wall,
+        bumpMap: textures.wallBump,
+        bumpScale: 0.03,
+      }),
       secretDoors,
       level.id,
     ));
   }
-  addDoorVariantMeshes(group, variantDoors, opacity, level.id);
+  addDoorVariantMeshes(group, variantDoors, textures, opacity, level.id);
   return group;
 }
 
@@ -413,9 +473,11 @@ export function buildVerticalLinksGroup(
   links: readonly VerticalLinkGeometry[],
   visibleLevelIds: ReadonlySet<string>,
   emphasized: boolean,
+  textures: CartographicTextureSet3D = createCartographicTextureSet3D(),
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "vertical-connections";
+  group.userData.ownedTextures = Object.values(textures);
   const opacity = emphasized ? 0.95 : 0.7;
   const axis = new THREE.Vector3(0, 1, 0);
 
@@ -428,6 +490,9 @@ export function buildVerticalLinksGroup(
       const material = new THREE.MeshStandardMaterial({
         color,
         roughness: 0.6,
+        map: textures.floor,
+        bumpMap: textures.floorBump,
+        bumpScale: 0.02,
         emissive: color,
         emissiveIntensity: emphasized ? 0.45 : 0.15,
         transparent: true,
@@ -456,6 +521,9 @@ export function buildVerticalLinksGroup(
           new THREE.MeshStandardMaterial({
             color,
             roughness: 0.5,
+            map: textures.wall,
+            bumpMap: textures.wallBump,
+            bumpScale: 0.025,
             emissive: color,
             emissiveIntensity: emphasized ? 0.4 : 0.12,
             transparent: true,
@@ -473,6 +541,9 @@ export function buildVerticalLinksGroup(
           new THREE.TorusGeometry(part.scale.x / 2, 0.035, 8, 24),
           new THREE.MeshStandardMaterial({
             color,
+            map: textures.metal,
+            bumpMap: textures.metalBump,
+            bumpScale: 0.012,
             emissive: color,
             emissiveIntensity: emphasized ? 0.6 : 0.25,
             roughness: 0.4,

@@ -40,6 +40,7 @@ import {
 import { disposeDungeonThreeGroup } from "./dungeonThreeResources";
 import { getDoorwayGroups } from "./doorwayLayout";
 import { createSmoothWallMeshes } from "./smoothWalls";
+import { createCartographicTextureSet3D } from "./cartographicMaterials3d";
 import type { VerticalConnection } from "../dungeonStructure";
 import {
   MAX_LEVEL_SPACING,
@@ -666,6 +667,8 @@ function DungeonThreeCanvas({
     const visibleLevelIds = new Set<string>();
     const contextGroup = new THREE.Group();
     contextGroup.name = "multilevel-context";
+    const contextTextures = createCartographicTextureSet3D();
+    contextGroup.userData.ownedTextures = Object.values(contextTextures);
     let lowestY = selectedOffset;
     let highestY = selectedOffset + 1;
     for (const level of sortedLevels) {
@@ -677,7 +680,7 @@ function DungeonThreeCanvas({
         lowestY = Math.min(lowestY, y);
         highestY = Math.max(highestY, y + 1);
         if (level.id !== selected.id) {
-          contextGroup.add(buildLevelContextGroup(level, y, opacity));
+          contextGroup.add(buildLevelContextGroup(level, y, opacity, contextTextures));
         }
       }
     }
@@ -692,7 +695,7 @@ function DungeonThreeCanvas({
     const links = (verticalConnections ?? [])
       .map((connection) => getVerticalLinkGeometry(connection, offsets))
       .filter((link): link is NonNullable<typeof link> => link !== undefined);
-    contextGroup.add(buildVerticalLinksGroup(links, visibleLevelIds, emphasizeLinks));
+    contextGroup.add(buildVerticalLinksGroup(links, visibleLevelIds, emphasizeLinks, contextTextures));
 
     scene.add(contextGroup);
     contextGroupRef.current = contextGroup;
@@ -738,11 +741,14 @@ function DungeonThreeCanvas({
     lavafallMeshRef.current = null;
 
     const group = new THREE.Group();
+    const textures = createCartographicTextureSet3D();
+    group.userData.ownedTextures = Object.values(textures);
     const categories = createRoomCategoryGrid(dungeon);
     const floors: Array<{ coordinate: FloorCoordinate; color: THREE.Color }> = [];
     const pillars: FloorCoordinate[] = [];
     const waterTiles: FloorCoordinate[] = [];
     const lavaTiles: FloorCoordinate[] = [];
+    const trapRings: InstancePlacement[] = [];
     const doors: InstancePlacement[] = [];
     const secretDoors: InstancePlacement[] = [];
     const variantDoors = new Map<DoorVariant, InstancePlacement[]>();
@@ -821,11 +827,18 @@ function DungeonThreeCanvas({
         }
         const trapType = TRAP_TYPE_BY_TILE.get(tile);
         if (trapType) {
+          const color = getTrapColor(TRAP_DEFINITIONS[trapType].category);
           trapMarkers.push({
             x: x + 0.5,
             y: 0.18,
             z: y + 0.5,
-            color: getTrapColor(TRAP_DEFINITIONS[trapType].category),
+            color,
+          });
+          trapRings.push({
+            x: x + 0.5,
+            y: 0.095,
+            z: y + 0.5,
+            color: color.clone().multiplyScalar(0.58),
           });
         }
         if (tile === EXTERIOR_ENTRANCE_TILE) {
@@ -901,8 +914,13 @@ function DungeonThreeCanvas({
 
     const base = new THREE.Mesh(
       new THREE.PlaneGeometry(dungeon.width + 2, dungeon.height + 2),
-      new THREE.MeshStandardMaterial({ color: "#151d26", roughness: 1 }),
+      new THREE.MeshStandardMaterial({
+        color: "#19232c",
+        map: textures.parchment,
+        roughness: 1,
+      }),
     );
+    textures.parchment.repeat.set((dungeon.width + 2) / 7, (dungeon.height + 2) / 7);
     base.rotation.x = -Math.PI / 2;
     base.position.set(dungeon.width / 2, -0.12, dungeon.height / 2);
     base.visible = stackExtentRef.current.span === 0;
@@ -916,6 +934,9 @@ function DungeonThreeCanvas({
           color: "#ffffff",
           roughness: 0.92,
           metalness: 0,
+          map: textures.floor,
+          bumpMap: textures.floorBump,
+          bumpScale: 0.026,
           emissive: "#151b21",
           emissiveIntensity: 0.2,
         }),
@@ -950,12 +971,18 @@ function DungeonThreeCanvas({
       floorCoordinatesRef.current = [];
     }
 
-    for (const wallMesh of createSmoothWallMeshes(dungeon)) group.add(wallMesh);
+    for (const wallMesh of createSmoothWallMeshes(dungeon, { textures })) group.add(wallMesh);
 
     if (pillars.length > 0) {
       const pillarMesh = new THREE.InstancedMesh(
         new THREE.CylinderGeometry(0.25, 0.34, 0.92, 12),
-        new THREE.MeshStandardMaterial({ color: "#9b9585", roughness: 0.86 }),
+        new THREE.MeshStandardMaterial({
+          color: "#9b9585",
+          roughness: 0.9,
+          map: textures.wall,
+          bumpMap: textures.wallBump,
+          bumpScale: 0.03,
+        }),
         pillars.length,
       );
       pillarMesh.name = "dungeon-pillars";
@@ -978,7 +1005,13 @@ function DungeonThreeCanvas({
         group,
         "dungeon-doors",
         new THREE.BoxGeometry(1, 0.86, 0.08),
-        new THREE.MeshStandardMaterial({ color: "#8f6b49", roughness: 0.82 }),
+        new THREE.MeshStandardMaterial({
+          color: "#8f6b49",
+          roughness: 0.86,
+          map: textures.wood,
+          bumpMap: textures.woodBump,
+          bumpScale: 0.028,
+        }),
         doors,
       );
     }
@@ -987,17 +1020,29 @@ function DungeonThreeCanvas({
         group,
         "dungeon-secret-doors",
         new THREE.BoxGeometry(1, 0.86, 0.08),
-        new THREE.MeshStandardMaterial({ color: "#56616a", roughness: 0.92 }),
+        new THREE.MeshStandardMaterial({
+          color: "#d4d0c4",
+          roughness: 0.94,
+          map: textures.wall,
+          bumpMap: textures.wallBump,
+          bumpScale: 0.03,
+        }),
         secretDoors,
       );
     }
-    addDoorVariantMeshes(group, variantDoors);
+    addDoorVariantMeshes(group, variantDoors, textures);
     if (stairTreads.length > 0) {
       addInstancedMesh(
         group,
         "dungeon-stairs",
         new THREE.BoxGeometry(0.76, 0.07, 0.15),
-        new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.88 }),
+        new THREE.MeshStandardMaterial({
+          color: "#ffffff",
+          roughness: 0.9,
+          map: textures.floor,
+          bumpMap: textures.floorBump,
+          bumpScale: 0.022,
+        }),
         stairTreads,
       );
     }
@@ -1006,7 +1051,13 @@ function DungeonThreeCanvas({
         group,
         "dungeon-elevated-floors",
         new THREE.BoxGeometry(0.9, 0.18, 0.9),
-        new THREE.MeshStandardMaterial({ color: "#b4a68a", roughness: 0.9 }),
+        new THREE.MeshStandardMaterial({
+          color: "#ffffff",
+          roughness: 0.92,
+          map: textures.floor,
+          bumpMap: textures.floorBump,
+          bumpScale: 0.026,
+        }),
         raisedFloors,
       );
     }
@@ -1015,7 +1066,13 @@ function DungeonThreeCanvas({
         group,
         "dungeon-exterior-entrances",
         new THREE.BoxGeometry(1, 1, 1),
-        new THREE.MeshStandardMaterial({ color: "#a18a69", roughness: 0.88 }),
+        new THREE.MeshStandardMaterial({
+          color: "#a18a69",
+          roughness: 0.9,
+          map: textures.wood,
+          bumpMap: textures.woodBump,
+          bumpScale: 0.025,
+        }),
         entranceArch,
       );
     }
@@ -1031,11 +1088,30 @@ function DungeonThreeCanvas({
           emissive: "#17343c",
           emissiveIntensity: 0.26,
           roughness: 0.55,
+          map: textures.metal,
+          bumpMap: textures.metalBump,
+          bumpScale: 0.012,
         }),
         exteriorLinks,
       );
     }
     if (trapMarkers.length > 0) {
+      const trapRingGeometry = new THREE.TorusGeometry(0.22, 0.018, 6, 20);
+      trapRingGeometry.rotateX(-Math.PI / 2);
+      addInstancedMesh(
+        group,
+        "dungeon-trap-rings",
+        trapRingGeometry,
+        new THREE.MeshStandardMaterial({
+          color: "#ffffff",
+          map: textures.metal,
+          bumpMap: textures.metalBump,
+          bumpScale: 0.012,
+          metalness: 0.24,
+          roughness: 0.5,
+        }),
+        trapRings,
+      );
       addInstancedMesh(
         group,
         "dungeon-traps",
@@ -1043,6 +1119,9 @@ function DungeonThreeCanvas({
         new THREE.MeshStandardMaterial({
           color: "#ffffff",
           roughness: 0.68,
+          map: textures.metal,
+          bumpMap: textures.metalBump,
+          bumpScale: 0.012,
           emissive: "#1d1710",
           emissiveIntensity: 0.14,
         }),
@@ -1058,6 +1137,9 @@ function DungeonThreeCanvas({
           color: "#ffffff",
           roughness: 0.62,
           metalness: 0.12,
+          map: textures.wood,
+          bumpMap: textures.woodBump,
+          bumpScale: 0.028,
         }),
         treasureMarkers,
       );
@@ -1067,7 +1149,13 @@ function DungeonThreeCanvas({
         group,
         "dungeon-cave-connection-walls",
         new THREE.BoxGeometry(0.92, 0.62, 0.16),
-        new THREE.MeshStandardMaterial({ color: "#647568", roughness: 0.96 }),
+        new THREE.MeshStandardMaterial({
+          color: "#647568",
+          roughness: 0.98,
+          map: textures.wall,
+          bumpMap: textures.wallBump,
+          bumpScale: 0.034,
+        }),
         caveBarriers,
       );
     }
@@ -1076,7 +1164,13 @@ function DungeonThreeCanvas({
         group,
         "dungeon-cave-breaches",
         new THREE.DodecahedronGeometry(0.18, 0),
-        new THREE.MeshStandardMaterial({ color: "#77786d", roughness: 0.95 }),
+        new THREE.MeshStandardMaterial({
+          color: "#77786d",
+          roughness: 0.98,
+          map: textures.wall,
+          bumpMap: textures.wallBump,
+          bumpScale: 0.04,
+        }),
         breachRubble,
       );
     }
@@ -1087,7 +1181,13 @@ function DungeonThreeCanvas({
         group,
         "dungeon-vertical-shafts",
         shaftGeometry,
-        new THREE.MeshStandardMaterial({ color: "#182029", side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({
+          color: "#182029",
+          map: textures.wall,
+          bumpMap: textures.wallBump,
+          bumpScale: 0.03,
+          side: THREE.DoubleSide,
+        }),
         shaftCenters,
       );
 
@@ -1097,7 +1197,14 @@ function DungeonThreeCanvas({
         group,
         "dungeon-vertical-shaft-rims",
         rimGeometry,
-        new THREE.MeshStandardMaterial({ color: "#9a825d", roughness: 0.85 }),
+        new THREE.MeshStandardMaterial({
+          color: "#9a825d",
+          roughness: 0.85,
+          map: textures.metal,
+          bumpMap: textures.metalBump,
+          bumpScale: 0.014,
+          metalness: 0.28,
+        }),
         shaftRims,
       );
     }
@@ -1107,15 +1214,27 @@ function DungeonThreeCanvas({
       color: string,
       emissive: string,
       name: string,
+      map: THREE.Texture,
+      bumpMap: THREE.Texture,
+      roughness: number,
+      emissiveMap?: THREE.Texture,
     ): THREE.InstancedMesh | null => {
       if (coordinates.length === 0) return null;
       const liquidMesh = new THREE.InstancedMesh(
         new THREE.PlaneGeometry(0.78, 0.78),
         new THREE.MeshStandardMaterial({
           color,
+          map,
+          bumpMap,
+          bumpScale: 0.034,
+          emissiveMap,
           emissive,
-          emissiveIntensity: 0.35,
-          roughness: 0.3,
+          emissiveIntensity: emissiveMap ? 0.58 : 0.18,
+          roughness,
+          metalness: 0.06,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
           side: THREE.DoubleSide,
         }),
         coordinates.length,
@@ -1142,12 +1261,19 @@ function DungeonThreeCanvas({
       "#347c94",
       "#0b2934",
       "water-surfaces",
+      textures.water,
+      textures.waterBump,
+      0.24,
     );
     lavaMeshRef.current = addLiquidSurface(
       lavaTiles,
       "#b85c42",
       "#642415",
       "lava-surfaces",
+      textures.lava,
+      textures.lavaBump,
+      0.46,
+      textures.lava,
     );
     if (waterfalls.length > 0) {
       waterfallMeshRef.current = addInstancedMesh(
@@ -1156,6 +1282,11 @@ function DungeonThreeCanvas({
         new THREE.PlaneGeometry(0.72, 0.72),
         new THREE.MeshStandardMaterial({
           color: "#5599aa",
+          map: textures.water,
+          bumpMap: textures.waterBump,
+          bumpScale: 0.03,
+          emissive: "#0b2934",
+          emissiveIntensity: 0.16,
           transparent: true,
           opacity: 0.82,
           roughness: 0.36,
@@ -1171,7 +1302,11 @@ function DungeonThreeCanvas({
         new THREE.PlaneGeometry(0.72, 0.72),
         new THREE.MeshStandardMaterial({
           color: "#bd684d",
+          map: textures.lava,
+          bumpMap: textures.lavaBump,
+          bumpScale: 0.03,
           emissive: "#6f2415",
+          emissiveMap: textures.lava,
           emissiveIntensity: 0.38,
           transparent: true,
           opacity: 0.9,

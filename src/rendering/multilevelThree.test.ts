@@ -81,6 +81,11 @@ describe("multilevel 3D layout", () => {
     const floorMesh = group.children.find((child) => child.name === "level-floor") as THREE.InstancedMesh;
     const openTiles = levels[0].dungeon.tiles.flat().filter((tile) => tile !== 0).length;
     expect(floorMesh.count).toBe(openTiles);
+    const floorMaterial = floorMesh.material as THREE.MeshStandardMaterial;
+    expect(floorMaterial.map).toBeInstanceOf(THREE.DataTexture);
+    expect(floorMaterial.bumpMap).toBeInstanceOf(THREE.DataTexture);
+    const wallMesh = group.children.find((child) => child.name === "level-walls") as THREE.InstancedMesh;
+    expect((wallMesh.material as THREE.MeshStandardMaterial).map).toBeInstanceOf(THREE.DataTexture);
     expect(group.position.y).toBe(offsets.get(levels[0].id));
 
     const link = getVerticalLinkGeometry(connections[0], offsets);
@@ -94,6 +99,8 @@ describe("multilevel 3D layout", () => {
 
     const linkGroup = buildVerticalLinksGroup([link], new Set(levels.map((level) => level.id)), true);
     expect(linkGroup.children.length).toBeGreaterThan(0);
+    const stepMesh = linkGroup.children.find((child) => child instanceof THREE.InstancedMesh) as THREE.InstancedMesh;
+    expect((stepMesh.material as THREE.MeshStandardMaterial).map).toBeInstanceOf(THREE.DataTexture);
     expect(buildVerticalLinksGroup([link], new Set([levels[0].id]), true).children).toHaveLength(0);
 
     disposeDungeonThreeGroup(group);

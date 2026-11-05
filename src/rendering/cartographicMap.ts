@@ -23,6 +23,7 @@ import {
   isOpenCaveConnection,
 } from "./dungeonTileSemantics";
 import type { RoomCategoryGrid } from "./dungeonTileSemantics";
+import { getProceduralCartographicTextureAtlas } from "./cartographicTextures";
 
 export interface CartographicOptions {
   showWater: boolean;
@@ -43,9 +44,9 @@ export interface CartographicImage {
   data: Uint8ClampedArray;
 }
 
-const ROCK: readonly [number, number, number] = [14, 19, 27];
-const ROCK_NEAR: readonly [number, number, number] = [8, 11, 17];
-const HATCH: readonly [number, number, number] = [84, 102, 120];
+const PARCHMENT: readonly [number, number, number] = [38, 32, 25];
+const PARCHMENT_SHADE: readonly [number, number, number] = [11, 12, 14];
+const HATCH: readonly [number, number, number] = [99, 82, 57];
 const OUTLINE: readonly [number, number, number] = [138, 154, 166];
 const OUTLINE_SHADOW: readonly [number, number, number] = [4, 6, 10];
 const SEAM: readonly [number, number, number] = [60, 50, 40];
@@ -164,6 +165,7 @@ export function renderCartographicImage(
   const height = dungeon.height * scale;
   const roomCategories = options.roomCategories ?? createRoomCategoryGrid(dungeon);
   const surface = createTileSurface(dungeon, roomCategories, options.showWater, options.showLava);
+  const textureAtlas = getProceduralCartographicTextureAtlas(scale);
 
   const mask = createScaledFloorMask(dungeon, scale);
   const near = blurField(mask, width, height, Math.max(1, Math.round(scale * 0.34)));
@@ -218,13 +220,23 @@ export function renderCartographicImage(
       // Rock: darker near the floor, with hatching that fades with distance.
       const haloValue = halo[pixel];
       const rockMix = smoothstep(0.02, 0.45, haloValue);
-      let red = ROCK[0] + (ROCK_NEAR[0] - ROCK[0]) * rockMix;
-      let green = ROCK[1] + (ROCK_NEAR[1] - ROCK[1]) * rockMix;
-      let blue = ROCK[2] + (ROCK_NEAR[2] - ROCK[2]) * rockMix;
-      const grain = (hash(px >> 1, py >> 1) - 0.5) * 3;
-      red += grain;
-      green += grain;
-      blue += grain;
+      let red = PARCHMENT[0] + (PARCHMENT_SHADE[0] - PARCHMENT[0]) * rockMix;
+      let green = PARCHMENT[1] + (PARCHMENT_SHADE[1] - PARCHMENT[1]) * rockMix;
+      let blue = PARCHMENT[2] + (PARCHMENT_SHADE[2] - PARCHMENT[2]) * rockMix;
+      const paperIndex = (py & 63) * textureAtlas.paperSize + (px & 63);
+      const paperGrain = textureAtlas.parchmentRelief[paperIndex];
+      red += paperGrain;
+      green += paperGrain * 0.84;
+      blue += paperGrain * 0.62;
+
+      const wallBand = smoothstep(0.03, 0.17, haloValue)
+        * (1 - smoothstep(0.24, 0.53, nearValue));
+      if (edgeInk && wallBand > 0) {
+        const wallRelief = textureAtlas.wallRelief[(py % scale) * scale + (px % scale)];
+        red += wallRelief * wallBand;
+        green += wallRelief * wallBand * 0.92;
+        blue += wallRelief * wallBand * 0.78;
+      }
 
       if (edgeInk && cover < 1) {
         const zone = smoothstep(0.03, 0.22, haloValue) * (1 - smoothstep(0.5, 0.75, haloValue));
@@ -246,9 +258,12 @@ export function renderCartographicImage(
           let floorGreen = surface.green[tileIndex];
           let floorBlue = surface.blue[tileIndex];
           const kind = surface.kind[tileIndex];
-          const tileJitter = (hash(tileX, tileY) - 0.5) * 0.045;
-          const pixelGrain = (hash(px, py) - 0.5) * 0.03;
-          let light = 1 + tileJitter + pixelGrain;
+          const tileJitter = (hash(tileX, tileY) - 0.5) * 0.075;
+          const stoneIndex = (py % scale) * scale + (px % scale);
+          const stoneRelief = kind === KIND_WATER || kind === KIND_LAVA
+            ? 0
+            : textureAtlas.stoneRelief[stoneIndex];
+          let light = 1 + tileJitter;
           // Soft bevel: floors darken toward their rounded edge, and a broad light pools mid-map.
           light *= 0.68 + 0.32 * smoothstep(0.5, 0.9, nearValue);
           const centreX = px / width - 0.5;
@@ -271,9 +286,9 @@ export function renderCartographicImage(
           if (fy * scale < seamWidth && isSeam(tileX, tileY - 1, here)) seam = 1;
           else if ((1 - fy) * scale < seamWidth && isSeam(tileX, tileY + 1, here)) seam = 1;
 
-          floorRed = Math.min(255, floorRed * light);
-          floorGreen = Math.min(255, floorGreen * light);
-          floorBlue = Math.min(255, floorBlue * light);
+          floorRed = Math.min(255, floorRed * light + stoneRelief);
+          floorGreen = Math.min(255, floorGreen * light + stoneRelief * 0.94);
+          floorBlue = Math.min(255, floorBlue * light + stoneRelief * 0.82);
 
           if (seam) {
             floorRed += (SEAM[0] - floorRed) * 0.45;

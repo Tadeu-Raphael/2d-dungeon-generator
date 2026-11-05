@@ -6,12 +6,18 @@ export function disposeDungeonThreeGroup(group: THREE.Group): void {
   const textures = new Set<THREE.Texture>();
   const collectMaterial = (material: THREE.Material): void => {
     materials.add(material);
-    if ("map" in material && material.map instanceof THREE.Texture) {
-      textures.add(material.map);
+    for (const value of Object.values(material)) {
+      if (value instanceof THREE.Texture) textures.add(value);
     }
   };
 
   group.traverse((object) => {
+    const ownedTextures = object.userData.ownedTextures;
+    if (Array.isArray(ownedTextures)) {
+      for (const texture of ownedTextures) {
+        if (texture instanceof THREE.Texture) textures.add(texture);
+      }
+    }
     if (object instanceof THREE.InstancedMesh) object.dispose();
     if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments) {
       geometries.add(object.geometry);

@@ -14,6 +14,8 @@ import {
 } from "../dungeon";
 import type { Dungeon, Tile } from "../dungeon";
 import { computeContourSegments } from "./cartographicField";
+import { createCartographicTextureSet3D } from "./cartographicMaterials3d";
+import type { CartographicTextureSet3D } from "./cartographicMaterials3d";
 
 const WALL_HEIGHT = 0.96;
 const WALL_THICKNESS = 0.17;
@@ -37,6 +39,7 @@ export interface SmoothWallOptions {
   opacity?: number;
   levelId?: string;
   namePrefix?: string;
+  textures?: CartographicTextureSet3D;
 }
 
 export function createSmoothWallMeshes(
@@ -46,6 +49,9 @@ export function createSmoothWallMeshes(
   const opacity = options.opacity ?? 1;
   const prefix = options.namePrefix ?? "dungeon";
   const segments = computeContourSegments(dungeon, 4, 0.3, 0.5, isOpenTile);
+  if (segments.length === 0) return [];
+
+  const textures = options.textures ?? createCartographicTextureSet3D();
   const tileAt = (x: number, y: number): Tile | undefined => (
     dungeon.tiles[Math.min(dungeon.height - 1, Math.max(0, Math.floor(y)))]
       ?.[Math.min(dungeon.width - 1, Math.max(0, Math.floor(x)))]
@@ -62,8 +68,20 @@ export function createSmoothWallMeshes(
   });
   if (kept.length === 0) return [];
 
-  const material = (color: string, roughness: number): THREE.MeshStandardMaterial => {
-    const result = new THREE.MeshStandardMaterial({ color, roughness });
+  const material = (
+    color: string,
+    roughness: number,
+    map: THREE.Texture,
+    bumpMap: THREE.Texture,
+    bumpScale: number,
+  ): THREE.MeshStandardMaterial => {
+    const result = new THREE.MeshStandardMaterial({
+      color,
+      roughness,
+      map,
+      bumpMap,
+      bumpScale,
+    });
     if (opacity < 1) {
       result.transparent = true;
       result.opacity = opacity;
@@ -73,16 +91,17 @@ export function createSmoothWallMeshes(
   };
   const wallMesh = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
-    material("#ffffff", 0.94),
+    material("#ffffff", 0.94, textures.wall, textures.wallBump, 0.035),
     kept.length,
   );
   const capMesh = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
-    material("#ffffff", 0.86),
+    material("#ffffff", 0.86, textures.floor, textures.floorBump, 0.02),
     kept.length,
   );
   wallMesh.name = `${prefix}-walls`;
   capMesh.name = `${prefix}-wall-caps`;
+  if (!options.textures) wallMesh.userData.ownedTextures = Object.values(textures);
   for (const mesh of [wallMesh, capMesh]) {
     mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
     if (options.levelId) mesh.userData.levelId = options.levelId;

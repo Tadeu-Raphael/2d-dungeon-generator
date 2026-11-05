@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CORRIDOR_TILE, FLOOR_TILE, WALL_TILE } from "../dungeon";
 import type { Dungeon, Tile } from "../dungeon";
 import { computeContourSegments } from "./cartographicField";
+import { getProceduralCartographicTextureAtlas } from "./cartographicTextures";
 import { getCartographicScale, renderCartographicImage } from "./cartographicMap";
 
 function createDungeon(width: number, height: number, floors: ReadonlyArray<[number, number, Tile?]>): Dungeon {
@@ -55,6 +56,45 @@ describe("cartographic renderer", () => {
       return `${image.data[offset]},${image.data[offset + 1]},${image.data[offset + 2]}`;
     };
     expect(pixel(1)).not.toBe(pixel(4));
+  });
+
+  it("adds cached stone relief and fibrous paper variation to the map", () => {
+    const textureAtlas = getProceduralCartographicTextureAtlas(16);
+    const floors: Array<[number, number]> = [];
+    for (let y = 1; y < 5; y += 1) {
+      for (let x = 1; x < 5; x += 1) floors.push([x, y]);
+    }
+    const image = renderCartographicImage(
+      createDungeon(6, 6, floors),
+      { ...OPTIONS, targetScale: 16 },
+    );
+    const pixelColors = (tileX: number, tileY: number): Set<string> => {
+      const colors = new Set<string>();
+      for (let py = tileY * image.scale; py < (tileY + 1) * image.scale; py += 1) {
+        for (let px = tileX * image.scale; px < (tileX + 1) * image.scale; px += 1) {
+          const offset = (py * image.width + px) * 4;
+          colors.add(`${image.data[offset]},${image.data[offset + 1]},${image.data[offset + 2]}`);
+        }
+      }
+      return colors;
+    };
+
+    expect(getProceduralCartographicTextureAtlas(16)).toBe(textureAtlas);
+    expect(new Set(textureAtlas.stoneRelief).size).toBeGreaterThan(8);
+    expect(new Set(textureAtlas.wallRelief).size).toBeGreaterThan(8);
+    expect(new Set(textureAtlas.parchmentRelief).size).toBeGreaterThan(3);
+    expect(pixelColors(2, 2).size).toBeGreaterThan(8);
+    expect(pixelColors(0, 0).size).toBeGreaterThan(3);
+  });
+
+  it("limits wall block relief and hatching to the wall layer", () => {
+    const dungeon = squareRoom();
+    const textured = renderCartographicImage(dungeon, OPTIONS);
+    const plain = renderCartographicImage(dungeon, { ...OPTIONS, showWalls: false });
+    const x = Math.floor(2.1 * textured.scale);
+    const y = Math.floor(4.5 * textured.scale);
+    const offset = (y * textured.width + x) * 4;
+    expect(textured.data.slice(offset, offset + 3)).not.toEqual(plain.data.slice(offset, offset + 3));
   });
 });
 
