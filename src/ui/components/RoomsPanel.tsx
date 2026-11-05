@@ -1,26 +1,37 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { DungeonParameters } from "../../dungeon";
+import { MIN_DUNGEON_ROOM_COUNT, getMaxRoomCountForGrid } from "../../dungeon";
 import { RangeControl } from "./RangeControl";
 
 interface RoomsPanelProps {
   parameters: DungeonParameters;
   setParameters: Dispatch<SetStateAction<DungeonParameters>>;
   corridorControls: Array<{ key: string; label: string; min: number; max: number; step: number; format: (value: number) => string }>;
+  multilevelEnabled: boolean;
 }
 
-export function RoomsPanel({ parameters, setParameters, corridorControls }: RoomsPanelProps) {
+export function RoomsPanel({
+  parameters,
+  setParameters,
+  corridorControls,
+  multilevelEnabled,
+}: RoomsPanelProps) {
   return (
     <>
-      <div className="section-heading settings-section-heading"><span>QUANTIDADE DE SALAS</span></div>
+      <div className="section-heading settings-section-heading">
+        <span>{multilevelEnabled ? "QUANTIDADE DE SALAS POR NÍVEL" : "QUANTIDADE DE SALAS"}</span>
+      </div>
       <RangeControl
         id="parameter-roomCount"
-        label="Quantidade de salas"
+        label={multilevelEnabled ? "Salas por nível" : "Quantidade de salas"}
         value={parameters.roomCount}
-        min={4}
-        max={24}
+        min={MIN_DUNGEON_ROOM_COUNT}
+        max={getMaxRoomCountForGrid(parameters.width, parameters.height)}
         step={1}
         formatValue={(value) => `${value} salas`}
-        description="Ajuste a quantidade de ambientes gerados."
+        description={multilevelEnabled
+          ? "Referência do nível principal; os demais andares variam em torno dela, e a aba Multinível permite ajustes individuais."
+          : "O limite cresce com a grade; em grades pequenas, valores altos podem recorrer ao gerador V1."}
         editable
         onChange={(roomCount) => setParameters((current) => ({ ...current, roomCount }))}
       />

@@ -1,4 +1,5 @@
 import type {
+  DoorVariant,
   DungeonGenerationMetadata,
   LiquidFeature,
   LiquidType,
@@ -167,6 +168,7 @@ export interface ConnectionEdgeMetadata extends Readonly<Record<string, unknown>
   allowParallel?: boolean;
   accessRequirements?: readonly string[];
   lockId?: string;
+  doorVariant?: DoorVariant;
   widthIsFixed?: boolean;
   requestedWidth?: number;
   routeStyle?: CorridorRouteStyle;

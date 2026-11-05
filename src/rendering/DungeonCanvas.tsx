@@ -11,15 +11,12 @@ import {
   CAVE_TILE,
   CAVE_WATERFALL_TILE,
   CAVE_WATER_TILE,
-  CORRIDOR_TILE,
-  DOOR_TILE,
   ELEVATED_FLOOR_TILE,
   EXTERIOR_CONNECTION_TILE,
   EXTERIOR_ENTRANCE_TILE,
   LAVA_TILE,
   PILLAR_TILE,
   ROOM_STAIRS_TILE,
-  SECRET_DOOR_TILE,
   STAIRS_DOWN_TILE,
   STAIRS_UP_TILE,
   TRAP_DEFINITIONS,
@@ -31,18 +28,17 @@ import type { Dungeon, Tile, TrapType } from "../dungeon";
 import { ROOM_TYPE_CATEGORIES } from "../roomTypes";
 import {
   TRAP_CATEGORY_COLORS,
-  createDungeonTileCanvas,
   createRoomCategoryGrid,
   createRoomNumberGrid,
   DUNGEON_MAP_PALETTE,
   getRoomConnectionTiles,
-  getRoomCategory,
-  getRoomFloorColor,
   getVisibleTile,
-  getWallEdges,
   isOpenCaveConnection,
 } from "./dungeonTileSemantics";
 import type { WallEdge, WallSide } from "./dungeonTileSemantics";
+import { createCartographicCanvas } from "./cartographicMap";
+import { getDoorwayDrawing, getDoorwayFootprint, getDoorwayGroups } from "./doorwayLayout";
+import type { DoorwayGroup } from "./doorwayLayout";
 import type { MapFocusRequest } from "./types";
 
 export { getTileColor } from "./dungeonTileSemantics";
@@ -161,30 +157,6 @@ function drawTileFeature(
       .lineTo(tileX + tileSize * 0.56, tileY + tileSize * 0.56)
       .lineTo(tileX + tileSize * 0.43, tileY + tileSize * 0.8)
       .stroke({ color: "#f5d992", width: tileSize * 0.07 });
-  } else if (tile === DOOR_TILE) {
-    const doorX = tileX + tileSize * 0.18;
-    const doorY = tileY + tileSize * 0.12;
-    const doorWidth = tileSize * 0.64;
-    const doorHeight = tileSize * 0.76;
-    features
-      .rect(doorX, doorY, doorWidth, doorHeight)
-      .fill("#775334")
-      .stroke({ color: "#d6aa66", width: tileSize * 0.08 });
-    features
-      .circle(doorX + doorWidth * 0.72, doorY + doorHeight * 0.52, tileSize * 0.06)
-      .fill("#f0cf87");
-  } else if (tile === SECRET_DOOR_TILE) {
-    const doorX = tileX + tileSize * 0.12;
-    const doorY = tileY + tileSize * 0.12;
-    const doorSize = tileSize * 0.76;
-    features
-      .rect(doorX, doorY, doorSize, doorSize)
-      .fill("#17212c")
-      .stroke({ color: "#596671", width: tileSize * 0.06, alignment: 0.5 });
-    features
-      .moveTo(tileX + tileSize * 0.5, tileY + tileSize * 0.28)
-      .lineTo(tileX + tileSize * 0.5, tileY + tileSize * 0.72)
-      .stroke({ color: "#87919a", width: tileSize * 0.06 });
   } else if (tile === EXTERIOR_ENTRANCE_TILE) {
     features
       .rect(tileX + tileSize * 0.2, tileY + tileSize * 0.14, tileSize * 0.6, tileSize * 0.72)
@@ -353,6 +325,41 @@ function drawTileFeature(
   } else {
     const trapType = TRAP_TYPES.find((type) => TRAP_DEFINITIONS[type].tile === tile);
     if (trapType) drawTrapFeature(features, trapType, tileX, tileY, tileSize);
+  }
+}
+
+function drawDoorwayFeatures(
+  features: Graphics,
+  groups: readonly DoorwayGroup[],
+  tileSize: number,
+): void {
+  for (const group of groups) {
+    const footprint = getDoorwayFootprint(group);
+    const originX = footprint.x * tileSize;
+    const originY = footprint.y * tileSize;
+    for (const primitive of getDoorwayDrawing(group, tileSize)) {
+      if (primitive.kind === "rect") {
+        const rect = features.rect(
+          originX + primitive.x,
+          originY + primitive.y,
+          primitive.width,
+          primitive.height,
+        );
+        if (primitive.fill) rect.fill(primitive.fill);
+        if (primitive.stroke) {
+          rect.stroke({ color: primitive.stroke, width: primitive.strokeWidth ?? tileSize * 0.04 });
+        }
+      } else if (primitive.kind === "line") {
+        features
+          .moveTo(originX + primitive.x1, originY + primitive.y1)
+          .lineTo(originX + primitive.x2, originY + primitive.y2)
+          .stroke({ color: primitive.color, width: primitive.width, cap: "round" });
+      } else {
+        features
+          .circle(originX + primitive.x, originY + primitive.y, primitive.radius)
+          .fill(primitive.fill);
+      }
+    }
   }
 }
 
@@ -665,6 +672,7 @@ function DungeonCanvas({
   const hostRef = useRef<HTMLDivElement>(null);
   const [app, setApp] = useState<Application | null>(null);
   const roomCategories = useMemo(() => createRoomCategoryGrid(dungeon), [dungeon]);
+  const doorwayGroups = useMemo(() => getDoorwayGroups(dungeon.tiles, dungeon.doorVariants), [dungeon]);
   const roomNumbers = useMemo(
     () => createRoomNumberGrid(dungeon.tiles, dungeon.width, dungeon.roomDetails),
     [dungeon],
@@ -684,7 +692,13 @@ function DungeonCanvas({
   const [showGrid, setShowGrid] = useState(true);
   const [showWalls, setShowWalls] = useState(true);
   const rasterizedMap = useMemo(
-    () => createDungeonTileCanvas(dungeon, showWater, showLava, roomCategories, showWalls),
+    () => createCartographicCanvas(dungeon, {
+      showWater,
+      showLava,
+      showWalls,
+      showGrid: false,
+      roomCategories,
+    }),
     [dungeon, roomCategories, showLava, showWalls, showWater],
   );
   const [zoom, setZoom] = useState(1);
@@ -1024,14 +1038,9 @@ function DungeonCanvas({
 
       const mapWidth = tileSize * dungeon.width;
       const mapHeight = tileSize * dungeon.height;
-      const useRasterBase = tileSize < 2.5;
       const showFeatures = tileSize * zoom >= 2.5;
       renderedTileSizeRef.current = tileSize;
 
-      const walls = new Graphics();
-      const floors = new Graphics();
-      const corridors = new Graphics();
-      const corridorEdges = new Graphics();
       const grid = new Graphics();
       const features = new Graphics();
       const connectionHighlights = new Graphics();
@@ -1042,77 +1051,11 @@ function DungeonCanvas({
       roomHighlightFillGraphicsRef.current = roomHighlightFill;
       roomHighlightGraphicsRef.current = roomHighlights;
       hoverRoomHighlightGraphicsRef.current = hoverRoomHighlights;
-      if (!useRasterBase) walls.rect(0, 0, mapWidth, mapHeight).fill(DUNGEON_MAP_PALETTE.wall);
-      if (useRasterBase) {
-        const sprite = Sprite.from(rasterizedMap, true);
-        sprite.width = mapWidth;
-        sprite.height = mapHeight;
-        map.addChild(sprite);
-      }
-      if (!useRasterBase) {
-        for (let y = 0; y < dungeon.height; y += 1) {
-          for (let x = 0; x < dungeon.width; x += 1) {
-            const tile = getVisibleTile(dungeon.tiles[y][x], showWater, showLava);
-            const tileX = x * tileSize;
-            const tileY = y * tileSize;
-            const category = getRoomCategory(roomCategories, dungeon.width, x, y);
-            const roomFloorColor = getRoomFloorColor(category);
-            const inset = showGrid && tileSize * zoom >= 3
-              ? 0.5 / (app.renderer.resolution * zoom)
-              : 0;
-            const floorX = tileX + inset;
-            const floorY = tileY + inset;
-            const floorTileSize = tileSize - inset * 2;
-            if (tile === 0) {
-              if (showFeatures && showWalls) {
-                drawTileFeature(features, tile, tileX, tileY, tileSize, getWallEdges(dungeon.tiles, x, y));
-              }
-            } else if (tile === CORRIDOR_TILE) {
-              corridors
-                .rect(tileX, tileY, tileSize, tileSize)
-                .fill(DUNGEON_MAP_PALETTE.corridor);
-              const corridorSides = [
-                { neighbor: dungeon.tiles[y - 1]?.[x], x1: tileX, y1: tileY, x2: tileX + tileSize, y2: tileY },
-                { neighbor: dungeon.tiles[y]?.[x + 1], x1: tileX + tileSize, y1: tileY, x2: tileX + tileSize, y2: tileY + tileSize },
-                { neighbor: dungeon.tiles[y + 1]?.[x], x1: tileX, y1: tileY + tileSize, x2: tileX + tileSize, y2: tileY + tileSize },
-                { neighbor: dungeon.tiles[y]?.[x - 1], x1: tileX, y1: tileY, x2: tileX, y2: tileY + tileSize },
-              ];
-              for (const side of corridorSides) {
-                if (side.neighbor === CORRIDOR_TILE) continue;
-                corridorEdges.moveTo(side.x1, side.y1).lineTo(side.x2, side.y2);
-              }
-            } else if (tile === 1) {
-              floors.rect(floorX, floorY, floorTileSize, floorTileSize).fill(roomFloorColor);
-            } else if (tile === ELEVATED_FLOOR_TILE) {
-              floors.rect(floorX, floorY, floorTileSize, floorTileSize).fill(category ? roomFloorColor : DUNGEON_MAP_PALETTE.floor);
-              if (showFeatures) drawTileFeature(features, tile, tileX, tileY, tileSize);
-            } else if (tile === ROOM_STAIRS_TILE) {
-              floors.rect(floorX, floorY, floorTileSize, floorTileSize).fill(DUNGEON_MAP_PALETTE.corridor);
-              if (showFeatures) drawTileFeature(features, tile, tileX, tileY, tileSize);
-            } else if (tile === CAVE_BREACH_TILE) {
-              floors.rect(floorX, floorY, floorTileSize, floorTileSize).fill("#998058");
-              if (showFeatures) drawTileFeature(features, tile, tileX, tileY, tileSize);
-            } else if (tile === CAVE_TILE) {
-              floors
-                .rect(floorX, floorY, floorTileSize, floorTileSize)
-                .fill(isOpenCaveConnection(dungeon, roomCategories, x, y) ? "#879a70" : "#4c6953");
-              if (showFeatures && isOpenCaveConnection(dungeon, roomCategories, x, y)) {
-                drawTileFeature(features, tile, tileX, tileY, tileSize, [], true);
-              }
-            } else {
-              drawTileFeature(features, tile, tileX, tileY, tileSize);
-            }
-          }
-        }
-        corridorEdges.stroke({
-          color: DUNGEON_MAP_PALETTE.corridorEdge,
-          alpha: 0.68,
-          width: tileSize * 0.06,
-          cap: "round",
-          join: "round",
-        });
-      }
-      if (!useRasterBase) map.addChild(walls, floors, corridors, corridorEdges);
+      const sprite = Sprite.from(rasterizedMap, true);
+      sprite.width = mapWidth;
+      sprite.height = mapHeight;
+      map.addChild(sprite);
+      if (showFeatures) drawDoorwayFeatures(features, doorwayGroups, tileSize);
       map.addChild(roomHighlightFill);
       map.addChild(grid);
       map.addChild(connectionHighlights);
@@ -1121,7 +1064,7 @@ function DungeonCanvas({
       map.addChild(hoverRoomHighlights);
 
       const updateRasterFeatures = (mapX: number, mapY: number) => {
-        if (!useRasterBase || !showFeatures) return;
+        if (!showFeatures) return;
         features.clear();
         const displayedTileSize = tileSize * zoom;
         const firstVisibleX = Math.max(0, Math.floor(-mapX / displayedTileSize) - 1);
@@ -1143,11 +1086,12 @@ function DungeonCanvas({
               x * tileSize,
               y * tileSize,
               tileSize,
-              tile === 0 && showWalls ? getWallEdges(dungeon.tiles, x, y) : [],
+              [],
               tile === CAVE_TILE && isOpenCaveConnection(dungeon, roomCategories, x, y),
             );
           }
         }
+        drawDoorwayFeatures(features, doorwayGroups, tileSize);
       };
       const updateGrid = (mapX: number, mapY: number) => {
         grid.clear();

@@ -6,7 +6,6 @@ import {
   CAVE_CONNECTION_WALL_TILE,
   CAVE_LAVA_FALL_TILE,
   CAVE_WATERFALL_TILE,
-  DOOR_TILE,
   ELEVATED_FLOOR_TILE,
   EXTERIOR_CONNECTION_TILE,
   EXTERIOR_ENTRANCE_TILE,
@@ -23,7 +22,7 @@ import {
   WATER_TILE,
   WALL_TILE,
 } from "../dungeon";
-import type { Dungeon, Tile, TrapCategory, TrapType } from "../dungeon";
+import type { Dungeon, DoorVariant, Tile, TrapCategory, TrapType } from "../dungeon";
 import type { MapFocusRequest } from "./types";
 import type { RoomTypeCategory } from "../roomTypes";
 import {
@@ -39,6 +38,25 @@ import {
   TRAP_CATEGORY_COLORS,
 } from "./dungeonTileSemantics";
 import { disposeDungeonThreeGroup } from "./dungeonThreeResources";
+import { getDoorwayGroups } from "./doorwayLayout";
+import { createSmoothWallMeshes } from "./smoothWalls";
+import type { VerticalConnection } from "../dungeonStructure";
+import {
+  MAX_LEVEL_SPACING,
+  MIN_LEVEL_SPACING,
+  addDoorVariantMeshes,
+  buildLevelContextGroup,
+  buildVerticalLinksGroup,
+  computeLevelOffsets,
+  getDefaultLevelSpacing,
+  getLevelOpacity,
+  getVerticalLinkGeometry,
+} from "./multilevelThree";
+import type {
+  MultilevelViewMode,
+  ThreeLevelDescriptor,
+  UpperLevelMode,
+} from "./multilevelThree";
 
 interface DungeonThreeCanvasProps {
   dungeon: Dungeon;
@@ -52,18 +70,30 @@ interface DungeonThreeCanvasProps {
   onToggleWater: () => void;
   onToggleLava: () => void;
   onBackTo2D: () => void;
+  /** All levels of a multilevel dungeon; the selected level is rendered from `dungeon`. */
+  levels?: readonly ThreeLevelDescriptor[];
+  verticalConnections?: readonly VerticalConnection[];
+  selectedLevelId?: string;
+  onSelectLevel?: (levelId: string) => void;
 }
+
+const SHADOW_TILE_LIMIT = 20_000;
+
+const MULTILEVEL_MODE_LABELS: Record<MultilevelViewMode, string> = {
+  level: "Nível",
+  stack: "Pilha",
+  exploded: "Explodida",
+};
+
+const UPPER_LEVEL_LABELS: Record<UpperLevelMode, string> = {
+  solid: "Sólidos",
+  ghost: "Fantasma",
+  hidden: "Ocultos",
+};
 
 interface FloorCoordinate {
   x: number;
   y: number;
-}
-
-interface WallPlacement {
-  x: number;
-  z: number;
-  rotation: number;
-  color?: THREE.Color;
 }
 
 interface InstancePlacement {
@@ -85,6 +115,11 @@ interface DungeonFootprint {
 }
 
 type CameraView = "top" | "isometric" | "custom";
+
+// A lower camera shows stacked levels side by side instead of one floor hiding the next.
+function getIsometricDirection(stacked: boolean): THREE.Vector3 {
+  return new THREE.Vector3(0.62, stacked ? 0.42 : 0.76, 0.9).normalize();
+}
 
 const TRAP_TYPE_BY_TILE = new Map<Tile, TrapType>(
   TRAP_TYPES.map((type) => [TRAP_DEFINITIONS[type].tile, type]),
@@ -256,6 +291,10 @@ function DungeonThreeCanvas({
   onToggleWater,
   onToggleLava,
   onBackTo2D,
+  levels,
+  verticalConnections,
+  selectedLevelId,
+  onSelectLevel,
 }: DungeonThreeCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -271,8 +310,18 @@ function DungeonThreeCanvas({
   const highlightRef = useRef<THREE.LineSegments | null>(null);
   const connectionHighlightRef = useRef<THREE.InstancedMesh | null>(null);
   const latestDungeonRef = useRef(dungeon);
-  const callbacksRef = useRef({ onRoomSelect, onClearSelection });
+  const callbacksRef = useRef({ onRoomSelect, onClearSelection, onSelectLevel });
   const requestRenderRef = useRef<(() => void) | null>(null);
+  const contextGroupRef = useRef<THREE.Group | null>(null);
+  const stackExtentRef = useRef({ centerY: 0, span: 0 });
+  const selectedOffsetRef = useRef(0);
+  const selectedVisibleRef = useRef(true);
+  const isMultilevel = (levels?.length ?? 0) > 1;
+  const [viewMode, setViewMode] = useState<MultilevelViewMode>("stack");
+  const [levelSpacing, setLevelSpacing] = useState(getDefaultLevelSpacing("stack"));
+  const [upperLevelMode, setUpperLevelMode] = useState<UpperLevelMode>("ghost");
+  const [hiddenLevelIds, setHiddenLevelIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [emphasizeLinks, setEmphasizeLinks] = useState(true);
   const [isReady, setIsReady] = useState(false);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [cameraView, setCameraView] = useState<CameraView>("isometric");
@@ -284,7 +333,7 @@ function DungeonThreeCanvas({
   }, []);
 
   latestDungeonRef.current = dungeon;
-  callbacksRef.current = { onRoomSelect, onClearSelection };
+  callbacksRef.current = { onRoomSelect, onClearSelection, onSelectLevel };
 
   const fitCamera = useCallback(() => {
     const camera = cameraRef.current;
@@ -293,10 +342,11 @@ function DungeonThreeCanvas({
 
     const centerX = footprint.centerX;
     const centerZ = footprint.centerZ;
-    const distance = getCameraFitDistance(camera, footprint.width, footprint.height);
-    const offset = new THREE.Vector3(0.62, 0.76, 0.9).normalize().multiplyScalar(distance);
+    const { centerY, span } = stackExtentRef.current;
+    const distance = getCameraFitDistance(camera, footprint.width, footprint.height + span * 0.7);
+    const offset = getIsometricDirection(span > 0).multiplyScalar(distance);
     camera.up.set(0, 1, 0);
-    controls.target.set(centerX, 0, centerZ);
+    controls.target.set(centerX, centerY, centerZ);
     camera.position.copy(controls.target).add(offset);
     camera.far = Math.max(2000, distance * 10);
     camera.updateProjectionMatrix();
@@ -309,15 +359,16 @@ function DungeonThreeCanvas({
     const controls = controlsRef.current;
     if (!camera || !controls) return;
 
-    const center = new THREE.Vector3(footprint.centerX, 0, footprint.centerZ);
-    const distance = getCameraFitDistance(camera, footprint.width, footprint.height);
+    const { centerY, span } = stackExtentRef.current;
+    const center = new THREE.Vector3(footprint.centerX, centerY, footprint.centerZ);
+    const distance = getCameraFitDistance(camera, footprint.width, footprint.height + span * 0.7);
     controls.target.copy(center);
     if (view === "top") {
       camera.up.set(0, 0, -1);
-      camera.position.set(center.x, distance, center.z + 0.001);
+      camera.position.set(center.x, center.y + distance, center.z + 0.001);
     } else {
       camera.up.set(0, 1, 0);
-      const offset = new THREE.Vector3(0.62, 0.76, 0.9).normalize().multiplyScalar(distance);
+      const offset = getIsometricDirection(span > 0).multiplyScalar(distance);
       camera.position.copy(center).add(offset);
     }
     camera.updateProjectionMatrix();
@@ -361,7 +412,29 @@ function DungeonThreeCanvas({
     scene.add(new THREE.AmbientLight("#c6d3de", 0.55));
 
     const keyLight = new THREE.DirectionalLight("#f4e3c2", 2.1);
-    keyLight.position.set(dungeon.width * 0.35, Math.max(dungeon.width, dungeon.height), -dungeon.height * 0.25);
+    const lightSpan = Math.max(dungeon.width, dungeon.height);
+    keyLight.position.set(
+      dungeon.width * 0.85,
+      lightSpan * 1.1,
+      dungeon.height * 0.25,
+    );
+    keyLight.target.position.set(dungeon.width / 2, 0, dungeon.height / 2);
+    scene.add(keyLight.target);
+    // Soft shadows give walls depth; very large maps skip them to keep rendering responsive.
+    const shadowsEnabled = dungeon.width * dungeon.height <= SHADOW_TILE_LIMIT;
+    if (shadowsEnabled) {
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.set(2048, 2048);
+      const shadowCamera = keyLight.shadow.camera;
+      shadowCamera.left = -lightSpan * 0.8;
+      shadowCamera.right = lightSpan * 0.8;
+      shadowCamera.top = lightSpan * 0.8;
+      shadowCamera.bottom = -lightSpan * 0.8;
+      shadowCamera.near = 1;
+      shadowCamera.far = lightSpan * 4;
+      keyLight.shadow.bias = -0.0004;
+      keyLight.shadow.normalBias = 0.03;
+    }
     scene.add(keyLight);
 
     const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000);
@@ -378,6 +451,8 @@ function DungeonThreeCanvas({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
+    renderer.shadowMap.enabled = shadowsEnabled;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.className = "dungeon-three-canvas";
     renderer.domElement.setAttribute("aria-label", "Mapa 3D interativo");
     host.appendChild(renderer.domElement);
@@ -403,20 +478,21 @@ function DungeonThreeCanvas({
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       const currentView = cameraViewRef.current;
+      const { centerY, span } = stackExtentRef.current;
       const target = currentView === "custom"
         ? controls.target.clone()
-        : new THREE.Vector3(footprint.centerX, 0, footprint.centerZ);
+        : new THREE.Vector3(footprint.centerX, centerY, footprint.centerZ);
       const direction = currentView === "top"
         ? new THREE.Vector3(0, 1, 0)
         : currentView === "isometric"
-          ? new THREE.Vector3(0.62, 0.76, 0.9).normalize()
+          ? getIsometricDirection(span > 0)
           : camera.position.clone().sub(controls.target).normalize();
       if (currentView === "top") camera.up.set(0, 0, -1);
       else if (currentView === "isometric") camera.up.set(0, 1, 0);
       controls.target.copy(target);
       camera.position.copy(target).addScaledVector(
         direction,
-        getCameraFitDistance(camera, footprint.width, footprint.height),
+        getCameraFitDistance(camera, footprint.width, footprint.height + span * 0.7),
       );
       controls.update();
       requestRender();
@@ -471,14 +547,30 @@ function DungeonThreeCanvas({
       }
 
       const floorMesh = floorMeshRef.current;
-      if (!floorMesh) return;
       const bounds = renderer.domElement.getBoundingClientRect();
       pointer.set(
         ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
         -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
       );
       raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(floorMesh, false)[0];
+      const hit = floorMesh && selectedVisibleRef.current
+        ? raycaster.intersectObject(floorMesh, false)[0]
+        : undefined;
+      const contextFloors: THREE.Object3D[] = [];
+      contextGroupRef.current?.traverse((object) => {
+        if (object.visible && object.name === "level-floor" && object.userData.pickable) {
+          contextFloors.push(object);
+        }
+      });
+      const contextHit = contextFloors.length > 0
+        ? raycaster.intersectObjects(contextFloors, false)[0]
+        : undefined;
+      if (contextHit && (!hit || contextHit.distance < hit.distance)) {
+        const levelId = contextHit.object.userData.levelId as string | undefined;
+        if (levelId) callbacksRef.current.onSelectLevel?.(levelId);
+        return;
+      }
+      if (!floorMesh) return;
       if (hit?.instanceId === undefined) {
         callbacksRef.current.onClearSelection();
         return;
@@ -513,7 +605,11 @@ function DungeonThreeCanvas({
         scene.remove(mapGroupRef.current);
         disposeDungeonThreeGroup(mapGroupRef.current);
       }
-      sceneRef.current = null;
+      if (contextGroupRef.current) {
+        scene.remove(contextGroupRef.current);
+        disposeDungeonThreeGroup(contextGroupRef.current);
+        contextGroupRef.current = null;
+      }
       cameraRef.current = null;
       controlsRef.current = null;
       mapGroupRef.current = null;
@@ -530,6 +626,98 @@ function DungeonThreeCanvas({
       setIsReady(false);
     };
   }, [dungeon.height, dungeon.width, fitCamera, footprint, setActiveCameraView]);
+
+  const sortedLevels = useMemo(
+    () => [...(levels ?? [])].sort((first, second) => first.verticalIndex - second.verticalIndex),
+    [levels],
+  );
+
+  // Other levels and the vertical links between levels, placed relative to the active level.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || !isReady) return;
+
+    if (contextGroupRef.current) {
+      scene.remove(contextGroupRef.current);
+      disposeDungeonThreeGroup(contextGroupRef.current);
+      contextGroupRef.current = null;
+    }
+    const mapGroup = mapGroupRef.current;
+    const selected = sortedLevels.find((level) => level.id === selectedLevelId) ?? sortedLevels[0];
+    if (!isMultilevel || !selected || viewMode === "level") {
+      stackExtentRef.current = { centerY: 0, span: 0 };
+      selectedOffsetRef.current = 0;
+      selectedVisibleRef.current = true;
+      if (mapGroup) {
+        mapGroup.visible = true;
+        mapGroup.position.y = 0;
+        mapGroup.traverse((object) => {
+          if (object.userData.isBase) object.visible = true;
+        });
+      }
+      requestRenderRef.current?.();
+      return;
+    }
+
+    const offsets = computeLevelOffsets(sortedLevels, levelSpacing);
+    const selectedOffset = offsets.get(selected.id) ?? 0;
+    selectedOffsetRef.current = selectedOffset;
+    selectedVisibleRef.current = !hiddenLevelIds.has(selected.id);
+    const visibleLevelIds = new Set<string>();
+    const contextGroup = new THREE.Group();
+    contextGroup.name = "multilevel-context";
+    let lowestY = selectedOffset;
+    let highestY = selectedOffset + 1;
+    for (const level of sortedLevels) {
+      const opacity = getLevelOpacity(level, selected, upperLevelMode);
+      const isHidden = hiddenLevelIds.has(level.id) || opacity <= 0;
+      if (!isHidden) {
+        visibleLevelIds.add(level.id);
+        const y = offsets.get(level.id) ?? 0;
+        lowestY = Math.min(lowestY, y);
+        highestY = Math.max(highestY, y + 1);
+        if (level.id !== selected.id) {
+          contextGroup.add(buildLevelContextGroup(level, y, opacity));
+        }
+      }
+    }
+    if (mapGroup) {
+      mapGroup.visible = selectedVisibleRef.current;
+      mapGroup.position.y = selectedOffset;
+      mapGroup.traverse((object) => {
+        if (object.userData.isBase) object.visible = false;
+      });
+    }
+
+    const links = (verticalConnections ?? [])
+      .map((connection) => getVerticalLinkGeometry(connection, offsets))
+      .filter((link): link is NonNullable<typeof link> => link !== undefined);
+    contextGroup.add(buildVerticalLinksGroup(links, visibleLevelIds, emphasizeLinks));
+
+    scene.add(contextGroup);
+    contextGroupRef.current = contextGroup;
+    stackExtentRef.current = {
+      centerY: (lowestY + highestY) / 2,
+      span: highestY - lowestY,
+    };
+    requestRenderRef.current?.();
+  }, [
+    emphasizeLinks,
+    hiddenLevelIds,
+    isMultilevel,
+    isReady,
+    levelSpacing,
+    selectedLevelId,
+    sortedLevels,
+    upperLevelMode,
+    verticalConnections,
+    viewMode,
+    dungeon,
+  ]);
+
+  useEffect(() => {
+    if (isReady) fitCamera();
+  }, [fitCamera, isReady, viewMode]);
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -552,12 +740,12 @@ function DungeonThreeCanvas({
     const group = new THREE.Group();
     const categories = createRoomCategoryGrid(dungeon);
     const floors: Array<{ coordinate: FloorCoordinate; color: THREE.Color }> = [];
-    const walls: WallPlacement[] = [];
     const pillars: FloorCoordinate[] = [];
     const waterTiles: FloorCoordinate[] = [];
     const lavaTiles: FloorCoordinate[] = [];
     const doors: InstancePlacement[] = [];
     const secretDoors: InstancePlacement[] = [];
+    const variantDoors = new Map<DoorVariant, InstancePlacement[]>();
     const stairTreads: InstancePlacement[] = [];
     const entranceArch: InstancePlacement[] = [];
     const exteriorLinks: InstancePlacement[] = [];
@@ -588,12 +776,6 @@ function DungeonThreeCanvas({
         if (tile === LAVA_TILE || CAVE_LAVA_TILES.has(tile)) lavaTiles.push(coordinate);
 
         const passageRotation = getPassageRotation(dungeon, x, y);
-        if (tile === DOOR_TILE) {
-          doors.push({ x: x + 0.5, y: 0.46, z: y + 0.5, rotation: passageRotation });
-        } else if (tile === SECRET_DOOR_TILE) {
-          secretDoors.push({ x: x + 0.5, y: 0.46, z: y + 0.5, rotation: passageRotation });
-        }
-
         if (
           tile === STAIRS_UP_TILE
           || tile === STAIRS_DOWN_TILE
@@ -659,43 +841,34 @@ function DungeonThreeCanvas({
         if (tile === EXTERIOR_CONNECTION_TILE) {
           exteriorLinks.push({ x: x + 0.5, y: 0.07, z: y + 0.5 });
         }
-
-        const neighbors = [
-          { dx: 0, dz: -1, rotation: 0 },
-          { dx: 1, dz: 0, rotation: Math.PI / 2 },
-          { dx: 0, dz: 1, rotation: 0 },
-          { dx: -1, dz: 0, rotation: Math.PI / 2 },
-        ];
-        for (const neighbor of neighbors) {
-          const neighborX = x + neighbor.dx;
-          const neighborY = y + neighbor.dz;
-          const isOutside = neighborX < 0
-            || neighborX >= dungeon.width
-            || neighborY < 0
-            || neighborY >= dungeon.height;
-          if (
-            isOutside
-            && (tile === EXTERIOR_ENTRANCE_TILE || tile === EXTERIOR_CONNECTION_TILE)
-          ) {
-            continue;
-          }
-          const neighborTile = isOutside
-            ? WALL_TILE
-            : dungeon.tiles[neighborY]?.[neighborX] ?? WALL_TILE;
-          if (neighborTile === WALL_TILE) {
-            walls.push({
-              x: x + 0.5 + neighbor.dx * 0.5,
-              z: y + 0.5 + neighbor.dz * 0.5,
-              rotation: neighbor.rotation,
-              color: new THREE.Color(
-                tile === CAVE_BREACH_TILE || tile === CAVE_CONNECTION_WALL_TILE
-                  ? "#647568"
-                  : "#596671",
-              ),
-            });
-          }
-        }
       }
+    }
+
+    for (const doorway of getDoorwayGroups(dungeon.tiles, dungeon.doorVariants)) {
+      const center = doorway.positions.reduce(
+        (sum, position) => ({ x: sum.x + position.x, y: sum.y + position.y }),
+        { x: 0, y: 0 },
+      );
+      const x = center.x / doorway.positions.length + 0.5;
+      const z = center.y / doorway.positions.length + 0.5;
+      const rotation = doorway.axis === "horizontal"
+        ? 0
+        : doorway.axis === "vertical"
+          ? Math.PI / 2
+          : getPassageRotation(dungeon, doorway.positions[0].x, doorway.positions[0].y);
+      const placement: InstancePlacement = {
+        x,
+        y: 0.46,
+        z,
+        rotation,
+        scaleX: doorway.positions.length,
+      };
+      if (doorway.tile === SECRET_DOOR_TILE) secretDoors.push(placement);
+      else if (doorway.variant) {
+        const bucket = variantDoors.get(doorway.variant) ?? [];
+        bucket.push(placement);
+        variantDoors.set(doorway.variant, bucket);
+      } else doors.push(placement);
     }
 
     for (const room of dungeon.roomDetails) {
@@ -732,11 +905,13 @@ function DungeonThreeCanvas({
     );
     base.rotation.x = -Math.PI / 2;
     base.position.set(dungeon.width / 2, -0.12, dungeon.height / 2);
+    base.visible = stackExtentRef.current.span === 0;
+    base.userData.isBase = true;
     group.add(base);
 
     if (floors.length > 0) {
       const floorMesh = new THREE.InstancedMesh(
-        new THREE.BoxGeometry(0.97, 0.08, 0.97),
+        new THREE.BoxGeometry(0.985, 0.08, 0.985),
         new THREE.MeshStandardMaterial({
           color: "#ffffff",
           roughness: 0.92,
@@ -758,7 +933,8 @@ function DungeonThreeCanvas({
         position.set(floor.coordinate.x + 0.5, 0, floor.coordinate.y + 0.5);
         matrix.compose(position, rotation, scale);
         floorMesh.setMatrixAt(index, matrix);
-        floorMesh.setColorAt(index, floor.color);
+        const noise = Math.sin(floor.coordinate.x * 12.9898 + floor.coordinate.y * 78.233) * 43758.5453;
+        floorMesh.setColorAt(index, floor.color.clone().multiplyScalar(0.93 + (noise - Math.floor(noise)) * 0.12));
         coordinates.push(floor.coordinate);
       });
 
@@ -766,6 +942,7 @@ function DungeonThreeCanvas({
       if (floorMesh.instanceColor) floorMesh.instanceColor.needsUpdate = true;
       floorMesh.computeBoundingSphere();
       group.add(floorMesh);
+      floorMesh.receiveShadow = true;
       floorMeshRef.current = floorMesh;
       floorCoordinatesRef.current = coordinates;
     } else {
@@ -773,31 +950,7 @@ function DungeonThreeCanvas({
       floorCoordinatesRef.current = [];
     }
 
-    if (walls.length > 0) {
-      const wallMesh = new THREE.InstancedMesh(
-        new THREE.BoxGeometry(1.02, 0.96, 0.14),
-        new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.94 }),
-        walls.length,
-      );
-      wallMesh.name = "dungeon-walls";
-      wallMesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
-      const matrix = new THREE.Matrix4();
-      const position = new THREE.Vector3();
-      const rotation = new THREE.Quaternion();
-      const scale = new THREE.Vector3(1, 1, 1);
-
-      walls.forEach((wall, index) => {
-        position.set(wall.x, 0.48, wall.z);
-        rotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), wall.rotation);
-        matrix.compose(position, rotation, scale);
-        wallMesh.setMatrixAt(index, matrix);
-        wallMesh.setColorAt(index, wall.color ?? new THREE.Color("#596671"));
-      });
-      wallMesh.instanceMatrix.needsUpdate = true;
-      if (wallMesh.instanceColor) wallMesh.instanceColor.needsUpdate = true;
-      wallMesh.computeBoundingSphere();
-      group.add(wallMesh);
-    }
+    for (const wallMesh of createSmoothWallMeshes(dungeon)) group.add(wallMesh);
 
     if (pillars.length > 0) {
       const pillarMesh = new THREE.InstancedMesh(
@@ -817,13 +970,14 @@ function DungeonThreeCanvas({
       });
       pillarMesh.instanceMatrix.needsUpdate = true;
       group.add(pillarMesh);
+      pillarMesh.castShadow = true;
     }
 
     if (doors.length > 0) {
       addInstancedMesh(
         group,
         "dungeon-doors",
-        new THREE.BoxGeometry(0.76, 0.86, 0.08),
+        new THREE.BoxGeometry(1, 0.86, 0.08),
         new THREE.MeshStandardMaterial({ color: "#8f6b49", roughness: 0.82 }),
         doors,
       );
@@ -832,11 +986,12 @@ function DungeonThreeCanvas({
       addInstancedMesh(
         group,
         "dungeon-secret-doors",
-        new THREE.BoxGeometry(0.76, 0.86, 0.08),
+        new THREE.BoxGeometry(1, 0.86, 0.08),
         new THREE.MeshStandardMaterial({ color: "#56616a", roughness: 0.92 }),
         secretDoors,
       );
     }
+    addDoorVariantMeshes(group, variantDoors);
     if (stairTreads.length > 0) {
       addInstancedMesh(
         group,
@@ -1054,6 +1209,8 @@ function DungeonThreeCanvas({
     }
 
     scene.add(group);
+    group.position.y = selectedOffsetRef.current;
+    group.visible = selectedVisibleRef.current;
     mapGroupRef.current = group;
     requestRenderRef.current?.();
   }, [dungeon]);
@@ -1088,7 +1245,7 @@ function DungeonThreeCanvas({
     const controls = controlsRef.current;
     if (!room || !camera || !controls) return;
 
-    const center = new THREE.Vector3(room.x + room.width / 2, 0, room.y + room.height / 2);
+    const center = new THREE.Vector3(room.x + room.width / 2, selectedOffsetRef.current, room.y + room.height / 2);
     const offset = camera.position.clone().sub(controls.target);
     const distance = Math.max(8, Math.max(room.width, room.height) * 2.6);
     controls.target.copy(center);
@@ -1287,8 +1444,104 @@ function DungeonThreeCanvas({
             </div>
           </div>
           <div className="three-canvas-hint">
-            Arraste para orbitar · roda para zoom · botão direito para mover · exibe o nível ativo
+            Arraste para orbitar · roda para zoom · botão direito para mover
+            {isMultilevel && viewMode !== "level" ? " · clique em um andar para ativá-lo" : ""}
           </div>
+          {isMultilevel && (
+            <details className="three-level-panel" open>
+              <summary>Níveis <span>{sortedLevels.length}</span></summary>
+              <div className="three-level-modes" role="group" aria-label="Modo de visualização dos níveis">
+                {(Object.keys(MULTILEVEL_MODE_LABELS) as MultilevelViewMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    className="map-control-button map-view-button"
+                    type="button"
+                    aria-pressed={viewMode === mode}
+                    title={mode === "level"
+                      ? "Exibir apenas o nível ativo"
+                      : mode === "stack"
+                        ? "Todos os níveis empilhados"
+                        : "Níveis separados verticalmente"}
+                    onClick={() => {
+                      setViewMode(mode);
+                      setLevelSpacing(getDefaultLevelSpacing(mode));
+                    }}
+                  >
+                    {MULTILEVEL_MODE_LABELS[mode]}
+                  </button>
+                ))}
+              </div>
+              {viewMode !== "level" && (
+                <>
+                  <label className="three-level-field">
+                    <span>Distância entre andares</span>
+                    <input
+                      type="range"
+                      min={MIN_LEVEL_SPACING}
+                      max={MAX_LEVEL_SPACING}
+                      step={0.2}
+                      value={levelSpacing}
+                      onChange={(event) => setLevelSpacing(Number(event.target.value))}
+                    />
+                  </label>
+                  <label className="three-level-field">
+                    <span>Níveis acima do ativo</span>
+                    <select
+                      value={upperLevelMode}
+                      onChange={(event) => setUpperLevelMode(event.target.value as UpperLevelMode)}
+                    >
+                      {(Object.keys(UPPER_LEVEL_LABELS) as UpperLevelMode[]).map((mode) => (
+                        <option key={mode} value={mode}>{UPPER_LEVEL_LABELS[mode]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="map-control-button three-level-link-toggle"
+                    type="button"
+                    aria-pressed={emphasizeLinks}
+                    onClick={() => setEmphasizeLinks((current) => !current)}
+                  >
+                    Destacar conexões verticais
+                  </button>
+                </>
+              )}
+              <ul className="three-level-list">
+                {[...sortedLevels].reverse().map((level) => {
+                  const isActive = level.id === selectedLevelId;
+                  const isHidden = hiddenLevelIds.has(level.id);
+                  return (
+                    <li key={level.id} data-active={isActive} data-hidden={isHidden}>
+                      <button
+                        className="three-level-select"
+                        type="button"
+                        aria-pressed={isActive}
+                        onClick={() => onSelectLevel?.(level.id)}
+                      >
+                        {level.name}
+                      </button>
+                      {viewMode !== "level" && (
+                        <button
+                          className="three-level-visibility"
+                          type="button"
+                          aria-pressed={!isHidden}
+                          aria-label={`${isHidden ? "Mostrar" : "Ocultar"} ${level.name}`}
+                          title={`${isHidden ? "Mostrar" : "Ocultar"} ${level.name}`}
+                          onClick={() => setHiddenLevelIds((current) => {
+                            const next = new Set(current);
+                            if (next.has(level.id)) next.delete(level.id);
+                            else next.add(level.id);
+                            return next;
+                          })}
+                        >
+                          {isHidden ? "○" : "●"}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
         </>
       )}
     </div>

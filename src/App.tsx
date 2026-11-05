@@ -28,6 +28,7 @@ import {
   DUNGEON_GENERATOR_VERSION_V2,
   MAX_DUNGEON_HEIGHT,
   MAX_DUNGEON_ROOM_COUNT,
+  getMaxRoomCountForGrid,
   MAX_DUNGEON_WIDTH,
   MIN_DUNGEON_DIMENSION,
   DOOR_TILE,
@@ -51,6 +52,9 @@ import {
   TRAP_TYPES,
   WATER_TILE,
   type TrapCategory,
+  type DoorVariant,
+  DOOR_VARIANTS,
+  DOOR_VARIANT_LABELS,
   type Dungeon,
   type DungeonTrap,
   type RoomPosition,
@@ -76,6 +80,7 @@ import {
 } from "./customDungeonProfile";
 import {
   MAX_DUNGEON_LEVEL_COUNT,
+  deriveNearbyLevelSize,
   type DungeonLevelGenerationConfig,
 } from "./dungeonStructureGeneration";
 import type { VerticalConnectionKind } from "./dungeonStructure";
@@ -106,6 +111,7 @@ import {
 } from "./ui/components/RoomMetadata";
 import type { RoomMetadataField, RoomMetadataSection } from "./ui/components/RoomMetadata";
 import { RoomGuidePanel } from "./ui/components/RoomGuidePanel";
+import { createRoomMapSummary } from "./ui/components/roomMapSummary";
 import { DungeonLevelNavigator } from "./ui/components/DungeonLevelNavigator";
 import { getRoomConnectionIndex } from "./roomConnections";
 
@@ -117,7 +123,7 @@ interface ParameterControl {
   step: number;
   format: (value: number) => string;
 }
-type SettingsSection = "generation" | "rooms" | "types" | "traps" | "treasures" | "access";
+type SettingsSection = "generation" | "multilevel" | "rooms" | "types" | "traps" | "treasures" | "access";
 type CanvasView = "2d" | "3d";
 interface RoomPositionEdit { baseDungeon: Dungeon; positions: Record<number, RoomPosition>; dungeon: Dungeon; }
 interface GeneratedTrap extends DungeonTrap {
@@ -127,7 +133,7 @@ interface GeneratedTrap extends DungeonTrap {
 type DungeonLevelOverride = Partial<Pick<
   DungeonLevelGenerationConfig,
   "width" | "height" | "roomCount" | "topologyStyle" | "spatialLayoutStyle" | "isSecret" | "isOptional"
->>;
+>> & { cavern?: boolean };
 
 const DungeonThreeCanvas = lazy(() => import("./rendering/DungeonThreeCanvas"));
 
@@ -227,6 +233,7 @@ const corridorControls: ParameterControl[] = [
 ];
 const settingsSections: Array<{ id: SettingsSection; label: string }> = [
   { id: "generation", label: "Geração" },
+  { id: "multilevel", label: "Multinível" },
   { id: "rooms", label: "Salas" },
   { id: "types", label: "Tipos" },
   { id: "traps", label: "Armadilhas" },
@@ -324,6 +331,7 @@ export default function App() {
   const [allowedVerticalConnectionKinds, setAllowedVerticalConnectionKinds] = useState<VerticalConnectionKind[]>(["stairs"]);
   const [requireGlobalConnectivity, setRequireGlobalConnectivity] = useState(true);
   const [allowVerticalCycles, setAllowVerticalCycles] = useState(false);
+  const [allowLongVerticalConnections, setAllowLongVerticalConnections] = useState(false);
   const [selectedLevelId, setSelectedLevelId] = useState<string | undefined>();
   const [focusRequest, setFocusRequest] = useState<MapFocusRequest | null>(null);
   const [roomDetailNumber, setRoomDetailNumber] = useState<number | null>(null);
@@ -402,14 +410,6 @@ export default function App() {
       || (!activeCustomProfile?.mode && activeCustomProfile?.baseProfile === "natural-cavern")
     ));
   const profileCavesEnabled = Boolean(activeCustomProfile?.cavesEnabled);
-  const multilevelUnavailableReason = cavesRequired
-    ? "O perfil selecionado exige cavernas e não pode ser combinado com vários níveis."
-    : profileCavesEnabled
-      ? "O perfil personalizado exige cavernas; desative esse recurso para usar vários níveis."
-      : cavesEnabled
-        ? "Desative as cavernas para habilitar a geração multinível."
-        : undefined;
-  const multilevelUnavailable = Boolean(multilevelUnavailableReason);
   const defaultCycleCount = conceptProfile.topology.parameters.cycleCount ?? 0;
   const spatialDensity = spatialDensityOverride ?? conceptProfile.v2Preferences.defaultDensity;
   const singleGenerationRequest = useMemo<DungeonGenerationPipelineRequest>(() => ({
@@ -438,6 +438,14 @@ export default function App() {
     Array.from({ length: effectiveLevelCount }, (_, index) => {
       const verticalIndex = index - levelsBelowReference;
       const override = levelOverrides[index] ?? {};
+      // Floors other than the main one get a deterministic size close to the main level's.
+      const nearby = verticalIndex === 0
+        ? { width: parameters.width, height: parameters.height, roomCount: parameters.roomCount }
+        : deriveNearbyLevelSize(seed, verticalIndex, {
+          width: parameters.width,
+          height: parameters.height,
+          roomCount: parameters.roomCount,
+        });
       return {
         name: verticalIndex === 0
           ? "Nível principal"
@@ -445,15 +453,14 @@ export default function App() {
             ? `Subsolo ${Math.abs(verticalIndex)}`
             : `Piso superior ${verticalIndex}`,
         verticalIndex,
-        width: override.width ?? parameters.width,
-        height: override.height ?? parameters.height,
-        roomCount: override.roomCount ?? (
-          multilevelEnabled ? Math.min(parameters.roomCount, 6) : parameters.roomCount
-        ),
+        width: override.width ?? nearby.width,
+        height: override.height ?? nearby.height,
+        roomCount: override.roomCount ?? nearby.roomCount,
         topologyStyle: override.topologyStyle
           ?? (topologyStyleSelection === "profile" ? conceptProfile.topology.style : topologyStyleSelection),
         spatialLayoutStyle: override.spatialLayoutStyle
           ?? (spatialStyleSelection === "profile" ? profileSpatialStyle : spatialStyleSelection),
+        ...(override.cavern ? { profile: "natural-cavern" as const } : {}),
         ...(override.isSecret ? { isSecret: true } : {}),
         ...(override.isOptional ? { isOptional: true } : {}),
       };
@@ -463,11 +470,11 @@ export default function App() {
     effectiveLevelCount,
     levelOverrides,
     levelsBelowReference,
-    multilevelEnabled,
     parameters.height,
     parameters.roomCount,
     parameters.width,
     profileSpatialStyle,
+    seed,
     spatialStyleSelection,
     topologyStyleSelection,
   ]);
@@ -493,6 +500,8 @@ export default function App() {
           allowedVerticalConnectionKinds,
           requireGlobalConnectivity,
           allowVerticalCycles,
+          allowLongVerticalConnections,
+          cavesEnabled: cavesEnabled || profileCavesEnabled,
           cycleCount: cycleCountOverride ?? defaultCycleCount,
           spatialDensity,
           varyCorridorWidths,
@@ -500,9 +509,11 @@ export default function App() {
       }
       : { kind: "single", request: singleGenerationRequest }
   ), [
+    allowLongVerticalConnections,
     allowVerticalCycles,
     allowedVerticalConnectionKinds,
     activeCustomProfile,
+    cavesEnabled,
     concept,
     cycleCountOverride,
     defaultCycleCount,
@@ -510,6 +521,7 @@ export default function App() {
     levelsBelowReference,
     multilevelEnabled,
     parameters,
+    profileCavesEnabled,
     requireGlobalConnectivity,
     seed,
     singleGenerationRequest,
@@ -538,6 +550,10 @@ export default function App() {
     ? generationRequest.request.levels[generationRequest.request.entryLevelIndex]
     : undefined;
   const dungeon = roomPositionEdit?.baseDungeon === generatedDungeon ? roomPositionEdit.dungeon : generatedDungeon;
+  const roomMapSummary = useMemo(
+    () => createRoomMapSummary(dungeon, structureRun?.structure, selectedLevel?.id),
+    [dungeon, selectedLevel?.id, structureRun?.structure],
+  );
   const algorithm = generatedDungeon.algorithm;
   const hasBspRooms = dungeon.roomDetails.length > 0;
   const roomDetail = roomDetailNumber === null ? undefined : dungeon.roomDetails.find((room) => room.number === roomDetailNumber);
@@ -548,6 +564,9 @@ export default function App() {
   const roomDetailSize = roomDetail
     ? getRoomSizeCategory(roomDetail.width, roomDetail.height)
     : undefined;
+  const roomDetailMapElements = roomDetail
+    ? roomMapSummary.elementsByRoom.get(roomDetail.number) ?? []
+    : [];
   const roomDetailMetadata = useMemo(
     () => roomDetail
       ? createRoomMetadataFields(roomDetail, roomDetail.roomType.title, seed, dungeon, roomDetail.roomType.description)
@@ -579,6 +598,14 @@ export default function App() {
       for (const tile of row) types.add(tile);
     }
     return types;
+  }, [dungeon]);
+  const presentDoorVariants = useMemo(() => {
+    const present = new Set<DoorVariant>();
+    for (const [position, variant] of Object.entries(dungeon.doorVariants ?? {})) {
+      const [x, y] = position.split(",").map(Number);
+      if (dungeon.tiles[y]?.[x] === DOOR_TILE) present.add(variant);
+    }
+    return DOOR_VARIANTS.filter((variant) => present.has(variant));
   }, [dungeon]);
   const floorPercentage = Math.round((dungeon.floorCount / (dungeon.width * dungeon.height)) * 100);
   const hasOpenCaveConnection = useMemo(
@@ -668,6 +695,32 @@ export default function App() {
     setRoomDetailSection(null);
     setFocusRequest(null);
   }, [selectedLevel?.id]);
+  const threeLevels = useMemo(
+    () => structureRun?.structure.levels.flatMap((level) => {
+      const levelDungeon = structureRun.levels.find((entry) => entry.levelId === level.id)?.generation.dungeon;
+      return levelDungeon
+        ? [{
+          id: level.id,
+          name: level.name,
+          verticalIndex: level.verticalIndex,
+          dungeon: levelDungeon,
+          isSecret: level.isSecret,
+          isOptional: level.isOptional,
+        }]
+        : [];
+    }),
+    [structureRun],
+  );
+  const exportStructure = useMemo(
+    () => structureRun && threeLevels && threeLevels.length > 1
+      ? {
+        levels: threeLevels,
+        verticalConnections: structureRun.structure.verticalConnections,
+        name: structureRun.structure.name,
+      }
+      : undefined,
+    [structureRun, threeLevels],
+  );
   const focusRoomOnMap = useCallback((roomNumber: number) => {
     setFocusRequest((current) => ({
       type: "room",
@@ -749,6 +802,7 @@ export default function App() {
     setAllowedVerticalConnectionKinds(["stairs"]);
     setRequireGlobalConnectivity(true);
     setAllowVerticalCycles(false);
+    setAllowLongVerticalConnections(false);
     setCavesEnabled(false);
     setSelectedLevelId(undefined);
     setRoomDetailNumber(null);
@@ -791,6 +845,7 @@ export default function App() {
             allowedVerticalConnectionKinds,
             requireGlobalConnectivity,
             allowVerticalCycles,
+            allowLongVerticalConnections,
           }
           : null,
       };
@@ -922,7 +977,7 @@ export default function App() {
               <>
                 <div className="settings-tier-label">
                   <strong>Configuração básica</strong>
-                  <span>Perfil, dimensões, seed e estrutura principal.</span>
+                  <span>Perfil, dimensões e seed da geração.</span>
                 </div>
                 <div className="section-heading settings-section-heading"><span>VERSÃO DO GERADOR</span></div>
                 <label className="entrance-control" htmlFor="generator-version"><span>PIPELINE</span>
@@ -932,25 +987,6 @@ export default function App() {
                   </select>
                   <small>{multilevelEnabled ? "Dungeons multinível sempre usam o pipeline V2 em cada andar." : generatorVersion === DUNGEON_GENERATOR_VERSION_V1 ? "Geração legada, mantida como padrão." : "Topologia, layout espacial e roteamento de corredores."}</small>
                 </label>
-                <div className="multilevel-control">
-                  <button
-                    className="multilevel-toggle-button"
-                    type="button"
-                    aria-pressed={multilevelEnabled}
-                    disabled={multilevelUnavailable}
-                    onClick={() => {
-                      const enabled = !multilevelEnabled;
-                      if (enabled) setGeneratorVersion(DUNGEON_GENERATOR_VERSION_V2);
-                      setMultilevelEnabled(enabled);
-                    }}
-                  >
-                    <span>Gerar vários níveis</span>
-                    <strong>{multilevelEnabled ? "Ativado" : "Ativar"}</strong>
-                  </button>
-                  {multilevelUnavailableReason
-                    ? <p className="generation-notice generation-notice-warning multilevel-unavailable" role="note">{multilevelUnavailableReason}</p>
-                    : <small>Cada nível é gerado separadamente pelo pipeline V2.</small>}
-                </div>
                 <label className="entrance-control" htmlFor="dungeon-concept"><span>PERFIL</span>
                   <select id="dungeon-concept" value={concept} onChange={(event) => {
                     if (event.currentTarget.value === "custom") {
@@ -960,7 +996,6 @@ export default function App() {
                     const selectedConcept = DUNGEON_CONCEPT_ORDER.find((id) => id === event.currentTarget.value);
                     if (selectedConcept) {
                       setConcept(selectedConcept);
-                      if (selectedConcept === "natural-cavern") setMultilevelEnabled(false);
                     }
                   }}>
                     {DUNGEON_CONCEPT_ORDER.map((conceptId) => (
@@ -970,6 +1005,57 @@ export default function App() {
                   </select>
                   <small>{conceptProfile.description}</small>
                 </label>
+                <div className="multilevel-control cave-control">
+                  <button
+                    className="multilevel-toggle-button"
+                    type="button"
+                    aria-pressed={cavesEnabled || cavesRequired}
+                    disabled={cavesRequired || (generatorVersion !== DUNGEON_GENERATOR_VERSION_V2 && !multilevelEnabled)}
+                    onClick={() => {
+                      const enabled = !cavesEnabled;
+                      if (enabled) setGeneratorVersion(DUNGEON_GENERATOR_VERSION_V2);
+                      setCavesEnabled(enabled);
+                    }}
+                  >
+                    <span>Incluir cavernas</span>
+                    <strong>{cavesRequired ? "Obrigatório" : cavesEnabled ? "Ativado" : "Ativar"}</strong>
+                  </button>
+                  <small>
+                    {generatorVersion !== DUNGEON_GENERATOR_VERSION_V2 && !multilevelEnabled
+                      ? "Selecione o pipeline V2 para inserir cavernas orgânicas."
+                      : multilevelEnabled
+                        ? "Cavernas se formam em todos os níveis e podem receber conexões verticais naturais."
+                        : "Cavernas orgânicas são conectadas às estruturas construídas."}
+                  </small>
+                  {(cavesRequired || cavesEnabled) && (
+                    <>
+                      <RangeControl
+                        id="cavern-density"
+                        label="Densidade navegável"
+                        value={parameters.cellularFillPercent}
+                        min={35}
+                        max={65}
+                        step={1}
+                        formatValue={(value) => `${value}%`}
+                        description="Percentual aproximado de células navegáveis."
+                        editable
+                        onChange={(cellularFillPercent) => setParameters((current) => ({ ...current, cellularFillPercent }))}
+                      />
+                      <RangeControl
+                        id="cavern-irregularity"
+                        label="Irregularidade"
+                        value={parameters.cellularIterations}
+                        min={2}
+                        max={8}
+                        step={1}
+                        formatValue={(value) => `${value} iterações`}
+                        description="Mais iterações produzem contornos mais fragmentados."
+                        editable
+                        onChange={(cellularIterations) => setParameters((current) => ({ ...current, cellularIterations }))}
+                      />
+                    </>
+                  )}
+                </div>
                 {concept === "custom" && (
                   <details className="generation-experimental custom-profile-editor" open={!customProfileValidation.valid}>
                     <summary>
@@ -1009,6 +1095,102 @@ export default function App() {
                   commitSeedDraft={commitSeedDraft}
                   randomizeSeed={randomizeSeed}
                 />
+                <details className="generation-advanced">
+                  <summary>Configurações avançadas da V2</summary>
+                  <p className="settings-detail-intro">Ajuste topologia, ocupação espacial e recursos de cavernas; valores mais complexos exigem uma nova geração.</p>
+                  <label className="entrance-control" htmlFor="topology-style"><span>TOPOLOGIA</span>
+                    <select id="topology-style" value={topologyStyleSelection} onChange={(event) => {
+                      const selectedStyle = topologyStyleOptions.find(({ id }) => id === event.currentTarget.value)?.id;
+                      setTopologyStyleSelection(selectedStyle ?? "profile");
+                    }}>
+                      <option value="profile">Padrão do perfil</option>
+                      {topologyStyleOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="entrance-control" htmlFor="spatial-style"><span>DISTRIBUIÇÃO ESPACIAL</span>
+                    <select id="spatial-style" value={spatialStyleSelection} onChange={(event) => {
+                      const selectedStyle = spatialStyleOptions.find(({ id }) => id === event.currentTarget.value)?.id;
+                      setSpatialStyleSelection(selectedStyle ?? "profile");
+                    }}>
+                      <option value="profile">Padrão do perfil</option>
+                      {spatialStyleOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <div className="range-control-with-action">
+                    <RangeControl
+                      id="cycle-count"
+                      label="Circuitos adicionais"
+                      value={cycleCountOverride ?? defaultCycleCount}
+                      min={0}
+                      max={Math.max(1, parameters.roomCount, defaultCycleCount, cycleCountOverride ?? 0)}
+                      step={1}
+                      formatValue={(value) => `${value} ciclos`}
+                      description="Conexões extras que criam rotas alternativas."
+                      editable
+                      onChange={setCycleCountOverride}
+                    />
+                    <button
+                      className="configuration-button configuration-button-secondary"
+                      type="button"
+                      onClick={() => setCycleCountOverride(null)}
+                    >
+                      Usar padrão do perfil
+                    </button>
+                  </div>
+                  <RangeControl
+                    id="spatial-density"
+                    label="Densidade espacial"
+                    value={spatialDensity}
+                    min={0}
+                    max={100}
+                    step={1}
+                    formatValue={(value) => `${value}%`}
+                    description="Controla o espaço livre entre as salas."
+                    editable
+                    onChange={setSpatialDensityOverride}
+                  />
+                  <label className="parameter-control" htmlFor="vary-corridor-widths">
+                    <span className="parameter-label"><span>Variar largura dos corredores</span></span>
+                    <input id="vary-corridor-widths" type="checkbox" checked={varyCorridorWidths} onChange={(event) => setVaryCorridorWidths(event.currentTarget.checked)} />
+                  </label>
+                </details>
+                <details className="generation-experimental">
+                  <summary>Ferramentas experimentais</summary>
+                  <p className="settings-detail-intro">Recursos de comparação e validação, separados das opções usadas na geração comum.</p>
+                  <div className="benchmark-gallery-action">
+                    <button className="benchmark-gallery-button" type="button" onClick={downloadBenchmarkGallery}>Baixar galeria de auditoria</button>
+                    <small>Compara V1/V2, perfis, escalas, topologias, cavernas e dungeons multinível.</small>
+                    {benchmarkGalleryError && <p className="benchmark-notice" role="alert">{benchmarkGalleryError}</p>}
+                    {benchmarkGalleryStatus && <p className="benchmark-notice" role="status">{benchmarkGalleryStatus}</p>}
+                  </div>
+                </details>
+              </>
+            )}
+            {settingsSection === "multilevel" && (
+              <>
+                <div className="settings-tier-label">
+                  <strong>Estrutura multinível</strong>
+                  <span>Ative a geração e configure os andares e suas conexões verticais.</span>
+                </div>
+                <div className="multilevel-control">
+                  <button
+                    className="multilevel-toggle-button"
+                    type="button"
+                    aria-pressed={multilevelEnabled}
+                    onClick={() => {
+                      const enabled = !multilevelEnabled;
+                      if (enabled) setGeneratorVersion(DUNGEON_GENERATOR_VERSION_V2);
+                      setMultilevelEnabled(enabled);
+                    }}
+                  >
+                    <span>Gerar vários níveis</span>
+                    <strong>{multilevelEnabled ? "Ativado" : "Ativar"}</strong>
+                  </button>
+                  <small>Cada nível é gerado separadamente pelo pipeline V2.</small>
+                </div>
+                {!multilevelEnabled && (
+                  <p className="settings-detail-intro">Ative a geração multinível para ajustar os níveis e suas conexões.</p>
+                )}
                 {multilevelEnabled && (
                   <details className="generation-advanced multilevel-config">
                     <summary>Configurações multinível</summary>
@@ -1078,6 +1260,16 @@ export default function App() {
                           onChange={(event) => setAllowVerticalCycles(event.currentTarget.checked)}
                         />
                         <small>Permite conexões extras além da árvore principal.</small>
+                      </label>
+                      <label className="parameter-control multilevel-option" htmlFor="allow-long-vertical-connections">
+                        <span className="parameter-label"><span>Permitir saltos entre níveis</span></span>
+                        <input
+                          id="allow-long-vertical-connections"
+                          type="checkbox"
+                          checked={allowLongVerticalConnections}
+                          onChange={(event) => setAllowLongVerticalConnections(event.currentTarget.checked)}
+                        />
+                        <small>Poços, elevadores, quedas e portais podem ligar um nível a outro bem mais distante (ex.: 1 e 4); marque também esses tipos abaixo. Escadas continuam entre andares vizinhos.</small>
                       </label>
                     </section>
                     <fieldset className="vertical-connection-types">
@@ -1159,7 +1351,7 @@ export default function App() {
                                 id={`level-rooms-${index}`}
                                 type="number"
                                 min={2}
-                                max={MAX_DUNGEON_ROOM_COUNT}
+                                max={getMaxRoomCountForGrid(level.width, level.height)}
                                 step={1}
                                 value={level.roomCount}
                                 onChange={(event) => {
@@ -1173,6 +1365,16 @@ export default function App() {
                                   }
                                 }}
                               />
+                            </label>
+                            <label className="parameter-control" htmlFor={`level-cavern-${index}`}>
+                              <span className="parameter-label"><span>Caverna natural</span></span>
+                              <input
+                                id={`level-cavern-${index}`}
+                                type="checkbox"
+                                checked={level.profile === "natural-cavern"}
+                                onChange={(event) => updateLevelOverride(index, "cavern", event.currentTarget.checked)}
+                              />
+                              <small>Este andar vira uma caverna orgânica, sem salas construídas.</small>
                             </label>
                             <label className="parameter-control" htmlFor={`level-secret-${index}`}>
                               <span className="parameter-label"><span>Nível secreto</span></span>
@@ -1228,108 +1430,6 @@ export default function App() {
                     </section>
                   </details>
                 )}
-                <details className="generation-advanced">
-                  <summary>Configurações avançadas da V2</summary>
-                  <p className="settings-detail-intro">Ajuste topologia, ocupação espacial e recursos de cavernas; valores mais complexos exigem uma nova geração.</p>
-                  <label className="entrance-control" htmlFor="topology-style"><span>TOPOLOGIA</span>
-                    <select id="topology-style" value={topologyStyleSelection} onChange={(event) => {
-                      const selectedStyle = topologyStyleOptions.find(({ id }) => id === event.currentTarget.value)?.id;
-                      setTopologyStyleSelection(selectedStyle ?? "profile");
-                    }}>
-                      <option value="profile">Padrão do perfil</option>
-                      {topologyStyleOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-                    </select>
-                  </label>
-                  <label className="entrance-control" htmlFor="spatial-style"><span>DISTRIBUIÇÃO ESPACIAL</span>
-                    <select id="spatial-style" value={spatialStyleSelection} onChange={(event) => {
-                      const selectedStyle = spatialStyleOptions.find(({ id }) => id === event.currentTarget.value)?.id;
-                      setSpatialStyleSelection(selectedStyle ?? "profile");
-                    }}>
-                      <option value="profile">Padrão do perfil</option>
-                      {spatialStyleOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-                    </select>
-                  </label>
-                  <div className="range-control-with-action">
-                    <RangeControl
-                      id="cycle-count"
-                      label="Circuitos adicionais"
-                      value={cycleCountOverride ?? defaultCycleCount}
-                      min={0}
-                      max={Math.max(1, parameters.roomCount, defaultCycleCount, cycleCountOverride ?? 0)}
-                      step={1}
-                      formatValue={(value) => `${value} ciclos`}
-                      description="Conexões extras que criam rotas alternativas."
-                      editable
-                      onChange={setCycleCountOverride}
-                    />
-                    <button
-                      className="configuration-button configuration-button-secondary"
-                      type="button"
-                      onClick={() => setCycleCountOverride(null)}
-                    >
-                      Usar padrão do perfil
-                    </button>
-                  </div>
-                  <RangeControl
-                    id="spatial-density"
-                    label="Densidade espacial"
-                    value={spatialDensity}
-                    min={0}
-                    max={100}
-                    step={1}
-                    formatValue={(value) => `${value}%`}
-                    description="Controla o espaço livre entre as salas."
-                    editable
-                    onChange={setSpatialDensityOverride}
-                  />
-                  <label className="parameter-control" htmlFor="vary-corridor-widths">
-                    <span className="parameter-label"><span>Variar largura dos corredores</span></span>
-                    <input id="vary-corridor-widths" type="checkbox" checked={varyCorridorWidths} onChange={(event) => setVaryCorridorWidths(event.currentTarget.checked)} />
-                  </label>
-                  <label className="parameter-control" htmlFor="caves-enabled">
-                    <span className="parameter-label"><span>Incluir cavernas</span></span>
-                    <input id="caves-enabled" type="checkbox" checked={cavesEnabled} disabled={cavesRequired || multilevelEnabled} onChange={(event) => setCavesEnabled(event.currentTarget.checked)} />
-                    <small>Na V2, cavernas orgânicas são conectadas às estruturas construídas.</small>
-                  </label>
-                  {(cavesRequired || cavesEnabled) && (
-                    <>
-                      <RangeControl
-                        id="cavern-density"
-                        label="Densidade navegável"
-                        value={parameters.cellularFillPercent}
-                        min={35}
-                        max={65}
-                        step={1}
-                        formatValue={(value) => `${value}%`}
-                        description="Percentual aproximado de células navegáveis."
-                        editable
-                        onChange={(cellularFillPercent) => setParameters((current) => ({ ...current, cellularFillPercent }))}
-                      />
-                      <RangeControl
-                        id="cavern-irregularity"
-                        label="Irregularidade"
-                        value={parameters.cellularIterations}
-                        min={2}
-                        max={8}
-                        step={1}
-                        formatValue={(value) => `${value} iterações`}
-                        description="Mais iterações produzem contornos mais fragmentados."
-                        editable
-                        onChange={(cellularIterations) => setParameters((current) => ({ ...current, cellularIterations }))}
-                      />
-                    </>
-                  )}
-                </details>
-                <details className="generation-experimental">
-                  <summary>Ferramentas experimentais</summary>
-                  <p className="settings-detail-intro">Recursos de comparação e validação, separados das opções usadas na geração comum.</p>
-                  <div className="benchmark-gallery-action">
-                    <button className="benchmark-gallery-button" type="button" onClick={downloadBenchmarkGallery}>Baixar galeria de auditoria</button>
-                    <small>Compara V1/V2, perfis, escalas, topologias, cavernas e dungeons multinível.</small>
-                    {benchmarkGalleryError && <p className="benchmark-notice" role="alert">{benchmarkGalleryError}</p>}
-                    {benchmarkGalleryStatus && <p className="benchmark-notice" role="status">{benchmarkGalleryStatus}</p>}
-                  </div>
-                </details>
               </>
             )}
             {settingsSection === "rooms" && (
@@ -1337,6 +1437,7 @@ export default function App() {
                 parameters={parameters}
                 setParameters={setParameters}
                 corridorControls={corridorControls}
+                multilevelEnabled={multilevelEnabled}
               />
             )}
             {settingsSection === "types" && (
@@ -1442,25 +1543,6 @@ export default function App() {
               </span>
             </div>
           </div>
-          {structureRun && selectedLevel && (
-            <DungeonLevelNavigator
-              structureRun={structureRun}
-              selectedLevelId={selectedLevel.id}
-              connectionKindOptions={verticalConnectionOptions}
-              onSelectLevel={selectLevel}
-            />
-          )}
-          {structureRun && structureRun.connectivity.disconnectedLevelIds.length > 0 && (
-            <div className="generation-notice generation-notice-warning" role="status">
-              <strong>Conectividade incompleta</strong>
-              <span>
-                Níveis sem caminho a partir do nível inicial:{" "}
-                {structureRun.connectivity.disconnectedLevelIds.map((id) => (
-                  structureRun.structure.levels.find((level) => level.id === id)?.name ?? id
-                )).join(", ")}.
-              </span>
-            </div>
-          )}
           {generationStatus === "running" && (
             <div className="generation-notice generation-notice-info generation-worker-status" role="status" aria-live="polite">
               <span className="generation-notice-icon" aria-hidden="true">◌</span>
@@ -1528,6 +1610,10 @@ export default function App() {
                     onToggleWater={toggleWaterVisibility}
                     onToggleLava={toggleLavaVisibility}
                     onBackTo2D={returnTo2D}
+                    levels={threeLevels}
+                    verticalConnections={structureRun?.structure.verticalConnections}
+                    selectedLevelId={selectedLevel?.id}
+                    onSelectLevel={selectLevel}
                   />
                 </Suspense>
               </CanvasViewErrorBoundary>
@@ -1550,6 +1636,25 @@ export default function App() {
             )}
             <div className="map-overlay-label">{selectedLevel?.name ?? "NÍVEL 01"} <span>/</span> PROCEDURAL</div>
           </div>
+          {structureRun && selectedLevel && (
+            <DungeonLevelNavigator
+              structureRun={structureRun}
+              selectedLevelId={selectedLevel.id}
+              connectionKindOptions={verticalConnectionOptions}
+              onSelectLevel={selectLevel}
+            />
+          )}
+          {structureRun && structureRun.connectivity.disconnectedLevelIds.length > 0 && (
+            <div className="generation-notice generation-notice-warning" role="status">
+              <strong>Conectividade incompleta</strong>
+              <span>
+                Níveis sem caminho a partir do nível inicial:{" "}
+                {structureRun.connectivity.disconnectedLevelIds.map((id) => (
+                  structureRun.structure.levels.find((level) => level.id === id)?.name ?? id
+                )).join(", ")}.
+              </span>
+            </div>
+          )}
           <div className="map-legend">
             <span><i className="legend-room" /> {floorLabel}</span>
             {tileTypes.has(CAVE_TILE) && <span><i className="legend-cave" /> CAVERNA</span>}
@@ -1589,6 +1694,9 @@ export default function App() {
             {tileTypes.has(CAVE_LAVA_VENT_TILE) && <span><i className="legend-cave-vent" /> FENDA DE LAVA</span>}
             {tileTypes.has(CORRIDOR_TILE) && <span><i className="legend-corridor" /> CORREDOR</span>}
             {tileTypes.has(DOOR_TILE) && <span><i className="legend-door" /> PORTA</span>}
+            {presentDoorVariants.map((variant) => (
+              <span key={variant}><i className={`legend-door legend-door-${variant}`} /> {DOOR_VARIANT_LABELS[variant].toUpperCase()}</span>
+            ))}
             {tileTypes.has(SECRET_DOOR_TILE) && <span><i className="legend-secret-door" /> PORTA SECRETA</span>}
             {tileTypes.has(STAIRS_UP_TILE) && <span><i className="legend-stairs-up" /> ESCADA ↑</span>}
             {tileTypes.has(STAIRS_DOWN_TILE) && <span><i className="legend-stairs-down" /> ESCADA ↓</span>}
@@ -1671,7 +1779,7 @@ export default function App() {
             <button type="button" aria-label="Fechar guia de salas" onClick={() => setRoomPanelOpen(false)}>×</button>
           </div>
           <div className="room-panel-tools">
-            {hasGenerationResult && <DungeonExportControl dungeon={dungeon} />}
+            {hasGenerationResult && <DungeonExportControl dungeon={dungeon} structure={exportStructure} />}
           </div>
           <RoomGuidePanel
             dungeon={dungeon}
@@ -1690,6 +1798,7 @@ export default function App() {
             selectedRoomNumber={selectedRoomNumber}
             selectionRequestId={focusRequest?.requestId}
             connectionsByRoom={connectionsByRoom}
+            roomMapSummary={roomMapSummary}
             entryRoomNumber={entryRoomNumber}
             onSelectRoom={selectRoomForInspector}
             onHoverRoom={setHoveredGuideRoomNumber}
@@ -1868,6 +1977,21 @@ export default function App() {
                     </strong>
                     <small>Elemento ambiental incluído nesta sala.</small>
                   </div>
+                )}
+                {roomDetailMapElements.length > 0 && (
+                  <section className="room-detail-feature map-detail-feature" aria-label="Elementos internos da sala">
+                    <h3 className="room-detail-feature-heading">Elementos internos</h3>
+                    <div className="room-detail-feature-list">
+                      {roomDetailMapElements.map((element) => (
+                        <div className="room-detail-feature-item" key={element.id}>
+                          <div className="room-detail-feature-content">
+                            <strong className="room-detail-feature-name">{element.label}</strong>
+                            <small>{element.detail}</small>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 )}
                 {roomDetail.traps.length > 0 && (
                   <section className="room-detail-feature trap-detail-feature" aria-label="Armadilhas da sala">

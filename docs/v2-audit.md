@@ -52,6 +52,8 @@ O cenário reproduzível de cinco níveis usa seed `94105`, dimensões diferente
 
 A segunda execução da mesma seed reproduziu as conexões verticais. A suíte também valida estruturas de um nível e preservação do adaptador legado, geração de dois e três níveis, dimensões diferentes, ciclos, conexões inválidas e níveis desconectados. A galeria exercita exemplos de dois e cinco níveis; não adiciona um novo gerador.
 
+Conexões por escadaria ou escada em espiral agora ligam níveis adjacentes e usam marcadores pareados: descida no nível superior e subida no inferior. A distância Manhattan entre os pontos de chegada é limitada a 8 tiles; o gerador escolhe âncoras de salas próximas e a validação rejeita pares distantes, marcadores inconsistentes e escadas descendentes sem vínculo (exceto a entrada da masmorra). O inspetor da sala mostra o tipo, o sentido, o nível conectado e a coordenada do marcador.
+
 ## Compatibilidade e desempenho observado
 
 - **V1:** todos os testes de fingerprints congelados e equivalência com as saídas de referência passaram. A correção de footprint não altera o gerador V1.

@@ -49,6 +49,7 @@ import {
 import { generateGenerationSpatialLayout, SpatialLayoutError } from "./generationSpatialLayout";
 import { generationPlanToDungeon } from "./generationPlanToDungeon";
 import { GenerationPlanValidationError, validateGenerationPlan } from "./generationPlanValidation";
+import { validateDoorGeometry } from "./generationDoorValidation";
 import { generateDungeonTopology, getDungeonTopologyStatistics } from "./generationTopology";
 import { generateV2RoomRecipe } from "./generationRoomRecipe";
 import { DEFAULT_TREASURE_RARITY_WEIGHTS } from "./treasures";
@@ -1295,6 +1296,19 @@ function generateDungeonV2Pipeline(
       () => generationPlanToDungeon(completePlan),
     );
     const dungeon = relocateCorridorTraps(v1RoomRecipe.dungeon, converted, request.seed);
+    const doorIssues = measureStage(
+      stageTimings,
+      "validation",
+      () => validateDoorGeometry(completePlan, dungeon.tiles, dungeon.doorVariants),
+    );
+    if (doorIssues.length > 0) {
+      return createFallbackResult(
+        request,
+        `A validação de portas e aberturas V2 falhou (${doorIssues.slice(0, 3).map((issue) => issue.message).join("; ")}${doorIssues.length > 3 ? `; +${doorIssues.length - 3}` : ""}); foi usado o gerador V1 do perfil.`,
+        "door-validation",
+        roomCountContext,
+      );
+    }
     return {
       dungeon,
       metadata: routedMetadata,

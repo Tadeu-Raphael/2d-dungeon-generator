@@ -1,5 +1,6 @@
 import { createGenerationRandomStreams } from "./dungeon";
-import type { DungeonGenerationMetadata } from "./dungeon";
+import type { DoorVariant, DungeonGenerationMetadata } from "./dungeon";
+import { createRandom, deriveRandomSeed } from "./core/random";
 import { DUNGEON_CONCEPTS } from "./dungeonProfiles";
 import type { DungeonConcept, DungeonConceptProfile } from "./dungeonProfiles";
 import {
@@ -104,6 +105,57 @@ export const DEFAULT_TOPOLOGY_PARAMETERS: TopologyParameters = {
   blockedConnectionCount: 0,
 };
 
+// Defensive and civil architecture gates more passages than caves, mines and open ceremonial halls.
+const DOOR_CONNECTION_RATIO_BY_PROFILE: Readonly<Record<string, number>> = {
+  "military-fortress": 0.4,
+  prison: 0.45,
+  "arcane-laboratory": 0.3,
+  catacombs: 0.3,
+  "lost-civilization": 0.2,
+  "ancient-temple": 0.2,
+  "abandoned-mine": 0.1,
+  "natural-cavern": 0,
+};
+const DEFAULT_DOOR_CONNECTION_RATIO = 0.2;
+
+// Share of plain doors that are not ordinary wooden doors; the rest of each profile stays wood.
+const DOOR_VARIANT_WEIGHTS_BY_PROFILE: Readonly<Record<string, Readonly<Partial<Record<DoorVariant, number>>>>> = {
+  "military-fortress": { reinforced: 0.3, gate: 0.15, grate: 0.05, open: 0.05 },
+  prison: { grate: 0.45, reinforced: 0.2 },
+  "arcane-laboratory": { reinforced: 0.15, open: 0.15 },
+  catacombs: { destroyed: 0.25, grate: 0.1, open: 0.1 },
+  "lost-civilization": { destroyed: 0.3, open: 0.2, gate: 0.1 },
+  "ancient-temple": { open: 0.3, gate: 0.1, destroyed: 0.1 },
+  "abandoned-mine": { destroyed: 0.35, open: 0.25 },
+};
+
+function chooseDoorVariant(
+  profileId: string | undefined,
+  random: () => number,
+): DoorVariant | undefined {
+  const weights = profileId ? DOOR_VARIANT_WEIGHTS_BY_PROFILE[profileId] : undefined;
+  if (!weights) return undefined;
+  let roll = random();
+  for (const [variant, weight] of Object.entries(weights) as Array<[DoorVariant, number]>) {
+    if (roll < weight) return variant;
+    roll -= weight;
+  }
+  return undefined;
+}
+
+function assignDoorVariants(
+  connections: readonly ConnectionEdge[],
+  seed: number,
+  profileId: string | undefined,
+): ConnectionEdge[] {
+  const random = createRandom(deriveRandomSeed(seed, "door-variants"));
+  return connections.map((edge) => {
+    if (edge.connectionType !== "door" || edge.isSecret || edge.isBlocked || edge.isLocked) return edge;
+    const variant = chooseDoorVariant(profileId, random);
+    return variant ? { ...edge, metadata: { ...edge.metadata, doorVariant: variant } } : edge;
+  });
+}
+
 const STYLE_DEFAULTS: Record<TopologyStyle, Partial<TopologyParameters>> = {
   linear: { branchCount: 1, deadEndProbability: 0.85 },
   branching: { branchCount: 3, deadEndProbability: 0.8 },
@@ -131,6 +183,44 @@ function shuffle<T>(values: readonly T[], random: () => number): T[] {
     [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
   }
   return shuffled;
+}
+
+function addDefaultDoorConnections(
+  connections: readonly ConnectionEdge[],
+  random: () => number,
+  profileId: string | undefined,
+): ConnectionEdge[] {
+  const doorRatio = (profileId ? DOOR_CONNECTION_RATIO_BY_PROFILE[profileId] : undefined)
+    ?? DEFAULT_DOOR_CONNECTION_RATIO;
+  const existingDoorCount = connections.filter((edge) => (
+    edge.connectionType === "door" && !edge.isLocked && !edge.isSecret
+  )).length;
+  const eligibleConnections = connections.filter((edge) => (
+    !edge.isBlocked
+    && edge.connectionType === "corridor"
+    && !edge.isSecret
+    && !edge.isLocked
+  ));
+  const eligibleDoorCount = existingDoorCount + eligibleConnections.length;
+  const targetDoorCount = eligibleDoorCount > 0 && doorRatio > 0
+    ? Math.max(1, Math.ceil(eligibleDoorCount * doorRatio))
+    : 0;
+  const additionalDoorCount = Math.min(
+    eligibleConnections.length,
+    Math.max(0, targetDoorCount - existingDoorCount),
+  );
+  if (additionalDoorCount === 0) return connections.map((edge) => edge);
+
+  const selectedDoorIds = new Set(
+    shuffle(eligibleConnections, random)
+      .slice(0, additionalDoorCount)
+      .map((edge) => edge.id),
+  );
+  return connections.map((edge) => (
+    selectedDoorIds.has(edge.id)
+      ? { ...edge, connectionType: "door" }
+      : edge
+  ));
 }
 
 function assertCount(value: number, name: string): void {
@@ -1082,6 +1172,11 @@ export function generateDungeonTopology(
     }
     return edge;
   });
+  const connectionsWithDoors = assignDoorVariants(
+    addDefaultDoorConnections(finalizedConnections, random, profileId),
+    sourcePlan.generation.seed,
+    profileId,
+  );
 
   for (const [branchIndex, branch] of branches.entries()) {
     const leafRoomId = branch.roomIds[branch.roomIds.length - 1];
@@ -1128,7 +1223,7 @@ export function generateDungeonTopology(
     ...sourcePlan,
     generation,
     rooms: finalRooms,
-    connections: finalizedConnections,
+    connections: connectionsWithDoors,
     sectors: finalSectors,
     entryRoomId,
     exitRoomId: objectiveRoomId,

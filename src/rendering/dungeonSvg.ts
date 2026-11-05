@@ -35,6 +35,7 @@ import {
   getTileColor,
   isOpenCaveConnection,
 } from "./dungeonTileSemantics";
+import { getDoorwayDrawing, getDoorwayFootprint, getDoorwayGroups } from "./doorwayLayout";
 
 const EXPORT_TILE_SIZE = 16;
 const MAX_EXPORT_PIXELS = 16_000_000;
@@ -130,8 +131,44 @@ function createCorridorTrapNumberSvgLabel(
   ].join("");
 }
 
+function createDoorwaySvgFeature(
+  group: ReturnType<typeof getDoorwayGroups>[number],
+  tileSize: number,
+): string {
+  const footprint = getDoorwayFootprint(group);
+  const originX = footprint.x * tileSize;
+  const originY = footprint.y * tileSize;
+  return getDoorwayDrawing(group, tileSize).map((primitive) => {
+    if (primitive.kind === "rect") {
+      const fill = primitive.fill ?? "none";
+      const stroke = primitive.stroke
+        ? ` stroke="${primitive.stroke}" stroke-width="${Math.max(0.5, primitive.strokeWidth ?? 1)}"`
+        : "";
+      return `<rect x="${originX + primitive.x}" y="${originY + primitive.y}" width="${primitive.width}" height="${primitive.height}" fill="${fill}"${stroke}/>`;
+    }
+    if (primitive.kind === "line") {
+      return `<path d="M ${originX + primitive.x1} ${originY + primitive.y1} L ${originX + primitive.x2} ${originY + primitive.y2}" fill="none" stroke="${primitive.color}" stroke-width="${Math.max(0.5, primitive.width)}" stroke-linecap="round"/>`;
+    }
+    return `<circle cx="${originX + primitive.x}" cy="${originY + primitive.y}" r="${Math.max(0.6, primitive.radius)}" fill="${primitive.fill}"/>`;
+  }).join("");
+}
+
+export interface DungeonSvgContent {
+  width: number;
+  height: number;
+  /** SVG elements without the outer <svg> wrapper, positioned from (0, 0). */
+  body: string;
+}
+
 export function createDungeonSvg(dungeon: Dungeon): string {
-  const tileSize = getExportTileSize(dungeon);
+  const { width, height, body } = createDungeonSvgContent(dungeon);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><title>Mapa de masmorra</title>${body}</svg>`;
+}
+
+export function createDungeonSvgContent(
+  dungeon: Dungeon,
+  tileSize = getExportTileSize(dungeon),
+): DungeonSvgContent {
   const inset = Math.max(0.2, tileSize * 0.02);
   const width = dungeon.width * tileSize;
   const height = dungeon.height * tileSize;
@@ -154,7 +191,14 @@ export function createDungeonSvg(dungeon: Dungeon): string {
     const corridorTrapLabels = tileSize >= 8
       ? getNumberedCorridorTraps(dungeon).map((trap) => createCorridorTrapNumberSvgLabel(trap, tileSize)).join("")
       : "";
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><title>Mapa de masmorra</title><image width="${width}" height="${height}" href="${tileImage}" image-rendering="pixelated"/>${roomLabels}${corridorTrapLabels}</svg>`;
+    const doorwayFeatures = getDoorwayGroups(dungeon.tiles, dungeon.doorVariants)
+      .map((group) => createDoorwaySvgFeature(group, tileSize))
+      .join("");
+    return {
+      width,
+      height,
+      body: `<image width="${width}" height="${height}" href="${tileImage}" image-rendering="pixelated"/>${doorwayFeatures}${roomLabels}${corridorTrapLabels}`,
+    };
   }
 
   const elements = [
@@ -165,6 +209,7 @@ export function createDungeonSvg(dungeon: Dungeon): string {
   for (let y = 0; y < dungeon.height; y += 1) {
     for (let x = 0; x < dungeon.width; x += 1) {
       const tile = dungeon.tiles[y][x];
+      if (tile === DOOR_TILE || tile === SECRET_DOOR_TILE) continue;
       const tileX = x * tileSize;
       const tileY = y * tileSize;
       const category = getRoomCategory(roomCategories, dungeon.width, x, y);
@@ -176,33 +221,6 @@ export function createDungeonSvg(dungeon: Dungeon): string {
         elements.push(rect(tileX, tileY, tileSize - inset, tileSize - inset, DUNGEON_MAP_PALETTE.wall));
       } else if (tile === 2) {
         elements.push(rect(tileX, tileY, tileSize - inset, tileSize - inset, DUNGEON_MAP_PALETTE.corridor));
-      } else if (tile === DOOR_TILE) {
-        const doorX = tileX + tileSize * 0.18;
-        const doorY = tileY + tileSize * 0.12;
-        const doorWidth = tileSize * 0.64;
-        const doorHeight = tileSize * 0.76;
-        elements.push(rect(
-          doorX,
-          doorY,
-          doorWidth,
-          doorHeight,
-          "#775334",
-          `stroke="#d6aa66" stroke-width="${Math.max(0.7, tileSize * 0.08)}"`,
-        ));
-        elements.push(`<circle cx="${doorX + doorWidth * 0.72}" cy="${doorY + doorHeight * 0.52}" r="${Math.max(0.7, tileSize * 0.06)}" fill="#f0cf87"/>`);
-      } else if (tile === SECRET_DOOR_TILE) {
-        const doorX = tileX + tileSize * 0.12;
-        const doorY = tileY + tileSize * 0.12;
-        const doorSize = tileSize * 0.76;
-        elements.push(rect(
-          doorX,
-          doorY,
-          doorSize,
-          doorSize,
-          "#17212c",
-          `stroke="#596671" stroke-width="${Math.max(0.7, tileSize * 0.06)}"`,
-        ));
-        elements.push(`<path d="M ${tileX + tileSize * 0.5} ${tileY + tileSize * 0.28} V ${tileY + tileSize * 0.72}" stroke="#87919a" stroke-width="${Math.max(0.7, tileSize * 0.06)}"/>`);
       } else if (tile === EXTERIOR_ENTRANCE_TILE) {
         elements.push(rect(
           tileX + tileSize * 0.2,
@@ -297,6 +315,10 @@ export function createDungeonSvg(dungeon: Dungeon): string {
     }
   }
 
+  elements.push(
+    ...getDoorwayGroups(dungeon.tiles, dungeon.doorVariants).map((group) => createDoorwaySvgFeature(group, tileSize)),
+  );
+
   for (const room of dungeon.roomDetails) {
     const centerX = (room.x + room.width / 2) * tileSize;
     const centerY = (room.y + room.height / 2) * tileSize;
@@ -313,5 +335,5 @@ export function createDungeonSvg(dungeon: Dungeon): string {
     elements.push(createCorridorTrapNumberSvgLabel(trap, tileSize));
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><title>Mapa de masmorra</title>${elements.join("")}</svg>`;
+  return { width, height, body: elements.join("") };
 }

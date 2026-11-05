@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  CAVE_CONNECTION_WALL_TILE,
-  PILLAR_TILE,
   TRAP_DEFINITIONS,
   type Dungeon,
   type DungeonRoom,
@@ -19,10 +17,10 @@ import {
 import type { RoomTypeCategory } from "../../roomTypes";
 import type { RoomConnectionSummary } from "../../roomConnections";
 import {
-  createRoomNumberGrid,
   getRoomFloorColor,
 } from "../../rendering/dungeonTileSemantics";
 import { liquidFeatureLabels, roomShapeLabels } from "./RoomMetadata";
+import type { RoomMapElement, RoomMapSummary } from "./roomMapSummary";
 
 type PanelView = "list" | "details";
 type RoomSort = "number" | "category";
@@ -36,6 +34,7 @@ interface RoomGuidePanelProps {
   selectedRoomNumber?: number;
   selectionRequestId?: number;
   connectionsByRoom: ReadonlyMap<number, readonly RoomConnectionSummary[]>;
+  roomMapSummary: RoomMapSummary;
   entryRoomNumber?: number;
   onSelectRoom: (roomNumber: number) => void;
   onHoverRoom: (roomNumber: number | undefined) => void;
@@ -73,6 +72,7 @@ function getConnectionLabel(connection: RoomConnectionSummary): string {
 function getRoomSearchText(
   room: DungeonRoom,
   connections: readonly RoomConnectionSummary[],
+  mapElements: readonly RoomMapElement[],
 ): string {
   const category = ROOM_TYPE_CATEGORIES[room.roomType.category];
   const trapNames = room.traps.map((trap) => TRAP_DEFINITIONS[trap].label);
@@ -98,25 +98,8 @@ function getRoomSearchText(
     ...trapNames,
     ...treasureNames,
     ...connections.map((connection) => getConnectionLabel(connection)),
+    ...mapElements.flatMap((element) => [element.label, element.detail]),
   ].join(" "));
-}
-
-function getRoomAreaByNumber(dungeon: Dungeon): ReadonlyMap<number, number> {
-  if (dungeon.width <= 0) return new Map();
-  const roomNumbers = createRoomNumberGrid(
-    dungeon.tiles,
-    dungeon.width,
-    dungeon.roomDetails,
-  );
-  const areas = new Map<number, number>();
-  for (let index = 0; index < roomNumbers.length; index += 1) {
-    const roomNumber = roomNumbers[index];
-    if (roomNumber === 0) continue;
-    const tile = dungeon.tiles[Math.floor(index / dungeon.width)]?.[index % dungeon.width];
-    if (tile === undefined || tile === CAVE_CONNECTION_WALL_TILE || tile === PILLAR_TILE) continue;
-    areas.set(roomNumber, (areas.get(roomNumber) ?? 0) + 1);
-  }
-  return areas;
 }
 
 export function RoomGuidePanel({
@@ -128,6 +111,7 @@ export function RoomGuidePanel({
   selectedRoomNumber,
   selectionRequestId,
   connectionsByRoom,
+  roomMapSummary,
   entryRoomNumber,
   onSelectRoom,
   onHoverRoom,
@@ -150,7 +134,7 @@ export function RoomGuidePanel({
     () => new Map(rooms.map((room) => [room.number, room])),
     [rooms],
   );
-  const roomAreas = useMemo(() => getRoomAreaByNumber(dungeon), [dungeon]);
+  const roomAreas = roomMapSummary.roomAreas;
 
   useEffect(() => {
     setPanelView(selectedRoom ? "details" : "list");
@@ -188,6 +172,7 @@ export function RoomGuidePanel({
       return getRoomSearchText(
         room,
         connectionsByRoom.get(room.number) ?? [],
+        roomMapSummary.elementsByRoom.get(room.number) ?? [],
       ).includes(normalizedQuery);
     });
     result.sort((left, right) => {
@@ -201,7 +186,7 @@ export function RoomGuidePanel({
       return left.number - right.number;
     });
     return result;
-  }, [categoryFilter, connectionsByRoom, query, rooms, sortBy]);
+  }, [categoryFilter, connectionsByRoom, query, roomMapSummary, rooms, sortBy]);
 
   const roomGroups = useMemo(() => {
     if (sortBy !== "category") return [];
@@ -306,6 +291,9 @@ export function RoomGuidePanel({
   const selectedCategory = selectedRoom
     ? ROOM_TYPE_CATEGORIES[selectedRoom.roomType.category]
     : undefined;
+  const selectedMapElements = selectedRoom
+    ? roomMapSummary.elementsByRoom.get(selectedRoom.number) ?? []
+    : [];
 
   return (
     <section className="room-index" aria-label="Guia e inspetor de salas">
@@ -497,6 +485,19 @@ export function RoomGuidePanel({
                       : selectedRoom.liquidType === "water" ? "Água" : "Lava"}
                   </span>
                 </div>
+              </section>
+            )}
+            {selectedMapElements.length > 0 && (
+              <section className="room-inspector-section">
+                <h4>Elementos internos</h4>
+                <ul className="room-inspector-feature-list">
+                  {selectedMapElements.map((element) => (
+                    <li key={element.id}>
+                      <strong>{element.label}</strong>
+                      <small>{element.detail}</small>
+                    </li>
+                  ))}
+                </ul>
               </section>
             )}
             {selectedRoom.traps.length > 0 && (

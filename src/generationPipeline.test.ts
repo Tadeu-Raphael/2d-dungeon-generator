@@ -8,12 +8,15 @@ import {
   DUNGEON_GENERATOR_VERSION_V2,
 } from "./dungeon";
 import type { DungeonParameters } from "./dungeon";
+import { DOOR_TILE } from "./core/tiles";
 import { DUNGEON_CONCEPTS, DUNGEON_CONCEPT_ORDER } from "./dungeonProfiles";
 import type { DungeonConcept } from "./dungeonProfiles";
 import { generateDungeonPipeline } from "./generationPipeline";
 import type { DungeonGenerationPipelineRequest } from "./generationPipeline";
 import { validateGenerationPlan } from "./generationPlanValidation";
 import { validateDungeonTopology } from "./generationTopology";
+import { DUNGEON_MAP_PALETTE } from "./rendering/dungeonTileSemantics";
+import { getDoorwayGroups } from "./rendering/doorwayLayout";
 import {
   DUNGEON_GENERATION_V1_BASELINES,
   createDungeonV1BaselineRequest,
@@ -278,7 +281,7 @@ describe("GenerationPlan application pipeline", () => {
     const svg = createDungeonSvg(result.dungeon);
     expect(svg).toContain("<svg");
     expect(svg).toContain("<title>Mapa de masmorra</title>");
-    expect(svg).toContain("#a9824d");
+    expect(svg).toContain(DUNGEON_MAP_PALETTE.corridor);
   });
 
   it("repeats V2 graph and tile output for the same seed", () => {
@@ -289,6 +292,55 @@ describe("GenerationPlan application pipeline", () => {
     expect(first.plan?.rooms).toEqual(second.plan?.rooms);
     expect(first.dungeon.tiles).toEqual(second.dungeon.tiles);
     expect(first.metadata.settings.cycleRank).toBe(second.metadata.settings.cycleRank);
+  });
+
+  it.each([
+    { corridorWidth: 2, doubleDoorsEnabled: false },
+    { corridorWidth: 2, doubleDoorsEnabled: true },
+    { corridorWidth: 3, doubleDoorsEnabled: false },
+  ])("rasterizes a full-width V2 door for a $corridorWidth-wide corridor", ({
+    corridorWidth,
+    doubleDoorsEnabled,
+  }) => {
+    const result = generate("abandoned-mine", {
+      parameters: { ...parameters, corridorWidth, doubleDoorsEnabled },
+      varyCorridorWidths: false,
+    });
+    const plan = result.plan;
+    if (!plan) throw new Error("V2 generation did not return its GenerationPlan.");
+    const doorConnections = plan.connections.filter((edge) => edge.connectionType === "door");
+
+    expect(result.metadata.generatorVersion, result.fallbackReason).toBe(DUNGEON_GENERATOR_VERSION_V2);
+    expect(doorConnections.length).toBeGreaterThan(0);
+    expect(result.dungeon.tiles.flat()).toContain(DOOR_TILE);
+    const doorwayGroups = getDoorwayGroups(result.dungeon.tiles);
+    for (const edge of doorConnections) {
+      for (const endpoint of [
+        edge.metadata.sourceEndpoint,
+        edge.metadata.targetEndpoint,
+      ]) {
+        if (!endpoint) throw new Error(`Door connection ${edge.id} has no routed endpoint.`);
+        expect(endpoint.width).toBe(corridorWidth);
+        expect(plan.transitions.some((transition) => (
+          transition.connectionId === edge.id
+          && transition.roomId === endpoint.roomId
+          && transition.type === "doorway"
+        ))).toBe(true);
+        for (const position of endpoint.openingPositions) {
+          expect(result.dungeon.tiles[position.y][position.x]).toBe(DOOR_TILE);
+        }
+        const openingKeys = new Set(endpoint.openingPositions.map(
+          (position) => `${position.x},${position.y}`,
+        ));
+        const doorwayGroup = doorwayGroups.find((group) => (
+          group.tile === DOOR_TILE
+          && group.positions.some((position) => openingKeys.has(`${position.x},${position.y}`))
+        ));
+        expect(new Set(doorwayGroup?.positions.map(
+          (position) => `${position.x},${position.y}`,
+        ))).toEqual(openingKeys);
+      }
+    }
   });
 
   it("applies topology, spatial-style, cycle and corridor-width overrides", () => {

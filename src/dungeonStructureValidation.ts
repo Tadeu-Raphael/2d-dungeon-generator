@@ -3,6 +3,7 @@ import type { GenerationPlanValidationIssueCode } from "./generationPlanValidati
 import { validateGenerationPlan } from "./generationPlanValidation";
 import type { DungeonLevel, DungeonStructure, VerticalConnection } from "./dungeonStructure";
 import type { GenerationPlan, GridPosition } from "./generationPlan";
+import { MAX_VERTICAL_STAIR_ALIGNMENT_DISTANCE } from "./dungeonStructure";
 
 export type DungeonStructureValidationIssueCode =
   | GenerationPlanValidationIssueCode
@@ -29,6 +30,10 @@ export type DungeonStructureValidationIssueCode =
   | "vertical-connection-position-out-of-bounds"
   | "vertical-connection-anchor-missing"
   | "vertical-connection-marker-not-found"
+  | "vertical-stairs-not-adjacent"
+  | "vertical-stairs-too-far-apart"
+  | "vertical-stair-marker-mismatch"
+  | "unpaired-stair-transition"
   | "invalid-access-requirement"
   | "disconnected-levels";
 
@@ -94,6 +99,16 @@ function collectSpatialAnchors(plan: GenerationPlan): Set<string> {
         y: room.position.y + cell.y,
       }));
     }
+  }
+  for (const region of plan.naturalRegions ?? []) {
+    for (const span of region.rowSpans) {
+      for (let x = span.xStart; x < span.xEnd; x += 1) {
+        anchors.add(positionKey({ x, y: span.y }));
+      }
+    }
+  }
+  for (const caveConnection of plan.caveConnections ?? []) {
+    for (const position of caveConnection.path) anchors.add(positionKey(position));
   }
   for (const connection of plan.connections) {
     if (
@@ -170,6 +185,10 @@ function isKnownVerticalKind(kind: string): boolean {
 
 function isKnownDirection(direction: string): boolean {
   return VERTICAL_CONNECTION_DIRECTIONS.has(direction);
+}
+
+function isStairConnection(kind: string): boolean {
+  return kind === "stairs" || kind === "spiral-stairs";
 }
 
 function getReachableLevels(
@@ -483,6 +502,55 @@ export function validateDungeonStructure(
         );
       }
     }
+    if (isStairConnection(connection.kind) && sourceLevel && targetLevel) {
+      const sourceLevelIndex = dungeon.levels.indexOf(sourceLevel);
+      const targetLevelIndex = dungeon.levels.indexOf(targetLevel);
+      if (Math.abs(sourceLevelIndex - targetLevelIndex) !== 1) {
+        addIssue(
+          "vertical-stairs-not-adjacent",
+          connectionPath,
+          "Stair connections must link immediately adjacent levels.",
+        );
+      }
+
+      const sourceShouldAscend = sourceLevel.verticalIndex < targetLevel.verticalIndex;
+      const expectedSourceType = sourceShouldAscend ? "stairs-up" : "stairs-down";
+      const expectedTargetType = sourceShouldAscend ? "stairs-down" : "stairs-up";
+      const sourceTransition = sourceLevel.plan.transitions.find((transition) => (
+        transition.verticalConnectionId === connection.id
+        && transition.position.x === connection.sourcePosition.x
+        && transition.position.y === connection.sourcePosition.y
+      ));
+      const targetTransition = targetLevel.plan.transitions.find((transition) => (
+        transition.verticalConnectionId === connection.id
+        && transition.position.x === connection.targetPosition.x
+        && transition.position.y === connection.targetPosition.y
+      ));
+      if (
+        (sourceTransition && sourceTransition.type !== expectedSourceType)
+        || (targetTransition && targetTransition.type !== expectedTargetType)
+      ) {
+        addIssue(
+          "vertical-stair-marker-mismatch",
+          connectionPath,
+          "A vertical stair link must pair a downward marker with an upward marker on the lower level.",
+        );
+      }
+      if (
+        isGridPosition(connection.sourcePosition)
+        && isGridPosition(connection.targetPosition)
+      ) {
+        const distance = Math.abs(connection.sourcePosition.x - connection.targetPosition.x)
+          + Math.abs(connection.sourcePosition.y - connection.targetPosition.y);
+        if (distance > MAX_VERTICAL_STAIR_ALIGNMENT_DISTANCE) {
+          addIssue(
+            "vertical-stairs-too-far-apart",
+            connectionPath,
+            `Stair endpoints must be within ${MAX_VERTICAL_STAIR_ALIGNMENT_DISTANCE} tiles of each other.`,
+          );
+        }
+      }
+    }
     for (const [requirementIndex, requirement] of (connection.accessRequirements ?? []).entries()) {
       if (!requirement.trim()) {
         addIssue(
@@ -502,6 +570,30 @@ export function validateDungeonStructure(
           `levels[${levelIndex}].plan.transitions[${transitionIndex}].verticalConnectionId`,
           `Vertical connection ${transition.verticalConnectionId} does not exist in the dungeon structure.`,
         );
+      }
+      if (
+        dungeon.levels.length > 1
+        && (transition.type === "stairs-up" || transition.type === "stairs-down")
+      ) {
+        const connection = dungeon.verticalConnections.find(
+          (candidate) => candidate.id === transition.verticalConnectionId,
+        );
+        const isExternalEntry = transition.type === "stairs-up"
+          && transition.metadata.role === "entry"
+          && !transition.verticalConnectionId;
+        if (!connection && !isExternalEntry) {
+          addIssue(
+            "unpaired-stair-transition",
+            `levels[${levelIndex}].plan.transitions[${transitionIndex}]`,
+            "Every stair in a multilevel dungeon must connect to another level, except the dungeon entry.",
+          );
+        } else if (connection && !isStairConnection(connection.kind)) {
+          addIssue(
+            "vertical-stair-marker-mismatch",
+            `levels[${levelIndex}].plan.transitions[${transitionIndex}]`,
+            "Stair markers can only belong to stair or spiral-stair connections.",
+          );
+        }
       }
     }
   }

@@ -18,6 +18,8 @@ export type VerticalConnectionDirection =
   | "source-to-target"
   | "target-to-source";
 
+export const MAX_VERTICAL_STAIR_ALIGNMENT_DISTANCE = 8;
+
 export interface DungeonStructureGeneration {
   seed: number;
   generatorVersion: DungeonGeneratorVersion;

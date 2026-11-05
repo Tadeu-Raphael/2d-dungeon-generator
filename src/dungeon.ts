@@ -661,8 +661,15 @@ export const MIN_DUNGEON_DIMENSION = 20;
 export const MAX_DUNGEON_WIDTH = 1_000;
 export const MAX_DUNGEON_HEIGHT = 1_000;
 export const MAX_DUNGEON_TILE_COUNT = 1_000_000;
-export const MAX_DUNGEON_ROOM_COUNT = 24;
+export const MAX_DUNGEON_ROOM_COUNT = 48;
+export const MIN_DUNGEON_ROOM_COUNT = 4;
 export const MAX_DUNGEON_SEED = 4_294_967_295;
+
+/** Room counts the V2 pipeline can place reliably grow with the grid area (about 260 tiles per room). */
+export function getMaxRoomCountForGrid(width: number, height: number): number {
+  const byArea = Math.floor((width * height) / 260);
+  return Math.max(12, Math.min(MAX_DUNGEON_ROOM_COUNT, byArea));
+}
 
 export function getDungeonDimensionError(width: number, height: number): string | undefined {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
@@ -692,10 +699,32 @@ export function assertSupportedDungeonDimensions(width: number, height: number):
   if (error) throw new RangeError(error);
 }
 
+export type DoorVariant = "reinforced" | "open" | "destroyed" | "gate" | "grate" | "locked";
+
+export const DOOR_VARIANTS: readonly DoorVariant[] = [
+  "reinforced",
+  "open",
+  "destroyed",
+  "gate",
+  "grate",
+  "locked",
+];
+
+export const DOOR_VARIANT_LABELS: Record<DoorVariant, string> = {
+  reinforced: "Porta reforçada",
+  open: "Porta aberta",
+  destroyed: "Porta destruída",
+  gate: "Portão",
+  grate: "Grade",
+  locked: "Porta trancada",
+};
+
 export interface Dungeon {
   width: number;
   height: number;
   tiles: Tile[][];
+  /** Variant of each plain door tile keyed "x,y"; absent entries are common wooden doors. */
+  doorVariants?: Readonly<Record<string, DoorVariant>>;
   rooms: number;
   roomDetails: DungeonRoom[];
   traps: DungeonTrap[];

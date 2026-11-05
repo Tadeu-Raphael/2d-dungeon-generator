@@ -725,14 +725,11 @@ export function validateGenerationPlan(plan: GenerationPlan): GenerationPlanVali
             edge.metadata.targetEndpoint,
           ]) {
             if (!endpoint) continue;
-            const openingPositions = endpoint.width === 2
-              && !plan.generation.parameters.doubleDoorsEnabled
-              ? [endpoint.openingPositions[Math.floor((endpoint.width - 1) / 2)]]
-              : endpoint.openingPositions;
+            const expectedPositions = endpoint.openingPositions;
             const expectedTransitionType = edge.isSecret || edge.connectionType === "secret-door"
               ? "secret-door"
               : "doorway";
-            if (openingPositions.some((position) => !plan.transitions.some((transition) => (
+            if (expectedPositions.some((position) => !plan.transitions.some((transition) => (
               transition.connectionId === edge.id
               && transition.roomId === endpoint.roomId
               && transition.type === expectedTransitionType

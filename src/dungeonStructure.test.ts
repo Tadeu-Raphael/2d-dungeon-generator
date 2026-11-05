@@ -7,7 +7,7 @@ import type { DungeonParameters } from "./dungeon";
 import {
   createStableGenerationId,
 } from "./generationPlan";
-import type { GenerationPlan, GridPosition, RoomNode } from "./generationPlan";
+import type { GenerationPlan, GridPosition, PlanTransition, RoomNode } from "./generationPlan";
 import { generationPlanToDungeon } from "./generationPlanToDungeon";
 import {
   dungeonStructureToDungeon,
@@ -17,6 +17,7 @@ import type {
   DungeonStructure,
   VerticalConnection,
 } from "./dungeonStructure";
+import { MAX_VERTICAL_STAIR_ALIGNMENT_DISTANCE } from "./dungeonStructure";
 import { validateDungeonStructure } from "./dungeonStructureValidation";
 
 function createFootprint(width: number, height: number): GridPosition[] {
@@ -139,7 +140,7 @@ function createLevelPlan(
         type: "stairs-up",
         position: { x: 4, y: 4 },
         roomId: entryRoomId,
-        metadata: {},
+        metadata: { role: "entry" },
       },
     ],
     features: [],
@@ -194,28 +195,62 @@ function createStructure(
   const levelsWithConnectionMarkers = levels.map((level) => {
     const transitions = [...level.plan.transitions];
     for (const connection of verticalConnections) {
-      const endpoints = [
-        connection.sourceLevelId === level.id
-          ? { id: connection.id, position: connection.sourcePosition, kind: connection.kind }
-          : undefined,
-        connection.targetLevelId === level.id
-          ? { id: connection.id, position: connection.targetPosition, kind: connection.kind }
-          : undefined,
-      ].filter((endpoint) => endpoint !== undefined);
+      const sourceLevel = levels.find((candidate) => candidate.id === connection.sourceLevelId);
+      const targetLevel = levels.find((candidate) => candidate.id === connection.targetLevelId);
+      const isStairConnection = connection.kind === "stairs" || connection.kind === "spiral-stairs";
+      const markerTypeFor = (otherVerticalIndex: number | undefined): PlanTransition["type"] => (
+        isStairConnection && otherVerticalIndex !== undefined
+          ? otherVerticalIndex > level.verticalIndex ? "stairs-up" : "stairs-down"
+          : "vertical-connection"
+      );
+      const endpoints: Array<{
+        id: string;
+        position: GridPosition;
+        kind: VerticalConnection["kind"];
+        type: PlanTransition["type"];
+      }> = [];
+      if (connection.sourceLevelId === level.id) {
+        endpoints.push({
+          id: connection.id,
+          position: connection.sourcePosition,
+          kind: connection.kind,
+          type: markerTypeFor(targetLevel?.verticalIndex),
+        });
+      }
+      if (connection.targetLevelId === level.id) {
+        endpoints.push({
+          id: connection.id,
+          position: connection.targetPosition,
+          kind: connection.kind,
+          type: markerTypeFor(sourceLevel?.verticalIndex),
+        });
+      }
       for (const endpoint of endpoints) {
         const room = level.plan.rooms.find((candidate) => candidate.footprint.some((cell) => (
           candidate.position.x + cell.x === endpoint.position.x
           && candidate.position.y + cell.y === endpoint.position.y
         )));
         if (!room) continue;
-        transitions.push({
-          id: createStableGenerationId(level.plan.id, "transition", transitions.length),
-          type: "vertical-connection",
+        const transitionIndex = transitions.findIndex((transition) => (
+          transition.position.x === endpoint.position.x
+          && transition.position.y === endpoint.position.y
+        ));
+        const existing = transitionIndex >= 0 ? transitions[transitionIndex] : undefined;
+        const marker: PlanTransition = {
+          ...(existing ?? {
+            id: createStableGenerationId(level.plan.id, "transition", transitions.length),
+            type: endpoint.type,
+            position: endpoint.position,
+            metadata: {},
+          }),
+          type: endpoint.type,
           position: endpoint.position,
           roomId: room.id,
           verticalConnectionId: endpoint.id,
-          metadata: { kind: endpoint.kind },
-        });
+          metadata: { ...(existing?.metadata ?? {}), kind: endpoint.kind },
+        };
+        if (transitionIndex >= 0) transitions[transitionIndex] = marker;
+        else transitions.push(marker);
       }
     }
     return { ...level, plan: { ...level.plan, transitions } };
@@ -283,11 +318,59 @@ describe("DungeonStructure", () => {
       }),
       createVerticalConnection("fixture-dungeon", 2, basement, deep, {
         kind: "spiral-stairs",
+        sourcePosition: { x: 5, y: 4 },
+        targetPosition: { x: 5, y: 4 },
       }),
     ];
     const structure = createStructure([deep, basement, ground], connections, true, ground.id);
 
     expect(validateDungeonStructure(structure)).toEqual({ valid: true, issues: [] });
+  });
+
+  it("rejects stair connections that skip an intermediate level", () => {
+    const deep = createLevel("fixture-dungeon", 0, "Cripta profunda", -2);
+    const basement = createLevel("fixture-dungeon", 1, "Subsolo", -1);
+    const ground = createLevel("fixture-dungeon", 2, "Principal", 0);
+    const connection = createVerticalConnection("fixture-dungeon", 0, deep, ground);
+
+    expect(issueCodes(createStructure([deep, basement, ground], [connection])))
+      .toContain("vertical-stairs-not-adjacent");
+  });
+
+  it("rejects stair landings that are too far apart", () => {
+    const basement = createLevel("fixture-dungeon", 0, "Subsolo", -1);
+    const ground = createLevel("fixture-dungeon", 1, "Principal", 0);
+    const connection = createVerticalConnection("fixture-dungeon", 0, ground, basement, {
+      targetPosition: { x: 17, y: 12 },
+    });
+    const distance = Math.abs(connection.sourcePosition.x - connection.targetPosition.x)
+      + Math.abs(connection.sourcePosition.y - connection.targetPosition.y);
+
+    expect(distance).toBeGreaterThan(MAX_VERTICAL_STAIR_ALIGNMENT_DISTANCE);
+    expect(issueCodes(createStructure([basement, ground], [connection])))
+      .toContain("vertical-stairs-too-far-apart");
+  });
+
+  it("rejects a down staircase with no paired vertical connection", () => {
+    const basement = createLevel("fixture-dungeon", 0, "Subsolo", -1);
+    const ground = createLevel("fixture-dungeon", 1, "Principal", 0);
+    const unpairedStairsDown: PlanTransition = {
+      id: createStableGenerationId(basement.plan.id, "transition", 2),
+      type: "stairs-down",
+      position: { x: 17, y: 12 },
+      roomId: basement.plan.rooms[1]?.id,
+      metadata: { role: "exit" },
+    };
+    const basementWithUnpairedStairs = {
+      ...basement,
+      plan: {
+        ...basement.plan,
+        transitions: [...basement.plan.transitions, unpairedStairsDown],
+      },
+    };
+
+    expect(issueCodes(createStructure([basementWithUnpairedStairs, ground], [], false, ground.id)))
+      .toContain("unpaired-stair-transition");
   });
 
   it("rejects duplicated level and vertical-connection IDs", () => {

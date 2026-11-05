@@ -132,6 +132,8 @@ interface BrushCheck {
 interface RouterContext {
   plan: GenerationPlan;
   roomAt: Int32Array;
+  /** Room index for cells orthogonally touching exactly one room, NO_RING when none, MULTI_RING for several. */
+  ringRoomAt: Int32Array;
   obstacles: Uint8Array;
   corridorOwners: Map<number, Set<string>>;
   centerlineOwners: Map<number, Set<string>>;
@@ -185,6 +187,40 @@ function getRoomAt(plan: GenerationPlan): Int32Array {
     }
   }
   return roomAt;
+}
+
+const NO_RING = -1;
+const MULTI_RING = -2;
+
+function isDoorLikeEdge(edge: ConnectionEdge | undefined): boolean {
+  return Boolean(
+    edge
+    && !edge.isBlocked
+    && edge.connectionType !== "blocked-passage"
+    && (edge.isSecret || edge.connectionType === "door" || edge.connectionType === "secret-door"),
+  );
+}
+
+// A corridor cell touching a room wall is an opening; only a connection endpoint may create one.
+function getRingRoomAt(plan: GenerationPlan, roomAt: Int32Array): Int32Array {
+  const ringRoomAt = new Int32Array(plan.width * plan.height).fill(NO_RING);
+  for (let y = 0; y < plan.height; y += 1) {
+    for (let x = 0; x < plan.width; x += 1) {
+      const index = y * plan.width + x;
+      if (roomAt[index] !== -1) continue;
+      for (const direction of CORRIDOR_DIRECTIONS) {
+        const neighborX = x + direction.dx;
+        const neighborY = y + direction.dy;
+        if (neighborX < 0 || neighborY < 0 || neighborX >= plan.width || neighborY >= plan.height) continue;
+        const neighborRoom = roomAt[neighborY * plan.width + neighborX];
+        if (neighborRoom === -1) continue;
+        ringRoomAt[index] = ringRoomAt[index] === NO_RING || ringRoomAt[index] === neighborRoom
+          ? neighborRoom
+          : MULTI_RING;
+      }
+    }
+  }
+  return ringRoomAt;
 }
 
 function getObstacles(plan: GenerationPlan, roomAt: Int32Array): Uint8Array {
@@ -379,7 +415,10 @@ function getRoomExits(
   width: number,
   roomAt: Int32Array,
   obstacles: Uint8Array,
+  context: RouterContext,
+  edge: ConnectionEdge,
 ): RoomExitCandidate[] {
+  const roomIndex = plan.rooms.indexOf(room);
   const boundaryLines = new Map<string, Map<number, { outside: GridPosition; inside: GridPosition }>>();
   for (const cell of room.footprint) {
     const inside = {
@@ -430,7 +469,25 @@ function getRoomExits(
         if (openingPositions.some((position) => (
           obstacles[positionIndex(position, plan.width)]
           || roomAt[positionIndex(position, plan.width)] !== -1
+          || context.ringRoomAt[positionIndex(position, plan.width)] !== roomIndex
         ))) continue;
+        // An opening and its wall neighbours must be unclaimed so two doors never merge or overlap.
+        const firstOffset = run[start];
+        const lastOffset = run[start + width - 1];
+        const lateralNeighbours = [firstOffset - 1, lastOffset + 1].map((offset) => (
+          direction.dx === 0
+            ? { x: offset, y: center.outside.y }
+            : { x: center.outside.x, y: offset }
+        ));
+        // A door seals exactly its own opening, so no other connection may touch or abut it.
+        const isDoorEdge = isDoorLikeEdge(edge);
+        if ([...openingPositions, ...lateralNeighbours].some((position) => {
+          const owners = context.corridorOwners.get(positionIndex(position, plan.width));
+          if (!owners) return false;
+          return isDoorEdge || [...owners].some((ownerId) => (
+            ownerId !== edge.id && isDoorLikeEdge(context.edgeById.get(ownerId))
+          ));
+        })) continue;
         exits.push({
           position: center.outside,
           roomPosition: center.inside,
@@ -487,6 +544,7 @@ function inspectBrush(
   width: number,
   edge: ConnectionEdge,
   context: RouterContext,
+  allowWallContact = false,
 ): BrushCheck {
   const brushPositions = CORRIDOR_DIRECTIONS[directionIndex]
     ? getCrossSection(position, directionIndex, width)
@@ -501,6 +559,9 @@ function inspectBrush(
     ) return { valid: false, owners };
     const index = positionIndex(brushPosition, context.plan.width);
     if (context.roomAt[index] !== -1 || context.obstacles[index]) {
+      return { valid: false, owners };
+    }
+    if (!allowWallContact && context.ringRoomAt[index] !== NO_RING) {
       return { valid: false, owners };
     }
     for (const ownerId of context.corridorOwners.get(index) ?? []) {
@@ -734,7 +795,7 @@ function searchRoute(
   );
 
 for (const [exitIndex, exit] of sourceExits.entries()) {
-    const stamp = inspectBrush(exit.position, exit.direction, width, edge, context);
+    const stamp = inspectBrush(exit.position, exit.direction, width, edge, context, true);
     if (!stamp.valid) continue;
     const cellIndex = positionIndex(exit.position, plan.width);
     const state = cellIndex * CORRIDOR_DIRECTIONS.length + exit.direction;
@@ -818,10 +879,17 @@ for (const [exitIndex, exit] of sourceExits.entries()) {
 
       const turn = directionIndex !== incomingDirection;
       if (turn && !inspectBrush(current, directionIndex, width, edge, context).valid) continue;
-      const nextStamp = inspectBrush(next, directionIndex, width, edge, context);
-      if (!nextStamp.valid) continue;
       const nextCellIndex = positionIndex(next, plan.width);
       const nextState = nextCellIndex * CORRIDOR_DIRECTIONS.length + directionIndex;
+      const nextStamp = inspectBrush(
+        next,
+        directionIndex,
+        width,
+        edge,
+        context,
+        targetExitByState.has(nextState),
+      );
+      if (!nextStamp.valid) continue;
       if (status[nextState] === closedStatus) continue;
       const existingPenalty = nextStamp.owners.size === 0
         ? costs.excavateWall
@@ -1118,15 +1186,16 @@ function createDoorTransitions(
     ? "secret-door"
     : "doorway";
   const transitions: PlanTransition[] = [];
+  const placedPositions = new Set<string>();
   for (const [side, endpoint] of [
     ["source", sourceEndpoint],
     ["target", targetEndpoint],
   ] as const) {
-    const openingPositions = endpoint.width === 2
-      && !plan.generation.parameters.doubleDoorsEnabled
-      ? [endpoint.openingPositions[Math.floor((endpoint.width - 1) / 2)]]
-      : endpoint.openingPositions;
-    for (const [openingIndex, position] of openingPositions.entries()) {
+    // A door always seals the entire opening, so a wide corridor gets a proportionally wide door.
+    for (const [openingIndex, position] of endpoint.openingPositions.entries()) {
+      const key = positionKey(position);
+      if (placedPositions.has(key)) continue;
+      placedPositions.add(key);
       let id = createStableGenerationId(plan.id, "transition", transitionIdOrdinal.value);
       while (existingIds.has(id)) {
         transitionIdOrdinal.value += 1;
@@ -1145,6 +1214,7 @@ function createDoorTransitions(
           side,
           openingIndex,
           locked: edge.isLocked,
+          ...(edge.metadata.doorVariant ? { doorVariant: edge.metadata.doorVariant } : {}),
         },
       });
       transitionIdOrdinal.value += 1;
@@ -1201,6 +1271,7 @@ export function routeGenerationPlanCorridors(
   const { costs, maxExpandedStates } = validateOptions(sourcePlan, options);
   const corridorRandom = createGenerationRandomStreams(sourcePlan.generation.seed).corridors;
   const roomAt = getRoomAt(sourcePlan);
+  const ringRoomAt = getRingRoomAt(sourcePlan, roomAt);
   const obstacles = getObstacles(sourcePlan, roomAt);
   const edgeById = new Map(sourcePlan.connections.map((edge) => [edge.id, edge]));
   const cycleConnectionIds = new Set(sourcePlan.topology?.cycleConnectionIds ?? []);
@@ -1208,6 +1279,7 @@ export function routeGenerationPlanCorridors(
   const context: RouterContext = {
     plan: sourcePlan,
     roomAt,
+    ringRoomAt,
     obstacles,
     corridorOwners: new Map(),
     centerlineOwners: new Map(),
@@ -1272,6 +1344,8 @@ export function routeGenerationPlanCorridors(
         width,
         roomAt,
         obstacles,
+        context,
+        originalEdge,
       );
       const targetExits = getRoomExits(
         sourcePlan,
@@ -1280,6 +1354,8 @@ export function routeGenerationPlanCorridors(
         width,
         roomAt,
         obstacles,
+        context,
+        originalEdge,
       );
       let search = searchRouteWithExpandingBounds(
         sourcePlan,

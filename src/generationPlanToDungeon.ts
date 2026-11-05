@@ -16,7 +16,7 @@ import {
   TRAP_DEFINITIONS,
   WATER_TILE,
 } from "./dungeon";
-import type { Dungeon, DungeonParameters, DungeonRoom, Tile } from "./dungeon";
+import type { Dungeon, DungeonParameters, DungeonRoom, DoorVariant, Tile } from "./dungeon";
 import { ROOM_TYPE_CATEGORIES, ROOM_TYPE_DEFINITIONS } from "./roomTypes";
 import type { RoomTypeDefinition } from "./roomTypes";
 import { getCorridorPathBrush } from "./generationCorridorGeometry";
@@ -86,6 +86,7 @@ function carveIntersection(
   tiles: Tile[][],
   intersection: GenerationPlan["intersections"][number],
   roomCells: ReadonlySet<string>,
+  wallOpenings: ReadonlySet<string>,
 ): void {
   const offset = Math.floor((intersection.width - 1) / 2);
   for (let y = 0; y < intersection.width; y += 1) {
@@ -94,11 +95,20 @@ function carveIntersection(
         x: intersection.position.x + x - offset,
         y: intersection.position.y + y - offset,
       };
-      if (!roomCells.has(cellKey(position))) {
-        tiles[position.y][position.x] = CORRIDOR_TILE;
-      }
+      const key = cellKey(position);
+      if (roomCells.has(key)) continue;
+      // Widened junctions and vestibules must not breach a room wall outside a real opening.
+      if (touchesRoom(position, roomCells) && !wallOpenings.has(key)) continue;
+      tiles[position.y][position.x] = CORRIDOR_TILE;
     }
   }
+}
+
+function touchesRoom(position: GridPosition, roomCells: ReadonlySet<string>): boolean {
+  return roomCells.has(cellKey({ x: position.x + 1, y: position.y }))
+    || roomCells.has(cellKey({ x: position.x - 1, y: position.y }))
+    || roomCells.has(cellKey({ x: position.x, y: position.y + 1 }))
+    || roomCells.has(cellKey({ x: position.x, y: position.y - 1 }));
 }
 
 function getDoorPosition(
@@ -228,11 +238,17 @@ export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
     }
   }
 
+  const wallOpenings = new Set<string>();
+  for (const edge of plan.connections) {
+    for (const endpoint of [edge.metadata.sourceEndpoint, edge.metadata.targetEndpoint]) {
+      for (const position of endpoint?.openingPositions ?? []) wallOpenings.add(cellKey(position));
+    }
+  }
   for (const edge of plan.connections) {
     placeConnection(tiles, edge, roomCells);
   }
   for (const intersection of plan.intersections) {
-    carveIntersection(tiles, intersection, roomCells);
+    carveIntersection(tiles, intersection, roomCells, wallOpenings);
   }
   for (const region of plan.naturalRegions ?? []) {
     for (const span of region.rowSpans) {
@@ -271,6 +287,14 @@ export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
     tiles[feature.position.y][feature.position.x] = getFeatureTile(feature);
   }
 
+  const doorVariants: Record<string, DoorVariant> = {};
+  for (const transition of plan.transitions) {
+    if (transition.type !== "doorway") continue;
+    const variant = transition.metadata.doorVariant as DoorVariant | undefined
+      ?? (transition.metadata.locked === true ? "locked" : undefined);
+    if (variant) doorVariants[`${transition.position.x},${transition.position.y}`] = variant;
+  }
+
   const roomDetails = createRoomDetails(plan);
   const parameters = cloneParameters(plan.generation.parameters);
   let floorCount = 0;
@@ -283,6 +307,7 @@ export function generationPlanToDungeon(plan: GenerationPlan): Dungeon {
     width: plan.width,
     height: plan.height,
     tiles,
+    ...(Object.keys(doorVariants).length > 0 ? { doorVariants } : {}),
     rooms: roomDetails.length,
     roomDetails,
     traps,

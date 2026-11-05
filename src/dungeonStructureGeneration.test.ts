@@ -7,12 +7,17 @@ import {
 } from "./dungeon";
 import {
   createDungeonLevelPipelineRequest,
+  deriveNearbyLevelSize,
   generateDungeonStructure,
 } from "./dungeonStructureGeneration";
 import type {
   DungeonLevelGenerationConfig,
   DungeonStructureGenerationRequest,
 } from "./dungeonStructureGeneration";
+import {
+  MAX_VERTICAL_STAIR_ALIGNMENT_DISTANCE,
+} from "./dungeonStructure";
+import type { DungeonStructure } from "./dungeonStructure";
 import type { CustomDungeonProfile } from "./dungeonProfiles";
 import {
   analyzeDungeonConnectivity,
@@ -66,6 +71,63 @@ function createRequest(
   };
 }
 
+function expectStairConnectionsArePaired(structure: DungeonStructure): void {
+  for (const connection of structure.verticalConnections) {
+    if (connection.kind !== "stairs" && connection.kind !== "spiral-stairs") continue;
+    const sourceLevelIndex = structure.levels.findIndex(
+      (level) => level.id === connection.sourceLevelId,
+    );
+    const targetLevelIndex = structure.levels.findIndex(
+      (level) => level.id === connection.targetLevelId,
+    );
+    expect(Math.abs(sourceLevelIndex - targetLevelIndex)).toBe(1);
+    expect(
+      Math.abs(connection.sourcePosition.x - connection.targetPosition.x)
+      + Math.abs(connection.sourcePosition.y - connection.targetPosition.y),
+    ).toBeLessThanOrEqual(MAX_VERTICAL_STAIR_ALIGNMENT_DISTANCE);
+
+    const sourceLevel = structure.levels[sourceLevelIndex];
+    const targetLevel = structure.levels[targetLevelIndex];
+    expect(sourceLevel).toBeDefined();
+    expect(targetLevel).toBeDefined();
+    const lowerLevel = sourceLevel!.verticalIndex < targetLevel!.verticalIndex
+      ? sourceLevel!
+      : targetLevel!;
+    const upperLevel = sourceLevel!.verticalIndex > targetLevel!.verticalIndex
+      ? sourceLevel!
+      : targetLevel!;
+    const lowerPosition = lowerLevel.id === connection.sourceLevelId
+      ? connection.sourcePosition
+      : connection.targetPosition;
+    const upperPosition = upperLevel.id === connection.sourceLevelId
+      ? connection.sourcePosition
+      : connection.targetPosition;
+
+    expect(lowerLevel.plan.transitions.some((transition) => (
+      transition.verticalConnectionId === connection.id
+      && transition.type === "stairs-up"
+      && transition.position.x === lowerPosition.x
+      && transition.position.y === lowerPosition.y
+    ))).toBe(true);
+    expect(upperLevel.plan.transitions.some((transition) => (
+      transition.verticalConnectionId === connection.id
+      && transition.type === "stairs-down"
+      && transition.position.x === upperPosition.x
+      && transition.position.y === upperPosition.y
+    ))).toBe(true);
+  }
+
+  for (const level of structure.levels) {
+    for (const transition of level.plan.transitions) {
+      if (transition.type !== "stairs-down") continue;
+      expect(structure.verticalConnections.some((connection) => (
+        connection.id === transition.verticalConnectionId
+        && (connection.kind === "stairs" || connection.kind === "spiral-stairs")
+      ))).toBe(true);
+    }
+  }
+}
+
 describe("multilevel dungeon generation", () => {
   it("generates two V2 levels with matching vertical endpoints and global reachability", () => {
     const result = generateDungeonStructure(createRequest());
@@ -79,6 +141,7 @@ describe("multilevel dungeon generation", () => {
     expect(validation.valid).toBe(true);
     expect(result.connectivity.reachableLevelIds).toHaveLength(2);
     expect(connection).toBeDefined();
+    expectStairConnectionsArePaired(result.structure);
 
     for (const [levelId, position] of [
       [connection!.sourceLevelId, connection!.sourcePosition],
@@ -240,6 +303,7 @@ describe("multilevel dungeon generation", () => {
     expect(first.structure.verticalConnections).toEqual(second.structure.verticalConnections);
     expect(first.levels.map(({ generation }) => generation.dungeon))
       .toEqual(second.levels.map(({ generation }) => generation.dungeon));
+    expectStairConnectionsArePaired(first.structure);
   });
 
   it("supports multiple vertical connections between the same pair of levels", () => {
@@ -348,15 +412,102 @@ describe("multilevel dungeon generation", () => {
     expect(firstLevelRequest.seed).not.toBe(request.seed);
   });
 
-  it("rejects unsupported fallback profiles, insufficient links, and tile budgets", () => {
-    expect(() => generateDungeonStructure(createRequest({
-      profile: "natural-cavern",
-    }))).toThrow(/requires a room-based V2 profile without caves/);
+  it("rejects insufficient links and tile budgets", () => {
     expect(() => generateDungeonStructure(createRequest({
       verticalConnectionCount: 0,
     }))).toThrow(/at least one vertical connection per additional level/);
     expect(() => generateDungeonStructure(createRequest({
       levels: createLevels().map((level) => ({ ...level, width: 1_000, height: 600 })),
     }))).toThrow(/area must not exceed|tiles across all levels/);
+  });
+
+  it("can link non-adjacent levels when long vertical connections are allowed", () => {
+    const levels = [-2, -1, 0, 1].map((verticalIndex) => ({
+      name: `Nível ${verticalIndex}`,
+      verticalIndex,
+      width: 64,
+      height: 48,
+      roomCount: 5,
+    }));
+    let skipping = 0;
+    for (const seed of [11, 12, 13, 14, 15, 16]) {
+      const result = generateDungeonStructure(createRequest({
+        seed,
+        levels,
+        entryLevelIndex: 3,
+        verticalConnectionCount: 3,
+        allowedVerticalConnectionKinds: ["vertical-shaft", "elevator", "stairs"],
+        allowLongVerticalConnections: true,
+      }));
+      expect(validateDungeonStructure(result.structure).valid).toBe(true);
+      expect(result.connectivity.disconnectedLevelIds).toHaveLength(0);
+      const indexOf = (id: string) => result.structure.levels.findIndex((level) => level.id === id);
+      for (const connection of result.structure.verticalConnections) {
+        const distance = Math.abs(indexOf(connection.sourceLevelId) - indexOf(connection.targetLevelId));
+        if (distance > 1) {
+          skipping += 1;
+          expect(["stairs", "spiral-stairs"]).not.toContain(connection.kind);
+        }
+      }
+    }
+    expect(skipping).toBeGreaterThan(0);
+  });
+
+  it("keeps stairs between adjacent levels even when long connections are allowed", () => {
+    const result = generateDungeonStructure(createRequest({
+      allowLongVerticalConnections: true,
+      allowedVerticalConnectionKinds: ["stairs"],
+    }));
+    expectStairConnectionsArePaired(result.structure);
+  });
+
+  it("generates cave levels and anchors some vertical connections in caves", () => {
+    let caveAnchors = 0;
+    for (const seed of [31, 32, 33, 34, 35, 36, 37, 38]) {
+      const result = generateDungeonStructure(createRequest({
+        seed,
+        cavesEnabled: true,
+        verticalConnectionCount: 2,
+        allowVerticalCycles: true,
+        allowedVerticalConnectionKinds: ["vertical-shaft", "drop", "ramp"],
+      }));
+      expect(validateDungeonStructure(result.structure).valid).toBe(true);
+      for (const level of result.structure.levels) {
+        expect(level.plan.naturalRegions?.length ?? 0).toBeGreaterThan(0);
+        caveAnchors += level.plan.transitions.filter((transition) => (
+          transition.verticalConnectionId && transition.regionId
+        )).length;
+      }
+    }
+    expect(caveAnchors).toBeGreaterThan(0);
+  });
+
+  it("supports a natural cavern as a level of a multilevel dungeon", () => {
+    const result = generateDungeonStructure(createRequest({
+      levels: [
+        { ...createLevels()[0]!, profile: "natural-cavern" },
+        createLevels()[1]!,
+      ],
+      allowedVerticalConnectionKinds: ["vertical-shaft", "ramp"],
+    }));
+    const cavernLevel = result.structure.levels[0]!;
+    expect(cavernLevel.plan.rooms).toHaveLength(0);
+    expect(validateDungeonStructure(result.structure).valid).toBe(true);
+    expect(cavernLevel.plan.transitions.some((transition) => (
+      transition.verticalConnectionId && transition.regionId
+    ))).toBe(true);
+    expect(result.connectivity.disconnectedLevelIds).toHaveLength(0);
+  });
+
+  it("derives deterministic level sizes close to the main level", () => {
+    const main = { width: 100, height: 80, roomCount: 16 };
+    const first = deriveNearbyLevelSize(77, -1, main);
+
+    expect(deriveNearbyLevelSize(77, -1, main)).toEqual(first);
+    expect(Math.abs(first.width - main.width)).toBeLessThanOrEqual(main.width * 0.19);
+    expect(Math.abs(first.height - main.height)).toBeLessThanOrEqual(main.height * 0.19);
+    expect(Math.abs(first.roomCount - main.roomCount)).toBeLessThanOrEqual(main.roomCount * 0.26 + 1);
+    const sizes = [-3, -2, -1, 1, 2].map((index) => deriveNearbyLevelSize(77, index, main));
+    expect(new Set(sizes.map((size) => `${size.width}x${size.height}x${size.roomCount}`)).size).toBeGreaterThan(1);
   });
 });
