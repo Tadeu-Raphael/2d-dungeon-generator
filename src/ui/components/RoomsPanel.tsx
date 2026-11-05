@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { DungeonParameters } from "../../dungeon";
+import { RangeControl } from "./RangeControl";
 
 interface RoomsPanelProps {
   parameters: DungeonParameters;
@@ -11,17 +12,38 @@ export function RoomsPanel({ parameters, setParameters, corridorControls }: Room
   return (
     <>
       <div className="section-heading settings-section-heading"><span>QUANTIDADE DE SALAS</span></div>
-      <label className="parameter-control">
-        <span className="parameter-label"><span>Quantidade de salas</span><strong>{parameters.roomCount} salas</strong></span>
-        <input id="parameter-roomCount" type="range" min={4} max={24} step={1} value={parameters.roomCount} onChange={(e) => setParameters((c) => ({ ...c, roomCount: Number(e.currentTarget.value) }))} aria-label="Quantidade de salas" />
-      </label>
+      <RangeControl
+        id="parameter-roomCount"
+        label="Quantidade de salas"
+        value={parameters.roomCount}
+        min={4}
+        max={24}
+        step={1}
+        formatValue={(value) => `${value} salas`}
+        description="Ajuste a quantidade de ambientes gerados."
+        editable
+        onChange={(roomCount) => setParameters((current) => ({ ...current, roomCount }))}
+      />
       <div className="section-heading settings-section-heading"><span>LARGURA DOS CORREDORES</span></div>
-      {corridorControls.map((c) => (
-        <label className="parameter-control" key={c.key}>
-          <span className="parameter-label"><span>{c.label}</span><strong>{c.format(parameters[c.key as keyof DungeonParameters] as number)}</strong></span>
-          <input id={`parameter-${c.key}`} type="range" min={c.min} max={c.max} step={c.step} value={parameters[c.key as keyof DungeonParameters] as number} onChange={(e) => setParameters((cur) => ({ ...cur, [c.key]: Number(e.currentTarget.value) }))} aria-label={c.label} />
-        </label>
-      ))}
+      <div className="range-control-list">
+        {corridorControls.map((control) => (
+          <RangeControl
+            key={control.key}
+            id={`parameter-${control.key}`}
+            label={control.label}
+            value={parameters[control.key as keyof DungeonParameters] as number}
+            min={control.min}
+            max={control.max}
+            step={control.step}
+            formatValue={control.format}
+            description={control.key === "corridorWidth"
+              ? "Espessura dos trajetos, medida em tiles."
+              : "Controla o quanto as salas ficam agrupadas."}
+            editable={control.step === 1}
+            onChange={(value) => setParameters((current) => ({ ...current, [control.key]: value }))}
+          />
+        ))}
+      </div>
     </>
   );
 }

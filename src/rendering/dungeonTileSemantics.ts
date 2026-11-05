@@ -15,9 +15,26 @@ import {
   TRAP_TYPES,
   WATER_TILE,
 } from "../dungeon";
-import type { Dungeon, Tile, TrapCategory } from "../dungeon";
+import type { Dungeon, DungeonRoom, Tile, TrapCategory } from "../dungeon";
 import { ROOM_TYPE_CATEGORIES } from "../roomTypes";
 import type { RoomTypeCategory } from "../roomTypes";
+
+type RgbColor = readonly [number, number, number];
+
+export const DUNGEON_MAP_PALETTE = {
+  background: "#10151d",
+  wall: "#1a2430",
+  floor: "#c6baa0",
+  corridor: "#8f826b",
+  corridorEdge: "#625d52",
+  grid: "#667986",
+  wallEdge: "#637585",
+  caveEdge: "#758c78",
+  water: "#3d829c",
+  lava: "#b8634d",
+  selected: "#d9b46c",
+  hover: "#75b8c9",
+} as const;
 
 export const TRAP_CATEGORY_COLORS: Record<TrapCategory, readonly [number, number, number]> = {
   mechanical: [190, 160, 105],
@@ -31,10 +48,37 @@ export const TRAP_CATEGORY_COLORS: Record<TrapCategory, readonly [number, number
   complex: [222, 181, 84],
 };
 
+const ROOM_FLOOR_BASE_RGB: RgbColor = [198, 186, 160];
+const ROOM_CATEGORY_TINT = 0.22;
+const ROOM_FLOOR_RGB_BY_CATEGORY = new Map<RoomTypeCategory, RgbColor>();
+const ROOM_FLOOR_COLOR_BY_CATEGORY = new Map<RoomTypeCategory, string>();
+
+for (const category of Object.keys(ROOM_TYPE_CATEGORIES) as RoomTypeCategory[]) {
+  const [red, green, blue] = ROOM_TYPE_CATEGORIES[category].rgb;
+  const roomFloorRgb: RgbColor = [
+    Math.round(ROOM_FLOOR_BASE_RGB[0] * (1 - ROOM_CATEGORY_TINT) + red * ROOM_CATEGORY_TINT),
+    Math.round(ROOM_FLOOR_BASE_RGB[1] * (1 - ROOM_CATEGORY_TINT) + green * ROOM_CATEGORY_TINT),
+    Math.round(ROOM_FLOOR_BASE_RGB[2] * (1 - ROOM_CATEGORY_TINT) + blue * ROOM_CATEGORY_TINT),
+  ];
+  ROOM_FLOOR_RGB_BY_CATEGORY.set(category, roomFloorRgb);
+  ROOM_FLOOR_COLOR_BY_CATEGORY.set(
+    category,
+    `#${roomFloorRgb.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`,
+  );
+}
+
+export function getRoomFloorRgb(category?: RoomTypeCategory): RgbColor {
+  return (category && ROOM_FLOOR_RGB_BY_CATEGORY.get(category)) || ROOM_FLOOR_BASE_RGB;
+}
+
+export function getRoomFloorColor(category?: RoomTypeCategory): string {
+  return (category && ROOM_FLOOR_COLOR_BY_CATEGORY.get(category)) || DUNGEON_MAP_PALETTE.floor;
+}
+
 const TILE_COLORS: Partial<Record<Tile, readonly [number, number, number]>> = {
-  0: [30, 39, 50],
-  1: [209, 185, 135],
-  2: [169, 130, 77],
+  0: [26, 36, 48],
+  1: ROOM_FLOOR_BASE_RGB,
+  2: [143, 130, 107],
   3: [119, 83, 52],
   4: [199, 168, 108],
   5: [141, 121, 84],
@@ -42,8 +86,8 @@ const TILE_COLORS: Partial<Record<Tile, readonly [number, number, number]>> = {
   7: [119, 83, 52],
   8: [103, 143, 125],
   9: [118, 111, 95],
-  10: [42, 127, 166],
-  11: [212, 72, 35],
+  10: [61, 130, 156],
+  11: [184, 99, 77],
   12: [50, 48, 47],
   13: [112, 48, 38],
   14: [157, 121, 71],
@@ -113,6 +157,7 @@ export const CAVE_LAVA_TILES: ReadonlySet<Tile> = new Set([
 ]);
 
 export type RoomCategoryGrid = ReadonlyMap<number, RoomTypeCategory>;
+export type RoomNumberBounds = Pick<DungeonRoom, "number" | "x" | "y" | "width" | "height">;
 export type WallSide = "top" | "right" | "bottom" | "left";
 
 export interface WallEdge {
@@ -187,6 +232,103 @@ export function createRoomCategoryGrid(dungeon: Dungeon): RoomCategoryGrid {
   return categories;
 }
 
+export function createRoomNumberGrid(
+  tiles: readonly (readonly Tile[])[],
+  width: number,
+  rooms: readonly RoomNumberBounds[],
+): Uint32Array {
+  const roomNumbers = new Uint32Array(width * tiles.length);
+  for (const room of rooms) {
+    for (let y = room.y; y < room.y + room.height; y += 1) {
+      for (let x = room.x; x < room.x + room.width; x += 1) {
+        const tile = tiles[y]?.[x];
+        if (tile !== undefined && tile !== 0) roomNumbers[y * width + x] = room.number;
+      }
+    }
+  }
+  return roomNumbers;
+}
+
+export function getRoomConnectionTiles(
+  tiles: readonly (readonly Tile[])[],
+  width: number,
+  rooms: readonly RoomNumberBounds[],
+  roomNumbers: Uint32Array,
+  selectedRoomNumber: number,
+): ReadonlySet<number> {
+  const selectedRoom = rooms.find((room) => room.number === selectedRoomNumber);
+  if (!selectedRoom || rooms.length < 2) return new Set();
+
+  const height = tiles.length;
+  const tileCount = width * height;
+  const parents = new Int32Array(tileCount);
+  parents.fill(-1);
+  const queue = new Int32Array(tileCount);
+  let head = 0;
+  let tail = 0;
+
+  for (let y = selectedRoom.y; y < selectedRoom.y + selectedRoom.height; y += 1) {
+    for (let x = selectedRoom.x; x < selectedRoom.x + selectedRoom.width; x += 1) {
+      const index = y * width + x;
+      const tile = tiles[y]?.[x];
+      if (roomNumbers[index] === selectedRoomNumber && tile !== undefined && tile !== 0
+        && tile !== CAVE_CONNECTION_WALL_TILE && tile !== PILLAR_TILE) {
+        parents[index] = -2;
+        queue[tail] = index;
+        tail += 1;
+      }
+    }
+  }
+
+  const foundRooms = new Set<number>();
+  const connectionTiles = new Set<number>();
+  const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+  const targetRoomCount = rooms.length - 1;
+
+  while (head < tail) {
+    const index = queue[head];
+    head += 1;
+    const roomNumber = roomNumbers[index];
+
+    if (roomNumber !== 0 && roomNumber !== selectedRoomNumber) {
+      if (!foundRooms.has(roomNumber)) {
+        foundRooms.add(roomNumber);
+        let pathIndex = index;
+        while (pathIndex >= 0) {
+          if (roomNumbers[pathIndex] === 0) connectionTiles.add(pathIndex);
+          const parent = parents[pathIndex];
+          if (parent < 0) break;
+          pathIndex = parent;
+        }
+      }
+      if (foundRooms.size === targetRoomCount) break;
+      continue;
+    }
+
+    const x = index % width;
+    const y = Math.floor(index / width);
+    for (const [offsetX, offsetY] of directions) {
+      const nextX = x + offsetX;
+      const nextY = y + offsetY;
+      if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue;
+      const nextIndex = nextY * width + nextX;
+      if (parents[nextIndex] !== -1) continue;
+      const nextTile = tiles[nextY]?.[nextX];
+      if (
+        nextTile === undefined
+        || nextTile === 0
+        || nextTile === CAVE_CONNECTION_WALL_TILE
+        || nextTile === PILLAR_TILE
+      ) continue;
+      parents[nextIndex] = index;
+      queue[tail] = nextIndex;
+      tail += 1;
+    }
+  }
+
+  return connectionTiles;
+}
+
 function isWallEdgeNeighbor(tile: Tile): boolean {
   return tile !== 0 && tile !== CAVE_CONNECTION_WALL_TILE && tile !== PILLAR_TILE;
 }
@@ -208,13 +350,13 @@ function getRasterWallColor(tiles: Tile[][], x: number, y: number): readonly [nu
     || isCaveEdgeNeighbor(right)
     || isCaveEdgeNeighbor(bottom)
     || isCaveEdgeNeighbor(left)
-  ) return [107, 132, 108];
+  ) return [117, 140, 120];
   if (
     isWallEdgeNeighbor(top)
     || isWallEdgeNeighbor(right)
     || isWallEdgeNeighbor(bottom)
     || isWallEdgeNeighbor(left)
-  ) return [66, 81, 95];
+  ) return [99, 117, 133];
   return null;
 }
 
@@ -244,6 +386,7 @@ export function createDungeonTileCanvas(
   showWater: boolean,
   showLava: boolean,
   roomCategories: RoomCategoryGrid,
+  showWalls = true,
 ): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = dungeon.width;
@@ -257,9 +400,9 @@ export function createDungeonTileCanvas(
     for (let x = 0; x < dungeon.width; x += 1) {
       const tile = getVisibleTile(dungeon.tiles[y][x], showWater, showLava);
       const category = getRoomCategory(roomCategories, dungeon.width, x, y);
-      const wallColor = tile === 0 ? getRasterWallColor(dungeon.tiles, x, y) : null;
+      const wallColor = tile === 0 && showWalls ? getRasterWallColor(dungeon.tiles, x, y) : null;
       const [red, green, blue] = tile === FLOOR_TILE && category
-        ? ROOM_TYPE_CATEGORIES[category].rgb
+        ? getRoomFloorRgb(category)
         : tile === CAVE_TILE && isOpenCaveConnection(dungeon, roomCategories, x, y)
           ? [135, 154, 112] as const
           : wallColor ?? getTileColor(tile);

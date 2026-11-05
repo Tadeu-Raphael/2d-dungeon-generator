@@ -1,5 +1,6 @@
 import type { DungeonParameters, RoomTypeCategory } from "../../dungeon";
 import { ROOM_TYPE_CATEGORIES, ROOM_TYPE_CATEGORY_ORDER } from "../../roomTypes";
+import { RangeControl } from "./RangeControl";
 
 interface TypesPanelProps {
   parameters: DungeonParameters;
@@ -10,15 +11,25 @@ export function TypesPanel({ parameters, updateRoomTypeFrequency }: TypesPanelPr
   return (
     <>
       <div className="section-heading settings-section-heading"><span>DISTRIBUIÇÃO DE TIPOS DE SALA</span></div>
+      <p className="parameter-description">Pesos percentuais relativos; ao ajustar um tipo, os demais são reequilibrados para totalizar 100%.</p>
+      <div className="range-control-list">
       {ROOM_TYPE_CATEGORY_ORDER.map((key) => {
         const value = parameters.roomTypeDistributionEnabled ? parameters.roomTypeCategoryFrequencies[key] : 0;
         return (
-          <label className="parameter-control" key={key}>
-            <span className="parameter-label"><span>{ROOM_TYPE_CATEGORIES[key].shortLabel}</span><strong>{value}</strong></span>
-            <input id={`parameter-roomType-${key}`} type="range" min={0} max={100} step={1} value={value} onChange={(e) => updateRoomTypeFrequency(key, Number(e.currentTarget.value))} aria-label={ROOM_TYPE_CATEGORIES[key].label} />
-          </label>
+          <RangeControl
+            key={key}
+            id={`parameter-roomType-${key}`}
+            label={ROOM_TYPE_CATEGORIES[key].shortLabel}
+            value={value}
+            min={0}
+            max={100}
+            step={1}
+            formatValue={(amount) => `${amount}%`}
+            onChange={(amount) => updateRoomTypeFrequency(key, amount)}
+          />
         );
       })}
+      </div>
     </>
   );
 }

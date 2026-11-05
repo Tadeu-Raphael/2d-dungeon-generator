@@ -1,5 +1,6 @@
 import type { DungeonParameters, TrapCategory } from "../../dungeon";
 import { TRAP_CATEGORY_LABELS, TRAP_CATEGORY_ORDER } from "../../dungeon";
+import { RangeControl } from "./RangeControl";
 
 interface TrapsPanelProps {
   parameters: DungeonParameters;
@@ -10,15 +11,25 @@ export function TrapsPanel({ parameters, updateTrapCategoryFrequency }: TrapsPan
   return (
     <>
       <div className="section-heading settings-section-heading"><span>DISTRIBUIÇÃO DE ARMADILHAS</span></div>
+      <p className="parameter-description">Pesos relativos de cada categoria; o total permanece em 100%.</p>
+      <div className="range-control-list">
       {TRAP_CATEGORY_ORDER.map((key) => {
         const value = parameters.trapCategoryDistributionEnabled ? parameters.trapCategoryWeights[key] : 0;
         return (
-          <label className="parameter-control" key={key}>
-            <span className="parameter-label"><span>{TRAP_CATEGORY_LABELS[key]}</span><strong>{value}</strong></span>
-            <input id={`parameter-trapCategory-${key}`} type="range" min={0} max={100} step={1} value={value} onChange={(e) => updateTrapCategoryFrequency(key, Number(e.currentTarget.value))} aria-label={TRAP_CATEGORY_LABELS[key]} />
-          </label>
+          <RangeControl
+            key={key}
+            id={`parameter-trapCategory-${key}`}
+            label={TRAP_CATEGORY_LABELS[key]}
+            value={value}
+            min={0}
+            max={100}
+            step={1}
+            formatValue={(amount) => `${amount}%`}
+            onChange={(amount) => updateTrapCategoryFrequency(key, amount)}
+          />
         );
       })}
+      </div>
     </>
   );
 }

@@ -35,6 +35,7 @@ export function useDungeonParameters() {
     String(DEFAULT_DUNGEON_PARAMETERS.height)
   );
   const [dimensionDraftError, setDimensionDraftError] = useState<string>();
+  const [seedDraftError, setSeedDraftError] = useState<string>();
 
   const updateDimensionDraft = useCallback(
     (key: "width" | "height", value: string) => {
@@ -58,13 +59,16 @@ export function useDungeonParameters() {
 
   const updateSeedDraft = useCallback((value: string) => {
     setSeedDraft(value);
-    if (!/^\d+$/.test(value)) return;
+    if (!/^\d+$/.test(value)) {
+      setSeedDraftError(`Informe um número inteiro entre 0 e ${MAX_DUNGEON_SEED}.`);
+      return;
+    }
     const parsed = Number(value);
-    if (
-      Number.isSafeInteger(parsed) &&
-      parsed <= MAX_DUNGEON_SEED
-    )
-      setSeed(parsed);
+    if (Number.isSafeInteger(parsed) && parsed <= MAX_DUNGEON_SEED) {
+      setSeedDraftError(undefined);
+    } else {
+      setSeedDraftError(`A seed deve estar entre 0 e ${MAX_DUNGEON_SEED}.`);
+    }
   }, []);
 
   const commitSeedDraft = useCallback(() => {
@@ -76,10 +80,11 @@ export function useDungeonParameters() {
     ) {
       setSeed(parsed);
       setSeedDraft(String(parsed));
+      setSeedDraftError(undefined);
     } else {
-      setSeedDraft(String(seed));
+      setSeedDraftError(`Informe um número inteiro entre 0 e ${MAX_DUNGEON_SEED}.`);
     }
-  }, [seed, seedDraft]);
+  }, [seedDraft]);
 
   const commitDimension = useCallback(
     (key: "width" | "height") => {
@@ -293,6 +298,8 @@ export function useDungeonParameters() {
     setHeightDraft,
     dimensionDraftError,
     setDimensionDraftError,
+    seedDraftError,
+    setSeedDraftError,
     updateDimensionDraft,
     updateSeedDraft,
     commitSeedDraft,

@@ -23,6 +23,7 @@ import {
   CAVE_WATERFALL_TILE,
   CAVE_WATER_TILE,
   CORRIDOR_TILE,
+  DEFAULT_DUNGEON_PARAMETERS,
   DUNGEON_GENERATOR_VERSION_V1,
   DUNGEON_GENERATOR_VERSION_V2,
   MAX_DUNGEON_HEIGHT,
@@ -82,6 +83,7 @@ import type { DungeonGenerationWorkRequest } from "./generationWorkerProtocol";
 import { useDungeonGeneration } from "./useDungeonGeneration";
 import { useDungeonParameters } from "./ui/hooks/useDungeonParameters";
 import { ParameterPanel } from "./ui/components/ParameterPanel";
+import { RangeControl } from "./ui/components/RangeControl";
 import { RoomsPanel } from "./ui/components/RoomsPanel";
 import { TypesPanel } from "./ui/components/TypesPanel";
 import { TrapsPanel } from "./ui/components/TrapsPanel";
@@ -103,6 +105,9 @@ import {
   RoomMetadataCard,
 } from "./ui/components/RoomMetadata";
 import type { RoomMetadataField, RoomMetadataSection } from "./ui/components/RoomMetadata";
+import { RoomGuidePanel } from "./ui/components/RoomGuidePanel";
+import { DungeonLevelNavigator } from "./ui/components/DungeonLevelNavigator";
+import { getRoomConnectionIndex } from "./roomConnections";
 
 interface ParameterControl {
   key: string;
@@ -228,6 +233,12 @@ const settingsSections: Array<{ id: SettingsSection; label: string }> = [
   { id: "treasures", label: "Tesouros" },
   { id: "access", label: "Acesso" },
 ];
+const COMPACT_VIEWPORT_QUERY = "(max-width: 1100px)";
+function matchesCompactViewport(): boolean {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia(COMPACT_VIEWPORT_QUERY).matches;
+}
 const topologyStyleOptions: Array<{ id: TopologyStyle; label: string }> = [
   { id: "linear", label: "Linear" },
   { id: "branching", label: "Ramificada" },
@@ -276,7 +287,26 @@ const DEFAULT_CUSTOM_PROFILE_JSON = `{
 }`;
 
 export default function App() {
-  const { parameters, setParameters, seed, setSeed, seedDraft, setSeedDraft, widthDraft, heightDraft, dimensionDraftError, updateDimensionDraft, updateSeedDraft, commitSeedDraft, commitDimension } = useDungeonParameters();
+  const {
+    parameters,
+    setParameters,
+    seed,
+    setSeed,
+    seedDraft,
+    setSeedDraft,
+    seedDraftError,
+    setSeedDraftError,
+    widthDraft,
+    setWidthDraft,
+    heightDraft,
+    setHeightDraft,
+    dimensionDraftError,
+    setDimensionDraftError,
+    updateDimensionDraft,
+    updateSeedDraft,
+    commitSeedDraft,
+    commitDimension,
+  } = useDungeonParameters();
   const [concept, setConcept] = useState<DungeonProfileSelection>("military-fortress");
   const [customProfileJson, setCustomProfileJson] = useState(DEFAULT_CUSTOM_PROFILE_JSON);
   const [generatorVersion, setGeneratorVersion] = useState<typeof DUNGEON_GENERATOR_VERSION_V1 | typeof DUNGEON_GENERATOR_VERSION_V2>(DUNGEON_GENERATOR_VERSION_V1);
@@ -297,10 +327,13 @@ export default function App() {
   const [selectedLevelId, setSelectedLevelId] = useState<string | undefined>();
   const [focusRequest, setFocusRequest] = useState<MapFocusRequest | null>(null);
   const [roomDetailNumber, setRoomDetailNumber] = useState<number | null>(null);
+  const [hoveredGuideRoomNumber, setHoveredGuideRoomNumber] = useState<number | undefined>();
   const [roomDetailSection, setRoomDetailSection] = useState<RoomMetadataSection | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("generation");
+  const [compactViewport, setCompactViewport] = useState(matchesCompactViewport);
+  const [settingsPanelOpen, setSettingsPanelOpen] = useState(() => !matchesCompactViewport());
+  const [roomPanelOpen, setRoomPanelOpen] = useState(() => !matchesCompactViewport());
   const [roomPositionEdit, setRoomPositionEdit] = useState<RoomPositionEdit | null>(null);
-  const guideListRef = useRef<HTMLDivElement | null>(null);
   const roomDetailDialogRef = useRef<HTMLDialogElement | null>(null);
   const preserveRoomFocusOnCloseRef = useRef(false);
   const [showWater, setShowWater] = useState(true);
@@ -308,6 +341,41 @@ export default function App() {
   const [cavesEnabled, setCavesEnabled] = useState(false);
   const [benchmarkGalleryError, setBenchmarkGalleryError] = useState<string | null>(null);
   const [benchmarkGalleryStatus, setBenchmarkGalleryStatus] = useState<string | null>(null);
+  const [configurationActionStatus, setConfigurationActionStatus] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
+  const resetConfirmationDialogRef = useRef<HTMLDialogElement | null>(null);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mediaQuery = window.matchMedia(COMPACT_VIEWPORT_QUERY);
+    const updateCompactViewport = (event: MediaQueryListEvent) => {
+      setCompactViewport(event.matches);
+      setSettingsPanelOpen(!event.matches);
+      setRoomPanelOpen(!event.matches);
+    };
+    mediaQuery.addEventListener("change", updateCompactViewport);
+    return () => mediaQuery.removeEventListener("change", updateCompactViewport);
+  }, []);
+  useEffect(() => {
+    if (!compactViewport || (!settingsPanelOpen && !roomPanelOpen)) return;
+    const closeDrawers = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || roomDetailDialogRef.current?.open) return;
+      setSettingsPanelOpen(false);
+      setRoomPanelOpen(false);
+    };
+    window.addEventListener("keydown", closeDrawers);
+    return () => window.removeEventListener("keydown", closeDrawers);
+  }, [compactViewport, roomPanelOpen, settingsPanelOpen]);
+  useEffect(() => {
+    if (!compactViewport || (!settingsPanelOpen && !roomPanelOpen)) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [compactViewport, roomPanelOpen, settingsPanelOpen]);
   const customProfileValidation = useMemo(() => {
     try {
       const input: unknown = JSON.parse(customProfileJson);
@@ -334,7 +402,14 @@ export default function App() {
       || (!activeCustomProfile?.mode && activeCustomProfile?.baseProfile === "natural-cavern")
     ));
   const profileCavesEnabled = Boolean(activeCustomProfile?.cavesEnabled);
-  const multilevelUnavailable = cavesRequired || cavesEnabled || profileCavesEnabled;
+  const multilevelUnavailableReason = cavesRequired
+    ? "O perfil selecionado exige cavernas e não pode ser combinado com vários níveis."
+    : profileCavesEnabled
+      ? "O perfil personalizado exige cavernas; desative esse recurso para usar vários níveis."
+      : cavesEnabled
+        ? "Desative as cavernas para habilitar a geração multinível."
+        : undefined;
+  const multilevelUnavailable = Boolean(multilevelUnavailableReason);
   const defaultCycleCount = conceptProfile.topology.parameters.cycleCount ?? 0;
   const spatialDensity = spatialDensityOverride ?? conceptProfile.v2Preferences.defaultDensity;
   const singleGenerationRequest = useMemo<DungeonGenerationPipelineRequest>(() => ({
@@ -462,10 +537,6 @@ export default function App() {
   const requestedLevelConfig = generationRequest.kind === "multilevel"
     ? generationRequest.request.levels[generationRequest.request.entryLevelIndex]
     : undefined;
-  const selectedVerticalConnections = structureRun?.structure.verticalConnections.filter(
-    (connection) => connection.sourceLevelId === selectedLevel?.id
-      || connection.targetLevelId === selectedLevel?.id,
-  ) ?? [];
   const dungeon = roomPositionEdit?.baseDungeon === generatedDungeon ? roomPositionEdit.dungeon : generatedDungeon;
   const algorithm = generatedDungeon.algorithm;
   const hasBspRooms = dungeon.roomDetails.length > 0;
@@ -538,6 +609,15 @@ export default function App() {
   const floorDescription = generationRun.fallbackReason
     ?? generationRun.algorithmNote
     ?? conceptProfile.generationDescription;
+  const generationStateLabel = generationStatus === "running"
+    ? "GERANDO"
+    : generationStatus === "ready"
+      ? "PRONTA"
+      : generationStatus === "error"
+        ? "FALHA"
+        : generationStatus === "cancelled"
+          ? "CANCELADA"
+          : "AGUARDANDO";
   useEffect(() => {
     setRoomDetailNumber(null);
     setFocusRequest(null);
@@ -545,12 +625,11 @@ export default function App() {
   }, [generatedDungeon]);
   useEffect(() => { const dialog = roomDetailDialogRef.current; if (!dialog) return; if (roomDetail && !dialog.open) dialog.showModal(); else if (!roomDetail && dialog.open) dialog.close(); }, [roomDetail]);
   useEffect(() => {
-    if (!focusRequest || !guideListRef.current) return;
-    const entry = guideListRef.current.querySelector<HTMLButtonElement>(
-      `button[data-room-number="${focusRequest.roomNumber}"]`,
-    );
-    entry?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [focusRequest]);
+    const dialog = resetConfirmationDialogRef.current;
+    if (!dialog) return;
+    if (resetConfirmationOpen && !dialog.open) dialog.showModal();
+    else if (!resetConfirmationOpen && dialog.open) dialog.close();
+  }, [resetConfirmationOpen]);
   const moveRoom = useCallback((roomNumber: number, x: number, y: number) => {
     setRoomPositionEdit((current) => {
       const activeEdit = current?.baseDungeon === generatedDungeon ? current : null;
@@ -571,6 +650,33 @@ export default function App() {
       shouldFocus: true,
     }));
   }, []);
+  const selectRoomForInspector = useCallback((roomNumber: number) => {
+    setRoomDetailNumber(null);
+    setRoomDetailSection(null);
+    setFocusRequest((current) => ({
+      type: "room",
+      roomNumber,
+      requestId: (current?.requestId ?? 0) + 1,
+      shouldFocus: false,
+    }));
+    if (compactViewport) setRoomPanelOpen(true);
+  }, [compactViewport]);
+  const selectLevel = useCallback((levelId: string) => {
+    if (levelId === selectedLevel?.id) return;
+    setSelectedLevelId(levelId);
+    setRoomDetailNumber(null);
+    setRoomDetailSection(null);
+    setFocusRequest(null);
+  }, [selectedLevel?.id]);
+  const focusRoomOnMap = useCallback((roomNumber: number) => {
+    setFocusRequest((current) => ({
+      type: "room",
+      roomNumber,
+      requestId: (current?.requestId ?? 0) + 1,
+      shouldFocus: true,
+    }));
+    if (compactViewport) setRoomPanelOpen(false);
+  }, [compactViewport]);
   const selectMovedRoom = useCallback((roomNumber: number) => {
     setFocusRequest((current) => ({
       type: "room",
@@ -584,6 +690,14 @@ export default function App() {
   const updateTreasureCategoryFrequency = (key: TreasureCategory, value: number) => { setParameters((current) => ({ ...current, treasureCategoryWeights: redistributeFrequencies(current.treasureCategoryWeights, TREASURE_CATEGORY_ORDER, key, value) })); };
   const updateRoomTypeFrequency = (key: RoomTypeCategory, value: number) => { setParameters((current) => ({ ...current, roomTypeCategoryFrequencies: redistributeFrequencies(current.roomTypeCategoryFrequencies, ROOM_TYPE_CATEGORY_ORDER, key, value) })); };
   const selectedRoomNumber = roomDetailNumber ?? focusRequest?.roomNumber;
+  const connectionsByRoom = useMemo(
+    () => getRoomConnectionIndex(dungeon),
+    [dungeon],
+  );
+  const entryRoomNumber = generationRun.metadata.generatorVersion === DUNGEON_GENERATOR_VERSION_V1
+    && dungeon.roomDetails.length > 0
+    ? 1
+    : undefined;
   const clearRoomSelection = useCallback(() => {
     setRoomDetailNumber(null);
     setFocusRequest(null);
@@ -597,14 +711,115 @@ export default function App() {
   const returnTo2D = useCallback(() => {
     setCanvasView("2d");
   }, []);
-  const rerollDungeon = () => {
+  const randomizeSeed = () => {
     setRoomDetailNumber(null);
     setRoomDetailSection(null);
     setFocusRequest(null);
     const nextSeed = createSeed(seed);
     setSeed(nextSeed);
     setSeedDraft(String(nextSeed));
+    setSeedDraftError(undefined);
+  };
+  const rerollDungeon = () => {
+    randomizeSeed();
     window.scrollTo({ top: 0, behavior: "auto" });
+  };
+  const restoreDefaultConfiguration = () => {
+    setParameters(DEFAULT_DUNGEON_PARAMETERS);
+    setWidthDraft(String(DEFAULT_DUNGEON_PARAMETERS.width));
+    setHeightDraft(String(DEFAULT_DUNGEON_PARAMETERS.height));
+    setDimensionDraftError(undefined);
+    const nextSeed = createSeed(seed);
+    setSeed(nextSeed);
+    setSeedDraft(String(nextSeed));
+    setSeedDraftError(undefined);
+    setConcept("military-fortress");
+    setCustomProfileJson(DEFAULT_CUSTOM_PROFILE_JSON);
+    setGeneratorVersion(DUNGEON_GENERATOR_VERSION_V1);
+    setTopologyStyleSelection("profile");
+    setSpatialStyleSelection("profile");
+    setCycleCountOverride(null);
+    setSpatialDensityOverride(null);
+    setVaryCorridorWidths(true);
+    setMultilevelEnabled(false);
+    setLevelCount(2);
+    setLevelsAboveReference(0);
+    setLevelOverrides({});
+    setVerticalConnectionCountOverride(null);
+    setAllowedVerticalConnectionKinds(["stairs"]);
+    setRequireGlobalConnectivity(true);
+    setAllowVerticalCycles(false);
+    setCavesEnabled(false);
+    setSelectedLevelId(undefined);
+    setRoomDetailNumber(null);
+    setRoomDetailSection(null);
+    setFocusRequest(null);
+    setRoomPositionEdit(null);
+    setSettingsSection("generation");
+    setBenchmarkGalleryError(null);
+    setBenchmarkGalleryStatus(null);
+    setConfigurationActionStatus(null);
+    setResetConfirmationOpen(false);
+  };
+  const saveConfiguration = () => {
+    let objectUrl: string | undefined;
+    const filename = `dungeon-foundry-${seed}.json`;
+    try {
+      const configuration = {
+        format: "dungeon-foundry-configuration",
+        version: 1,
+        savedAt: new Date().toISOString(),
+        profile: concept,
+        customProfileJson: concept === "custom" ? customProfileJson : undefined,
+        generatorVersion,
+        seed,
+        parameters,
+        advanced: {
+          cavesEnabled,
+          topologyStyle: topologyStyleSelection,
+          spatialLayoutStyle: spatialStyleSelection,
+          cycleCountOverride,
+          spatialDensityOverride,
+          varyCorridorWidths,
+        },
+        multilevel: multilevelEnabled
+          ? {
+            levelCount: effectiveLevelCount,
+            levelsAboveReference: effectiveLevelsAboveReference,
+            levelOverrides,
+            verticalConnectionCountOverride,
+            allowedVerticalConnectionKinds,
+            requireGlobalConnectivity,
+            allowVerticalCycles,
+          }
+          : null,
+      };
+      const blob = new Blob([JSON.stringify(configuration, null, 2)], {
+        type: "application/json;charset=utf-8",
+      });
+      objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setConfigurationActionStatus({
+        type: "success",
+        message: `Configuração salva em ${filename}.`,
+      });
+    } catch (error) {
+      console.error("Não foi possível salvar a configuração da masmorra.", error);
+      setConfigurationActionStatus({
+        type: "error",
+        message: "Não foi possível salvar a configuração.",
+      });
+    } finally {
+      if (objectUrl) {
+        const url = objectUrl;
+        window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      }
+    }
   };
   const updateLevelOverride = <K extends keyof DungeonLevelOverride>(
     index: number,
@@ -622,25 +837,93 @@ export default function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#" aria-label="Dungeon Foundry início">
-          <span className="brand-mark" aria-hidden="true">🏰</span>
-          <span>DUNGEON <strong>FOUNDRY</strong></span>
-        </a>
-        <span className="prototype-label"><span /> PROTÓTIPO DE GERAÇÃO</span>
+        <div className="topbar-identity">
+          <div className="topbar-brand-group">
+            <a className="brand" href="#" aria-label="Dungeon Foundry início">
+              <span className="brand-mark" aria-hidden="true">DF</span>
+              <span>DUNGEON <strong>FOUNDRY</strong></span>
+            </a>
+            <span className="prototype-label"><span /> ESTAÇÃO DE CARTOGRAFIA</span>
+          </div>
+          <div className="topbar-current-dungeon">
+            <span className="topbar-current-label">DUNGEON ATUAL</span>
+            <strong>{conceptProfile.name}</strong>
+          </div>
+          <div className={`topbar-generation topbar-generation-${generationStatus}`} role="status" aria-live="polite">
+            <span className="topbar-generation-dot" aria-hidden="true" />
+            <span>{generationStateLabel}</span>
+          </div>
+        </div>
+        <div className="topbar-actions">
+          <button
+            className={`topbar-panel-button${settingsPanelOpen ? " active" : ""}`}
+            type="button"
+            aria-label={settingsPanelOpen ? "Fechar configurações" : "Abrir configurações"}
+            aria-expanded={settingsPanelOpen}
+            aria-controls="settings-panel"
+            onClick={() => {
+              const nextOpen = !settingsPanelOpen;
+              setSettingsPanelOpen(nextOpen);
+              if (compactViewport && nextOpen) setRoomPanelOpen(false);
+            }}
+          >
+            <span className="topbar-panel-icon" aria-hidden="true">⚙</span>
+            <span className="topbar-panel-label">Configurações</span>
+          </button>
+          <button
+            className={`topbar-panel-button${roomPanelOpen ? " active" : ""}`}
+            type="button"
+            aria-label={roomPanelOpen ? "Fechar guia de salas" : "Abrir guia de salas"}
+            aria-expanded={roomPanelOpen}
+            aria-controls="rooms-panel"
+            onClick={() => {
+              const nextOpen = !roomPanelOpen;
+              setRoomPanelOpen(nextOpen);
+              if (compactViewport && nextOpen) setSettingsPanelOpen(false);
+            }}
+          >
+            <span className="topbar-panel-icon" aria-hidden="true">▤</span>
+            <span className="topbar-panel-label">Salas</span>
+          </button>
+        </div>
       </header>
-      <div className="workspace">
-        <aside className="sidebar">
+      <div className={`workspace${settingsPanelOpen ? "" : " settings-collapsed"}${roomPanelOpen ? "" : " rooms-collapsed"}`}>
+        {compactViewport && (settingsPanelOpen || roomPanelOpen) && (
+          <button
+            className="drawer-backdrop"
+            type="button"
+            tabIndex={-1}
+            aria-label="Fechar painel aberto"
+            onClick={() => {
+              setSettingsPanelOpen(false);
+              setRoomPanelOpen(false);
+            }}
+          />
+        )}
+        <aside
+          id="settings-panel"
+          className={`sidebar${settingsPanelOpen ? " panel-open" : ""}`}
+          aria-label="Configurações da masmorra"
+        >
+          <div className="drawer-panel-heading">
+            <span>CONFIGURAÇÕES</span>
+            <button type="button" aria-label="Fechar configurações" onClick={() => setSettingsPanelOpen(false)}>×</button>
+          </div>
           <div className="eyebrow">LABORATÓRIO DE MAPAS</div>
           <h1>Forje uma<br />nova masmorra.</h1>
           <p className="intro">Escolha um conceito, decida se haverá cavernas e explore as salas no mapa.</p>
-          <nav className="settings-nav" aria-label="Seções de configuração">
+          <nav className="settings-nav" aria-label="Seções de configuração" aria-controls="settings-content">
             {settingsSections.map((section) => (
               <button className={`settings-nav-button${settingsSection === section.id ? " active" : ""}`} key={section.id} type="button" aria-current={settingsSection === section.id ? "page" : undefined} onClick={() => setSettingsSection(section.id)}>{section.label}</button>
             ))}
           </nav>
-          <div className="settings-panel">
+          <div className="settings-panel" id="settings-content">
             {settingsSection === "generation" && (
               <>
+                <div className="settings-tier-label">
+                  <strong>Configuração básica</strong>
+                  <span>Perfil, dimensões, seed e estrutura principal.</span>
+                </div>
                 <div className="section-heading settings-section-heading"><span>VERSÃO DO GERADOR</span></div>
                 <label className="entrance-control" htmlFor="generator-version"><span>PIPELINE</span>
                   <select id="generator-version" value={generatorVersion} disabled={multilevelEnabled} onChange={(event) => setGeneratorVersion(event.currentTarget.value === DUNGEON_GENERATOR_VERSION_V2 ? DUNGEON_GENERATOR_VERSION_V2 : DUNGEON_GENERATOR_VERSION_V1)}>
@@ -664,15 +947,9 @@ export default function App() {
                     <span>Gerar vários níveis</span>
                     <strong>{multilevelEnabled ? "Ativado" : "Ativar"}</strong>
                   </button>
-                  <small>{multilevelUnavailable
-                    ? "A geração multinível V2 não oferece cavernas neste estágio."
-                    : "Cada nível é gerado separadamente pelo pipeline V2."}</small>
-                </div>
-                <div className="benchmark-gallery-action">
-                  <button className="benchmark-gallery-button" type="button" onClick={downloadBenchmarkGallery}>Baixar galeria de auditoria</button>
-                  <small>Compara V1/V2, perfis, escalas, topologias, cavernas e dungeons multinível.</small>
-                  {benchmarkGalleryError && <p className="benchmark-notice" role="alert">{benchmarkGalleryError}</p>}
-                  {benchmarkGalleryStatus && <p className="benchmark-notice" role="status">{benchmarkGalleryStatus}</p>}
+                  {multilevelUnavailableReason
+                    ? <p className="generation-notice generation-notice-warning multilevel-unavailable" role="note">{multilevelUnavailableReason}</p>
+                    : <small>Cada nível é gerado separadamente pelo pipeline V2.</small>}
                 </div>
                 <label className="entrance-control" htmlFor="dungeon-concept"><span>PERFIL</span>
                   <select id="dungeon-concept" value={concept} onChange={(event) => {
@@ -694,9 +971,13 @@ export default function App() {
                   <small>{conceptProfile.description}</small>
                 </label>
                 {concept === "custom" && (
-                  <div className="custom-profile-editor">
+                  <details className="generation-experimental custom-profile-editor" open={!customProfileValidation.valid}>
+                    <summary>
+                      Perfil personalizado · JSON
+                      {!customProfileValidation.valid && <span className="settings-validation-badge">Revisar</span>}
+                    </summary>
                     <label className="entrance-control" htmlFor="custom-profile-json">
-                      <span>PERFIL PERSONALIZADO · JSON</span>
+                      <span>Editar conteúdo do perfil</span>
                       <textarea
                         id="custom-profile-json"
                         value={customProfileJson}
@@ -714,59 +995,68 @@ export default function App() {
                         {customProfileValidation.errors.map((error) => <li key={error}>{error}</li>)}
                       </ul>
                     )}
-                  </div>
+                  </details>
                 )}
                 <ParameterPanel
                   widthDraft={widthDraft}
                   heightDraft={heightDraft}
                   seedDraft={seedDraft}
                   dimensionDraftError={dimensionDraftError}
+                  seedDraftError={seedDraftError}
                   updateDimensionDraft={updateDimensionDraft}
                   commitDimension={commitDimension}
                   updateSeedDraft={updateSeedDraft}
                   commitSeedDraft={commitSeedDraft}
+                  randomizeSeed={randomizeSeed}
                 />
                 {multilevelEnabled && (
                   <details className="generation-advanced multilevel-config">
-                    <summary>Configurar níveis</summary>
-                      <label className="parameter-control" htmlFor="multilevel-count">
-                        <span className="parameter-label"><span>Quantidade de níveis</span><strong>{effectiveLevelCount}</strong></span>
-                        <input
-                          id="multilevel-count"
-                          type="range"
-                          min={2}
-                          max={MAX_DUNGEON_LEVEL_COUNT}
-                          step={1}
-                          value={effectiveLevelCount}
-                          onChange={(event) => setLevelCount(Number(event.currentTarget.value))}
-                        />
-                      </label>
-                      <label className="parameter-control" htmlFor="levels-above-reference">
-                        <span className="parameter-label"><span>Níveis acima do principal</span><strong>{effectiveLevelsAboveReference}</strong></span>
-                        <input
-                          id="levels-above-reference"
-                          type="range"
-                          min={0}
-                          max={effectiveLevelCount - 1}
-                          step={1}
-                          value={effectiveLevelsAboveReference}
-                          onChange={(event) => setLevelsAboveReference(Number(event.currentTarget.value))}
-                        />
-                        <small>{levelsBelowReference} abaixo · nível principal · {effectiveLevelsAboveReference} acima</small>
-                      </label>
-                      <label className="parameter-control" htmlFor="vertical-connection-count">
-                        <span className="parameter-label"><span>Conexões verticais</span><strong>{verticalConnectionCount}</strong></span>
-                        <input
-                          id="vertical-connection-count"
-                          type="range"
-                          min={requireGlobalConnectivity ? effectiveLevelCount - 1 : 0}
-                          max={maximumVerticalConnectionCount}
-                          step={1}
-                          value={verticalConnectionCount}
-                          onChange={(event) => setVerticalConnectionCountOverride(Number(event.currentTarget.value))}
-                        />
-                      </label>
-                      <label className="parameter-control" htmlFor="require-global-connectivity">
+                    <summary>Configurações multinível</summary>
+                    <p className="multilevel-intro">Defina a posição dos andares, seus ajustes individuais e como se conectam.</p>
+                    <section className="multilevel-group">
+                      <h3>Estrutura vertical</h3>
+                      <p>Escolha a quantidade de andares e a posição do nível principal.</p>
+                      <RangeControl
+                        id="multilevel-count"
+                        label="Quantidade de níveis"
+                        value={effectiveLevelCount}
+                        min={2}
+                        max={MAX_DUNGEON_LEVEL_COUNT}
+                        step={1}
+                        formatValue={(value) => `${value} níveis`}
+                        description={`Entre 2 e ${MAX_DUNGEON_LEVEL_COUNT} níveis.`}
+                        editable
+                        onChange={setLevelCount}
+                      />
+                      <RangeControl
+                        id="levels-above-reference"
+                        label="Níveis acima do principal"
+                        value={effectiveLevelsAboveReference}
+                        min={0}
+                        max={effectiveLevelCount - 1}
+                        step={1}
+                        formatValue={(value) => `${value} acima`}
+                        description={`${levelsBelowReference} abaixo · nível principal · ${effectiveLevelsAboveReference} acima.`}
+                        editable
+                        onChange={setLevelsAboveReference}
+                      />
+                    </section>
+                    <section className="multilevel-group">
+                      <h3>Conectividade</h3>
+                      <p>Defina a rede vertical; a conectividade global requer ao menos uma ligação entre cada nível.</p>
+                      <RangeControl
+                        id="vertical-connection-count"
+                        label="Conexões verticais"
+                        value={verticalConnectionCount}
+                        min={requireGlobalConnectivity ? effectiveLevelCount - 1 : 0}
+                        max={maximumVerticalConnectionCount}
+                        step={1}
+                        formatValue={(value) => `${value} conexões`}
+                        description={`Limites: ${requireGlobalConnectivity ? effectiveLevelCount - 1 : 0} a ${maximumVerticalConnectionCount}.`}
+                        editable
+                        onChange={setVerticalConnectionCountOverride}
+                      />
+                      <label className="parameter-control multilevel-option" htmlFor="require-global-connectivity">
                         <span className="parameter-label"><span>Conectar todos os níveis</span></span>
                         <input
                           id="require-global-connectivity"
@@ -777,8 +1067,9 @@ export default function App() {
                             if (event.currentTarget.checked) setVerticalConnectionCountOverride(null);
                           }}
                         />
+                        <small>Garante um caminho entre todos os andares.</small>
                       </label>
-                      <label className="parameter-control" htmlFor="allow-vertical-cycles">
+                      <label className="parameter-control multilevel-option" htmlFor="allow-vertical-cycles">
                         <span className="parameter-label"><span>Permitir ciclos entre níveis</span></span>
                         <input
                           id="allow-vertical-cycles"
@@ -786,14 +1077,20 @@ export default function App() {
                           checked={allowVerticalCycles}
                           onChange={(event) => setAllowVerticalCycles(event.currentTarget.checked)}
                         />
+                        <small>Permite conexões extras além da árvore principal.</small>
                       </label>
-                      <fieldset className="vertical-connection-types">
-                        <legend>Tipos de conexão permitidos</legend>
+                    </section>
+                    <fieldset className="vertical-connection-types">
+                      <legend>Tipos de conexão permitidos</legend>
+                      <p>Selecione ao menos um tipo quando houver conexões entre níveis.</p>
                         {verticalConnectionOptions.map(({ id, label }) => (
                           <label key={id}>
                             <input
                               type="checkbox"
                               checked={allowedVerticalConnectionKinds.includes(id)}
+                              disabled={verticalConnectionCount > 0
+                                && allowedVerticalConnectionKinds.length === 1
+                                && allowedVerticalConnectionKinds.includes(id)}
                               onChange={(event) => {
                                 const isChecked = event.currentTarget.checked;
                                 setAllowedVerticalConnectionKinds((current) => (
@@ -806,7 +1103,10 @@ export default function App() {
                             {label}
                           </label>
                         ))}
-                      </fieldset>
+                    </fieldset>
+                    <section className="multilevel-group">
+                      <h3>Distribuição dos níveis</h3>
+                      <p>Expanda um andar para ajustar dimensões, salas, topologia e posição opcional.</p>
                       <div className="multilevel-level-list">
                         {levelConfigs.map((level, index) => (
                           <details className="multilevel-level-config" key={`${level.verticalIndex}-${index}`}>
@@ -925,10 +1225,12 @@ export default function App() {
                           </details>
                         ))}
                       </div>
+                    </section>
                   </details>
                 )}
                 <details className="generation-advanced">
-                  <summary>Opções avançadas da V2</summary>
+                  <summary>Configurações avançadas da V2</summary>
+                  <p className="settings-detail-intro">Ajuste topologia, ocupação espacial e recursos de cavernas; valores mais complexos exigem uma nova geração.</p>
                   <label className="entrance-control" htmlFor="topology-style"><span>TOPOLOGIA</span>
                     <select id="topology-style" value={topologyStyleSelection} onChange={(event) => {
                       const selectedStyle = topologyStyleOptions.find(({ id }) => id === event.currentTarget.value)?.id;
@@ -947,15 +1249,39 @@ export default function App() {
                       {spatialStyleOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                     </select>
                   </label>
-                  <label className="parameter-control" htmlFor="cycle-count">
-                    <span className="parameter-label"><span>Circuitos adicionais</span><strong>{cycleCountOverride ?? defaultCycleCount}</strong></span>
-                    <input id="cycle-count" type="range" min={0} max={Math.max(1, parameters.roomCount, defaultCycleCount)} step={1} value={cycleCountOverride ?? defaultCycleCount} onChange={(event) => setCycleCountOverride(Number(event.currentTarget.value))} />
-                    <button className="map-control-button" type="button" onClick={() => setCycleCountOverride(null)}>Usar padrão do perfil</button>
-                  </label>
-                  <label className="parameter-control" htmlFor="spatial-density">
-                    <span className="parameter-label"><span>Densidade espacial</span><strong>{spatialDensity}%</strong></span>
-                    <input id="spatial-density" type="range" min={0} max={100} step={1} value={spatialDensity} onChange={(event) => setSpatialDensityOverride(Number(event.currentTarget.value))} />
-                  </label>
+                  <div className="range-control-with-action">
+                    <RangeControl
+                      id="cycle-count"
+                      label="Circuitos adicionais"
+                      value={cycleCountOverride ?? defaultCycleCount}
+                      min={0}
+                      max={Math.max(1, parameters.roomCount, defaultCycleCount, cycleCountOverride ?? 0)}
+                      step={1}
+                      formatValue={(value) => `${value} ciclos`}
+                      description="Conexões extras que criam rotas alternativas."
+                      editable
+                      onChange={setCycleCountOverride}
+                    />
+                    <button
+                      className="configuration-button configuration-button-secondary"
+                      type="button"
+                      onClick={() => setCycleCountOverride(null)}
+                    >
+                      Usar padrão do perfil
+                    </button>
+                  </div>
+                  <RangeControl
+                    id="spatial-density"
+                    label="Densidade espacial"
+                    value={spatialDensity}
+                    min={0}
+                    max={100}
+                    step={1}
+                    formatValue={(value) => `${value}%`}
+                    description="Controla o espaço livre entre as salas."
+                    editable
+                    onChange={setSpatialDensityOverride}
+                  />
                   <label className="parameter-control" htmlFor="vary-corridor-widths">
                     <span className="parameter-label"><span>Variar largura dos corredores</span></span>
                     <input id="vary-corridor-widths" type="checkbox" checked={varyCorridorWidths} onChange={(event) => setVaryCorridorWidths(event.currentTarget.checked)} />
@@ -967,38 +1293,42 @@ export default function App() {
                   </label>
                   {(cavesRequired || cavesEnabled) && (
                     <>
-                      <label className="parameter-control" htmlFor="cavern-density">
-                        <span className="parameter-label"><span>Densidade navegável</span><strong>{parameters.cellularFillPercent}%</strong></span>
-                        <input
-                          id="cavern-density"
-                          type="range"
-                          min={35}
-                          max={65}
-                          step={1}
-                          value={parameters.cellularFillPercent}
-                          onChange={(event) => {
-                            const cellularFillPercent = Number(event.currentTarget.value);
-                            setParameters((current) => ({ ...current, cellularFillPercent }));
-                          }}
-                        />
-                      </label>
-                      <label className="parameter-control" htmlFor="cavern-irregularity">
-                        <span className="parameter-label"><span>Irregularidade</span><strong>{parameters.cellularIterations} iterações</strong></span>
-                        <input
-                          id="cavern-irregularity"
-                          type="range"
-                          min={2}
-                          max={8}
-                          step={1}
-                          value={parameters.cellularIterations}
-                          onChange={(event) => {
-                            const cellularIterations = Number(event.currentTarget.value);
-                            setParameters((current) => ({ ...current, cellularIterations }));
-                          }}
-                        />
-                      </label>
+                      <RangeControl
+                        id="cavern-density"
+                        label="Densidade navegável"
+                        value={parameters.cellularFillPercent}
+                        min={35}
+                        max={65}
+                        step={1}
+                        formatValue={(value) => `${value}%`}
+                        description="Percentual aproximado de células navegáveis."
+                        editable
+                        onChange={(cellularFillPercent) => setParameters((current) => ({ ...current, cellularFillPercent }))}
+                      />
+                      <RangeControl
+                        id="cavern-irregularity"
+                        label="Irregularidade"
+                        value={parameters.cellularIterations}
+                        min={2}
+                        max={8}
+                        step={1}
+                        formatValue={(value) => `${value} iterações`}
+                        description="Mais iterações produzem contornos mais fragmentados."
+                        editable
+                        onChange={(cellularIterations) => setParameters((current) => ({ ...current, cellularIterations }))}
+                      />
                     </>
                   )}
+                </details>
+                <details className="generation-experimental">
+                  <summary>Ferramentas experimentais</summary>
+                  <p className="settings-detail-intro">Recursos de comparação e validação, separados das opções usadas na geração comum.</p>
+                  <div className="benchmark-gallery-action">
+                    <button className="benchmark-gallery-button" type="button" onClick={downloadBenchmarkGallery}>Baixar galeria de auditoria</button>
+                    <small>Compara V1/V2, perfis, escalas, topologias, cavernas e dungeons multinível.</small>
+                    {benchmarkGalleryError && <p className="benchmark-notice" role="alert">{benchmarkGalleryError}</p>}
+                    {benchmarkGalleryStatus && <p className="benchmark-notice" role="status">{benchmarkGalleryStatus}</p>}
+                  </div>
                 </details>
               </>
             )}
@@ -1032,6 +1362,32 @@ export default function App() {
                 parameters={parameters}
                 setParameters={setParameters}
               />
+            )}
+          </div>
+          <div className="configuration-actions">
+            <div className="configuration-action-buttons">
+              <button
+                className="configuration-button configuration-button-secondary"
+                type="button"
+                onClick={saveConfiguration}
+              >
+                Salvar configuração
+              </button>
+              <button
+                className="configuration-button configuration-button-danger"
+                type="button"
+                onClick={() => setResetConfirmationOpen(true)}
+              >
+                Restaurar padrões
+              </button>
+            </div>
+            {configurationActionStatus && (
+              <p
+                className={`configuration-action-status configuration-action-status-${configurationActionStatus.type}`}
+                role={configurationActionStatus.type === "error" ? "alert" : "status"}
+              >
+                {configurationActionStatus.message}
+              </p>
             )}
           </div>
           <div className="sidebar-footer">
@@ -1068,6 +1424,16 @@ export default function App() {
                   3D
                 </button>
               </div>
+              <button
+                className="reroll-button"
+                type="button"
+                onClick={rerollDungeon}
+                aria-label="Gerar nova masmorra"
+                title="Gerar nova masmorra"
+              >
+                <span className="reroll-icon" aria-hidden="true">⟳</span>
+                <span>Gerar nova</span>
+              </button>
               <span className="map-coordinate">
                 {hasGenerationResult ? dungeon.width : requestedLevelConfig?.width ?? parameters.width}
                 {" × "}
@@ -1077,75 +1443,64 @@ export default function App() {
             </div>
           </div>
           {structureRun && selectedLevel && (
-            <div className="level-navigation" aria-label="Navegação entre níveis">
-              <label htmlFor="active-dungeon-level">NÍVEL</label>
-              <select
-                id="active-dungeon-level"
-                value={selectedLevel.id}
-                onChange={(event) => setSelectedLevelId(event.currentTarget.value)}
-              >
-                {structureRun.structure.levels.map((level) => {
-                  const generatedLevel = structureRun.levels.find(
-                    (entry) => entry.levelId === level.id,
-                  );
-                  return (
-                    <option key={level.id} value={level.id}>
-                      {level.name} · {level.verticalIndex > 0 ? `+${level.verticalIndex}` : level.verticalIndex}
-                      {" · "}{generatedLevel?.generation.dungeon.roomDetails.length ?? 0} salas
-                    </option>
-                  );
-                })}
-              </select>
-              <div className="level-connection-list">
-                {selectedVerticalConnections.length === 0
-                  ? <span>Sem conexões verticais neste nível.</span>
-                  : selectedVerticalConnections.map((connection) => {
-                    const source = structureRun.structure.levels.find(
-                      (level) => level.id === connection.sourceLevelId,
-                    );
-                    const target = structureRun.structure.levels.find(
-                      (level) => level.id === connection.targetLevelId,
-                    );
-                    const kindLabel = verticalConnectionOptions.find(
-                      (option) => option.id === connection.kind,
-                    )?.label ?? connection.kind;
-                    return (
-                      <span key={connection.id}>
-                        {source?.name ?? connection.sourceLevelId} ↔ {target?.name ?? connection.targetLevelId}
-                        {" · "}{kindLabel}
-                        {" · "}{connection.sourcePosition.x},{connection.sourcePosition.y}
-                        {" ↔ "}{connection.targetPosition.x},{connection.targetPosition.y}
-                      </span>
-                    );
-                  })}
-              </div>
-            </div>
+            <DungeonLevelNavigator
+              structureRun={structureRun}
+              selectedLevelId={selectedLevel.id}
+              connectionKindOptions={verticalConnectionOptions}
+              onSelectLevel={selectLevel}
+            />
           )}
           {structureRun && structureRun.connectivity.disconnectedLevelIds.length > 0 && (
-            <p className="generation-notice" role="status">
-              Níveis sem caminho a partir do nível inicial:{" "}
-              {structureRun.connectivity.disconnectedLevelIds.map((id) => (
-                structureRun.structure.levels.find((level) => level.id === id)?.name ?? id
-              )).join(", ")}.
-            </p>
+            <div className="generation-notice generation-notice-warning" role="status">
+              <strong>Conectividade incompleta</strong>
+              <span>
+                Níveis sem caminho a partir do nível inicial:{" "}
+                {structureRun.connectivity.disconnectedLevelIds.map((id) => (
+                  structureRun.structure.levels.find((level) => level.id === id)?.name ?? id
+                )).join(", ")}.
+              </span>
+            </div>
           )}
           {generationStatus === "running" && (
-            <div className="generation-notice generation-worker-status" role="status" aria-live="polite">
-              <span>{generationProgress ?? "Gerando dungeon..."}</span>
+            <div className="generation-notice generation-notice-info generation-worker-status" role="status" aria-live="polite">
+              <span className="generation-notice-icon" aria-hidden="true">◌</span>
+              <span className="generation-notice-copy">
+                <strong>Geração em andamento</strong>
+                <span>{generationProgress ?? "Preparando a masmorra..."}</span>
+              </span>
               {isWorkerGeneration && <button type="button" onClick={cancelGeneration}>Cancelar</button>}
             </div>
           )}
           {generationError && !(concept === "custom" && !customProfileValidation.valid) && (
-            <p className="generation-notice" role="alert">{generationError}</p>
+            <div className="generation-notice generation-notice-error" role="alert">
+              <strong>Falha na geração</strong>
+              <span>{generationError}</span>
+            </div>
           )}
-          {generationStatus === "cancelled" && <p className="generation-notice" role="status">Geração cancelada.</p>}
-          {generationStatus === "ready" && (
-            <p className="generation-notice" role="status">
-              {generationMetrics.roomCount} salas
-              {generationMetrics.levelCount > 1 ? ` em ${generationMetrics.levelCount} níveis` : ""}
-              {" geradas em "}{generationMetrics.generationMs.toFixed(1)} ms.
-              {generationRun.fallbackReason && ` ${generationRun.fallbackReason}`}
-            </p>
+          {generationStatus === "cancelled" && (
+            <div className="generation-notice generation-notice-warning" role="status">
+              <strong>Geração cancelada</strong>
+              <span>O mapa anterior foi mantido.</span>
+            </div>
+          )}
+          {generationStatus === "ready" && hasGenerationResult && (
+            <div className="generation-notice generation-notice-success" role="status">
+              <span className="generation-notice-icon" aria-hidden="true">✓</span>
+              <span className="generation-notice-copy">
+                <strong>Geração concluída</strong>
+                <span>
+                  {generationMetrics.roomCount} salas
+                  {generationMetrics.levelCount > 1 ? ` em ${generationMetrics.levelCount} níveis` : ""}
+                  {" geradas em "}{generationMetrics.generationMs.toFixed(1)} ms.
+                </span>
+              </span>
+            </div>
+          )}
+          {generationStatus === "ready" && generationRun.fallbackReason && (
+            <div className="generation-notice generation-notice-warning generation-fallback-notice" role="status">
+              <strong>Fallback de pipeline aplicado</strong>
+              <span>{generationRun.fallbackReason}</span>
+            </div>
           )}
           <div
             className="map-frame"
@@ -1165,7 +1520,8 @@ export default function App() {
                     dungeon={dungeon}
                     generationKey={generatedDungeon}
                     focusRequest={focusRequest}
-                    onRoomSelect={openRoomDetails}
+                    selectedRoomNumber={selectedRoomNumber}
+                    onRoomSelect={selectRoomForInspector}
                     onClearSelection={clearRoomSelection}
                     showWater={showWater}
                     showLava={showLava}
@@ -1180,8 +1536,10 @@ export default function App() {
                 dungeon={dungeon}
                 generationKey={generatedDungeon}
                 focusRequest={focusRequest}
+                selectedRoomNumber={selectedRoomNumber}
+                hoveredRoomNumber={hoveredGuideRoomNumber}
                 onRoomMove={moveRoom}
-                onRoomSelect={openRoomDetails}
+                onRoomSelect={selectRoomForInspector}
                 onRoomMoveEnd={selectMovedRoom}
                 onClearSelection={clearRoomSelection}
                 showWater={showWater}
@@ -1275,7 +1633,7 @@ export default function App() {
               <p>{hasGenerationResult ? conceptProfile.generationDescription : "Aguardando resultado da geração."}</p>
             </div>
           </div>
-          <details className="room-metadata-section" open>
+          <details className="room-metadata-section">
             <summary>
               <span>METADADOS DAS SALAS</span>
               <small>{hasGenerationResult ? `${dungeon.roomDetails.length} salas · categorias por sala` : "Aguardando geração..."}</small>
@@ -1303,107 +1661,41 @@ export default function App() {
             </div>
           </details>
         </section>
-        <aside className="room-panel" aria-label="Guia das salas">
+        <aside
+          id="rooms-panel"
+          className={`room-panel${roomPanelOpen ? " panel-open" : ""}`}
+          aria-label="Guia das salas"
+        >
+          <div className="drawer-panel-heading">
+            <span>GUIA DE SALAS</span>
+            <button type="button" aria-label="Fechar guia de salas" onClick={() => setRoomPanelOpen(false)}>×</button>
+          </div>
           <div className="room-panel-tools">
             {hasGenerationResult && <DungeonExportControl dungeon={dungeon} />}
           </div>
-          <section className="room-index">
-            <header className="room-index-heading">
-              <div>
-                <span className="room-index-kicker">GUIA DE SALAS</span>
-                <strong>Salas e armadilhas</strong>
-                <span className="room-index-summary">
-                  {hasGenerationResult
-                    ? `${dungeon.roomDetails.length} salas · ${roomTrapCount + generatedTraps.length} armadilhas · ${roomTreasureCount} tesouros`
-                    : "Aguardando resultado da geração"}
-                </span>
-              </div>
-              <span className="room-total" aria-label={hasGenerationResult ? `${dungeon.roomDetails.length} salas` : "Salas aguardando geração"}>
-                {hasGenerationResult ? dungeon.roomDetails.length.toString().padStart(2, "0") : "..."}
-              </span>
-            </header>
-            <div className="room-list" ref={guideListRef}>
-              {!hasGenerationResult && (
-                <div className="room-empty">
-                  <span className="empty-room-icon" aria-hidden="true">⌁</span>
-                  <strong>{generationStatus === "cancelled" ? "Geração cancelada" : generationStatus === "error" ? "Geração indisponível" : "Salas em preparação"}</strong>
-                  <p>{generationStatus === "error" ? "Nenhum resultado foi gerado." : "As salas aparecerão aqui quando a geração terminar."}</p>
-                </div>
-              )}
-              {dungeon.roomDetails.length === 0 && (
-                hasGenerationResult && <div className="room-empty">
-                  <span className="empty-room-icon" aria-hidden="true">⌁</span>
-                  <strong>Sem salas individuais</strong>
-                  <p>Este conceito não gera salas numeradas; armadilhas de cavernas e trilhas aparecem abaixo.</p>
-                </div>
-              )}
-              {dungeon.roomDetails.map((room) => {
-                const category = ROOM_TYPE_CATEGORIES[room.roomType.category];
-                const isSelected = selectedRoomNumber === room.number;
-                const trapLabel = room.traps.length === 1
-                  ? "Armadilha"
-                  : `${room.traps.length}x Armadilhas`;
-                const treasureLabel = room.treasures.length === 1
-                  ? "Tesouro"
-                  : `${room.treasures.length}x Tesouros`;
-                return (
-                  <button
-                    className={`room-entry room-entry-button${isSelected ? " selected" : ""}`}
-                    type="button"
-                    key={room.number}
-                    data-room-number={room.number}
-                    aria-pressed={isSelected}
-                    aria-label={`Abrir detalhes da sala ${room.number}: ${room.roomType.title}${room.traps.length > 0 ? `, com ${room.traps.length} ${room.traps.length === 1 ? "armadilha" : "armadilhas"}` : ""}${room.treasures.length > 0 ? `, com ${room.treasures.length} ${room.treasures.length === 1 ? "tesouro" : "tesouros"}` : ""}${room.liquidType === "water" ? ", com água" : room.liquidType === "lava" ? ", com lava" : ""}`}
-                    onClick={() => openRoomDetails(room.number)}
-                  >
-                    <span
-                      className="room-badge"
-                      style={{
-                        borderColor: category.color,
-                        backgroundColor: `${category.color}22`,
-                        color: category.color,
-                      }}
-                    >
-                      {room.number.toString().padStart(2, "0")}
-                    </span>
-                    <span className="room-copy">
-                      <span className="room-copy-heading">
-                        <strong>{room.roomType.title}</strong>
-                        {room.liquidType && (
-                          <span
-                            className={`room-guide-feature-badge ${room.liquidType === "lava" ? "lava-room-badge" : "water-room-badge"}`}
-                            aria-hidden="true"
-                            title={room.liquidType === "water" ? "Água" : "Lava"}
-                          >
-                            {room.liquidType === "water" ? "Água" : "Lava"}
-                          </span>
-                        )}
-                        {room.treasures.length > 0 && (
-                          <span
-                            className="room-guide-feature-badge treasure-room-badge"
-                            aria-hidden="true"
-                            title={room.treasures.length > 1 ? `${room.treasures.length} tesouros` : "Tesouro"}
-                          >
-                            {treasureLabel}
-                          </span>
-                        )}
-                        {room.traps.length > 0 && (
-                          <span
-                            className="room-guide-feature-badge trap-room-badge"
-                            aria-hidden="true"
-                            title={room.traps.length > 1 ? `${room.traps.length} armadilhas` : "Armadilha"}
-                          >
-                            {trapLabel}
-                          </span>
-                        )}
-                      </span>
-                      <small style={{ color: category.color }}>
-                        {category.shortLabel} · {room.width} × {room.height} tiles
-                      </small>
-                    </span>
-                  </button>
-                );
-              })}
+          <RoomGuidePanel
+            dungeon={dungeon}
+            hasGenerationResult={hasGenerationResult}
+            generationSummary={hasGenerationResult
+              ? `${dungeon.roomDetails.length} salas · ${roomTrapCount + generatedTraps.length} armadilhas · ${roomTreasureCount} tesouros`
+              : "Aguardando resultado da geração"}
+            emptyTitle={generationStatus === "cancelled"
+              ? "Geração cancelada"
+              : generationStatus === "error"
+                ? "Geração indisponível"
+                : "Salas em preparação"}
+            emptyMessage={generationStatus === "error"
+              ? "Nenhum resultado foi gerado."
+              : "As salas aparecerão aqui quando a geração terminar."}
+            selectedRoomNumber={selectedRoomNumber}
+            selectionRequestId={focusRequest?.requestId}
+            connectionsByRoom={connectionsByRoom}
+            entryRoomNumber={entryRoomNumber}
+            onSelectRoom={selectRoomForInspector}
+            onHoverRoom={setHoveredGuideRoomNumber}
+            onLocateRoom={focusRoomOnMap}
+            onOpenFullDetails={openRoomDetails}
+          >
               {generatedTraps.length > 0 && (
                 <section className="trap-guide-list" aria-label="Armadilhas em corredores e cavernas">
                   <h3 className="trap-guide-section-title">Armadilhas em circulação</h3>
@@ -1438,10 +1730,48 @@ export default function App() {
                   })}
                 </section>
               )}
-            </div>
-          </section>
+          </RoomGuidePanel>
         </aside>
       </div>
+      <dialog
+        className="settings-confirmation-dialog"
+        ref={resetConfirmationDialogRef}
+        aria-labelledby="reset-confirmation-title"
+        aria-describedby="reset-confirmation-description"
+        onCancel={(event) => {
+          event.preventDefault();
+          setResetConfirmationOpen(false);
+        }}
+        onClose={() => setResetConfirmationOpen(false)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            resetConfirmationDialogRef.current?.close();
+          }
+        }}
+      >
+        <span className="confirmation-kicker">AÇÃO DESTRUTIVA</span>
+        <h2 id="reset-confirmation-title">Restaurar configurações padrão?</h2>
+        <p id="reset-confirmation-description">
+          Perfil, dimensões, seed e opções de geração serão substituídos. Uma nova seed será criada e a masmorra será gerada novamente.
+        </p>
+        <div className="confirmation-actions">
+          <button
+            className="configuration-button configuration-button-secondary"
+            type="button"
+            autoFocus
+            onClick={() => setResetConfirmationOpen(false)}
+          >
+            Cancelar
+          </button>
+          <button
+            className="configuration-button configuration-button-danger"
+            type="button"
+            onClick={restoreDefaultConfiguration}
+          >
+            Restaurar padrões
+          </button>
+        </div>
+      </dialog>
       <dialog
         className="room-detail-dialog"
         ref={roomDetailDialogRef}
@@ -1691,15 +2021,6 @@ export default function App() {
           </div>
         )}
       </dialog>
-      <button
-        className="reroll-button reroll-floating"
-        onClick={rerollDungeon}
-        aria-label="Rerollar masmorra"
-        title="Rerollar masmorra"
-        data-tooltip="Rerollar masmorra"
-      >
-        <span className="reroll-icon" aria-hidden="true">⟳</span>
-      </button>
     </main>
   );
 }

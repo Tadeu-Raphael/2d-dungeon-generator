@@ -23,14 +23,15 @@ import {
   getNumberedCorridorTraps,
 } from "../dungeon";
 import type { Dungeon, NumberedCorridorTrap, Tile, TrapCategory, TrapType } from "../dungeon";
-import { ROOM_TYPE_CATEGORIES } from "../roomTypes";
 import {
   CAVE_LAVA_TILES,
   CAVE_WATER_TILES,
   TRAP_CATEGORY_COLORS,
+  DUNGEON_MAP_PALETTE,
   createDungeonTileCanvas,
   createRoomCategoryGrid,
   getRoomCategory,
+  getRoomFloorColor,
   getTileColor,
   isOpenCaveConnection,
 } from "./dungeonTileSemantics";
@@ -131,7 +132,7 @@ function createCorridorTrapNumberSvgLabel(
 
 export function createDungeonSvg(dungeon: Dungeon): string {
   const tileSize = getExportTileSize(dungeon);
-  const inset = Math.max(1, tileSize * 0.09);
+  const inset = Math.max(0.2, tileSize * 0.02);
   const width = dungeon.width * tileSize;
   const height = dungeon.height * tileSize;
   const roomCategories = createRoomCategoryGrid(dungeon);
@@ -144,9 +145,8 @@ export function createDungeonSvg(dungeon: Dungeon): string {
         const centerY = (room.y + room.height / 2) * tileSize;
         const badgeWidth = Math.min(20, tileSize * 1.5);
         const badgeHeight = Math.min(16, tileSize * 1.4);
-        const category = ROOM_TYPE_CATEGORIES[room.roomType.category];
         return [
-          `<rect x="${centerX - badgeWidth / 2}" y="${centerY - badgeHeight / 2}" width="${badgeWidth}" height="${badgeHeight}" rx="${badgeHeight / 2}" fill="${category.color}"/>`,
+          `<rect x="${centerX - badgeWidth / 2}" y="${centerY - badgeHeight / 2}" width="${badgeWidth}" height="${badgeHeight}" rx="${badgeHeight / 2}" fill="${getRoomFloorColor(room.roomType.category)}"/>`,
           `<text x="${centerX}" y="${centerY}" fill="#10141b" font-family="DM Mono, monospace" font-size="${Math.min(9, tileSize * 0.75)}" text-anchor="middle" dominant-baseline="central">${room.number.toString().padStart(2, "0")}</text>`,
         ].join("");
       }).join("")
@@ -157,7 +157,10 @@ export function createDungeonSvg(dungeon: Dungeon): string {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><title>Mapa de masmorra</title><image width="${width}" height="${height}" href="${tileImage}" image-rendering="pixelated"/>${roomLabels}${corridorTrapLabels}</svg>`;
   }
 
-  const elements = [`<rect width="${width}" height="${height}" fill="#0b1017"/>`];
+  const elements = [
+    `<rect width="${width}" height="${height}" fill="${DUNGEON_MAP_PALETTE.background}"/>`,
+    `<rect width="${width}" height="${height}" fill="${DUNGEON_MAP_PALETTE.wall}"/>`,
+  ];
 
   for (let y = 0; y < dungeon.height; y += 1) {
     for (let x = 0; x < dungeon.width; x += 1) {
@@ -165,14 +168,14 @@ export function createDungeonSvg(dungeon: Dungeon): string {
       const tileX = x * tileSize;
       const tileY = y * tileSize;
       const category = getRoomCategory(roomCategories, dungeon.width, x, y);
-      const roomFloorColor = category ? ROOM_TYPE_CATEGORIES[category].color : "#d1b987";
+      const roomFloorColor = getRoomFloorColor(category);
       const rect = (rx: number, ry: number, rw: number, rh: number, fill: string, extra = "") =>
         `<rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" fill="${fill}" ${extra}/>`;
 
       if (tile === 0) {
-        elements.push(rect(tileX, tileY, tileSize - inset, tileSize - inset, "#17212c"));
+        elements.push(rect(tileX, tileY, tileSize - inset, tileSize - inset, DUNGEON_MAP_PALETTE.wall));
       } else if (tile === 2) {
-        elements.push(rect(tileX, tileY, tileSize - inset, tileSize - inset, "#a9824d"));
+        elements.push(rect(tileX, tileY, tileSize - inset, tileSize - inset, DUNGEON_MAP_PALETTE.corridor));
       } else if (tile === DOOR_TILE) {
         const doorX = tileX + tileSize * 0.18;
         const doorY = tileY + tileSize * 0.12;
@@ -228,7 +231,7 @@ export function createDungeonSvg(dungeon: Dungeon): string {
         ));
         elements.push(`<path d="M ${tileX + tileSize * 0.24} ${tileY + tileSize * 0.38} H ${tileX + tileSize * 0.76} M ${tileX + tileSize * 0.24} ${tileY + tileSize * 0.62} H ${tileX + tileSize * 0.76}" fill="none" stroke="#80643e" stroke-width="${Math.max(0.6, tileSize * 0.06)}"/>`);
       } else if (tile === ROOM_STAIRS_TILE) {
-        elements.push(rect(tileX, tileY, tileSize - inset, tileSize - inset, "#a9824d"));
+        elements.push(rect(tileX, tileY, tileSize - inset, tileSize - inset, DUNGEON_MAP_PALETTE.corridor));
         elements.push(`<path d="M ${tileX + tileSize * 0.18} ${tileY + tileSize * 0.28} H ${tileX + tileSize * 0.82} M ${tileX + tileSize * 0.18} ${tileY + tileSize * 0.5} H ${tileX + tileSize * 0.82} M ${tileX + tileSize * 0.18} ${tileY + tileSize * 0.72} H ${tileX + tileSize * 0.82}" stroke="#17212c" stroke-width="${Math.max(0.7, tileSize * 0.1)}"/>`);
       } else if (tile === CAVE_TILE) {
         const fill = isOpenCaveConnection(dungeon, roomCategories, x, y) ? "#879a70" : "#4c6953";
@@ -299,9 +302,8 @@ export function createDungeonSvg(dungeon: Dungeon): string {
     const centerY = (room.y + room.height / 2) * tileSize;
     const badgeWidth = Math.max(14, Math.min(20, tileSize * 1.1));
     const badgeHeight = Math.max(12, Math.min(16, tileSize * 0.95));
-    const category = ROOM_TYPE_CATEGORIES[room.roomType.category];
     elements.push(
-      `<rect x="${centerX - badgeWidth / 2}" y="${centerY - badgeHeight / 2}" width="${badgeWidth}" height="${badgeHeight}" rx="${badgeHeight / 2}" fill="${category.color}"/>`,
+      `<rect x="${centerX - badgeWidth / 2}" y="${centerY - badgeHeight / 2}" width="${badgeWidth}" height="${badgeHeight}" rx="${badgeHeight / 2}" fill="${getRoomFloorColor(room.roomType.category)}"/>`,
     );
     elements.push(
       `<text x="${centerX}" y="${centerY}" fill="#10141b" font-family="DM Mono, monospace" font-size="8" text-anchor="middle" dominant-baseline="central">${room.number.toString().padStart(2, "0")}</text>`,

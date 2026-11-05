@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, PointerEvent } from "react";
+import type { KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { Application, Container, Graphics, Sprite, Text } from "pixi.js";
 import {
   CAVE_BREACH_TILE,
@@ -11,6 +11,7 @@ import {
   CAVE_TILE,
   CAVE_WATERFALL_TILE,
   CAVE_WATER_TILE,
+  CORRIDOR_TILE,
   DOOR_TILE,
   ELEVATED_FLOOR_TILE,
   EXTERIOR_CONNECTION_TILE,
@@ -32,7 +33,11 @@ import {
   TRAP_CATEGORY_COLORS,
   createDungeonTileCanvas,
   createRoomCategoryGrid,
+  createRoomNumberGrid,
+  DUNGEON_MAP_PALETTE,
+  getRoomConnectionTiles,
   getRoomCategory,
+  getRoomFloorColor,
   getVisibleTile,
   getWallEdges,
   isOpenCaveConnection,
@@ -70,12 +75,20 @@ interface MapLabelPosition {
   container: Container;
   tileX: number;
   tileY: number;
+  roomNumber?: number;
+}
+
+interface MapPointerCoordinates {
+  x: number;
+  y: number;
 }
 
 interface DungeonCanvasProps {
   dungeon: Dungeon;
   generationKey: Dungeon;
   focusRequest: MapFocusRequest | null;
+  selectedRoomNumber?: number;
+  hoveredRoomNumber?: number;
   onRoomMove: (roomNumber: number, x: number, y: number) => void;
   onRoomSelect: (roomNumber: number) => void;
   onRoomMoveEnd: (roomNumber: number) => void;
@@ -114,7 +127,7 @@ function drawTileFeature(
         .moveTo(startX, startY)
         .lineTo(endX, endY)
         .stroke({
-          color: edge.bordersCave ? "#829c83" : "#657585",
+          color: edge.bordersCave ? DUNGEON_MAP_PALETTE.caveEdge : DUNGEON_MAP_PALETTE.wallEdge,
           width: Math.max(1.2, tileSize * 0.12),
         });
     }
@@ -219,7 +232,7 @@ function drawTileFeature(
   } else if (tile === CAVE_WATERFALL_TILE) {
     features
       .rect(tileX + tileSize * 0.08, tileY + tileSize * 0.08, tileSize * 0.84, tileSize * 0.84)
-      .fill("#287fa6")
+      .fill(DUNGEON_MAP_PALETTE.water)
       .stroke({ color: "#78c7e2", width: tileSize * 0.05 });
     for (const lineX of [0.32, 0.5, 0.68]) {
       features
@@ -231,7 +244,7 @@ function drawTileFeature(
   } else if (tile === CAVE_LAVA_FALL_TILE) {
     features
       .rect(tileX + tileSize * 0.08, tileY + tileSize * 0.08, tileSize * 0.84, tileSize * 0.84)
-      .fill("#d44823")
+      .fill(DUNGEON_MAP_PALETTE.lava)
       .stroke({ color: "#ff9b45", width: tileSize * 0.06 });
     for (const lineX of [0.32, 0.5, 0.68]) {
       features
@@ -243,7 +256,7 @@ function drawTileFeature(
   } else if (tile === CAVE_SPRING_TILE) {
     features
       .rect(tileX + tileSize * 0.08, tileY + tileSize * 0.08, tileSize * 0.84, tileSize * 0.84)
-      .fill("#287fa6")
+      .fill(DUNGEON_MAP_PALETTE.water)
       .stroke({ color: "#78c7e2", width: tileSize * 0.05 });
     features
       .circle(tileX + tileSize * 0.5, tileY + tileSize * 0.52, tileSize * 0.16)
@@ -275,7 +288,7 @@ function drawTileFeature(
     const inset = tileSize * 0.08;
     features
       .rect(tileX + inset, tileY + inset, tileSize - inset, tileSize - inset)
-      .fill("#287fa6")
+      .fill(DUNGEON_MAP_PALETTE.water)
       .stroke({ color: "#78c7e2", width: tileSize * 0.05 });
     features
       .moveTo(tileX + tileSize * 0.24, tileY + tileSize * 0.38)
@@ -285,7 +298,7 @@ function drawTileFeature(
     const inset = tileSize * 0.08;
     features
       .rect(tileX + inset, tileY + inset, tileSize - inset, tileSize - inset)
-      .fill("#d44823")
+      .fill(DUNGEON_MAP_PALETTE.lava)
       .stroke({ color: "#ff9b45", width: tileSize * 0.06 });
     features
       .moveTo(tileX + tileSize * 0.2, tileY + tileSize * 0.68)
@@ -297,7 +310,7 @@ function drawTileFeature(
     const inset = tileSize * 0.08;
     features
       .rect(tileX + inset, tileY + inset, tileSize - inset, tileSize - inset)
-      .fill("#287fa6")
+      .fill(DUNGEON_MAP_PALETTE.water)
       .stroke({ color: "#78c7e2", width: tileSize * 0.05 });
     features
       .moveTo(tileX + tileSize * 0.24, tileY + tileSize * 0.38)
@@ -307,7 +320,7 @@ function drawTileFeature(
     const inset = tileSize * 0.08;
     features
       .rect(tileX + inset, tileY + inset, tileSize - inset, tileSize - inset)
-      .fill("#d44823")
+      .fill(DUNGEON_MAP_PALETTE.lava)
       .stroke({ color: "#ff9b45", width: tileSize * 0.06 });
     features
       .moveTo(tileX + tileSize * 0.2, tileY + tileSize * 0.68)
@@ -638,6 +651,8 @@ function DungeonCanvas({
   dungeon,
   generationKey,
   focusRequest,
+  selectedRoomNumber,
+  hoveredRoomNumber: hoveredGuideRoomNumber,
   onRoomMove,
   onRoomSelect,
   onRoomMoveEnd,
@@ -650,42 +665,277 @@ function DungeonCanvas({
   const hostRef = useRef<HTMLDivElement>(null);
   const [app, setApp] = useState<Application | null>(null);
   const roomCategories = useMemo(() => createRoomCategoryGrid(dungeon), [dungeon]);
+  const roomNumbers = useMemo(
+    () => createRoomNumberGrid(dungeon.tiles, dungeon.width, dungeon.roomDetails),
+    [dungeon],
+  );
+  const connectionTiles = useMemo(
+    () => selectedRoomNumber === undefined
+      ? new Set<number>()
+      : getRoomConnectionTiles(
+        dungeon.tiles,
+        dungeon.width,
+        dungeon.roomDetails,
+        roomNumbers,
+        selectedRoomNumber,
+      ),
+    [dungeon, roomNumbers, selectedRoomNumber],
+  );
+  const [showGrid, setShowGrid] = useState(true);
+  const [showWalls, setShowWalls] = useState(true);
   const rasterizedMap = useMemo(
-    () => createDungeonTileCanvas(dungeon, showWater, showLava, roomCategories),
-    [dungeon, roomCategories, showLava, showWater],
+    () => createDungeonTileCanvas(dungeon, showWater, showLava, roomCategories, showWalls),
+    [dungeon, roomCategories, showLava, showWalls, showWater],
   );
   const [zoom, setZoom] = useState(1);
   const [moveMode, setMoveMode] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [hoveredMapTarget, setHoveredMapTarget] = useState<MapTarget | null>(null);
+  const [pointerCoordinates, setPointerCoordinates] = useState<MapPointerCoordinates | null>(null);
+  const pointerClientPositionRef = useRef<{ x: number; y: number } | null>(null);
+  const updatePointerReadoutRef = useRef<(clientX: number, clientY: number) => void>(() => {});
   const suppressClickRef = useRef(false);
   const dragRef = useRef<CanvasDrag | null>(null);
   const mapRef = useRef<Container | null>(null);
   const labelPositionsRef = useRef<MapLabelPosition[]>([]);
+  const connectionGraphicsRef = useRef<Graphics | null>(null);
+  const roomHighlightFillGraphicsRef = useRef<Graphics | null>(null);
+  const roomHighlightGraphicsRef = useRef<Graphics | null>(null);
+  const hoverRoomHighlightGraphicsRef = useRef<Graphics | null>(null);
+  const hoverAnimationFrameRef = useRef<number | null>(null);
+  const renderedTileSizeRef = useRef(0);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
   const applyViewportRef = useRef<() => void>(() => {});
+  const updateHighlightsRef = useRef<() => void>(() => {});
   const panRef = useRef({ x: 0, y: 0 });
   const updatePan = (nextPan: { x: number; y: number }): void => {
     panRef.current = nextPan;
     applyViewportRef.current();
   };
+  const changeZoomAtPoint = (clientX: number, clientY: number, factor: number): void => {
+    const currentZoom = zoomRef.current;
+    const nextZoom = clampZoom(currentZoom * factor);
+    const host = hostRef.current;
+    if (nextZoom === currentZoom || !host || !app?.renderer) return;
+
+    const screen = app.screen;
+    const tileSize = Math.min(
+      17,
+      (screen.width - 48) / dungeon.width,
+      (screen.height - 48) / dungeon.height,
+    );
+    if (tileSize <= 0) return;
+
+    const mapWidth = tileSize * dungeon.width;
+    const mapHeight = tileSize * dungeon.height;
+    const panLimitX = Math.max(0, (mapWidth * currentZoom - screen.width) / 2 + tileSize);
+    const panLimitY = Math.max(0, (mapHeight * currentZoom - screen.height) / 2 + tileSize);
+    const currentPanX = Math.max(-panLimitX, Math.min(panRef.current.x, panLimitX));
+    const currentPanY = Math.max(-panLimitY, Math.min(panRef.current.y, panLimitY));
+    const mapX = Math.floor((screen.width - mapWidth * currentZoom) / 2 + currentPanX);
+    const mapY = Math.floor((screen.height - mapHeight * currentZoom) / 2 + currentPanY);
+    const bounds = host.getBoundingClientRect();
+    const pointX = clientX - bounds.left;
+    const pointY = clientY - bounds.top;
+    const tileX = (pointX - mapX) / (tileSize * currentZoom);
+    const tileY = (pointY - mapY) / (tileSize * currentZoom);
+    panRef.current = {
+      x: pointX - tileX * tileSize * nextZoom - (screen.width - mapWidth * nextZoom) / 2,
+      y: pointY - tileY * tileSize * nextZoom - (screen.height - mapHeight * nextZoom) / 2,
+    };
+    zoomRef.current = nextZoom;
+    setZoom(nextZoom);
+    if (nextZoom <= 1) onClearSelection();
+    const pointerPosition = pointerClientPositionRef.current;
+    if (pointerPosition) {
+      updatePointerReadoutRef.current(pointerPosition.x, pointerPosition.y);
+    }
+  };
+  const changeZoomAtPointRef = useRef(changeZoomAtPoint);
+  changeZoomAtPointRef.current = changeZoomAtPoint;
+  const changeZoomAtCenter = (factor: number): void => {
+    const host = hostRef.current;
+    if (!host) return;
+    const bounds = host.getBoundingClientRect();
+    changeZoomAtPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2, factor);
+  };
+  const resetView = (): void => {
+    onClearSelection();
+    zoomRef.current = 1;
+    setZoom(1);
+    updatePan({ x: 0, y: 0 });
+    const pointerPosition = pointerClientPositionRef.current;
+    if (pointerPosition) {
+      updatePointerReadoutRef.current(pointerPosition.x, pointerPosition.y);
+    }
+  };
+  const mapHoveredRoomNumber = hoveredMapTarget?.type === "room"
+    ? hoveredMapTarget.roomNumber
+    : undefined;
+  const hoveredRoomNumber = hoveredGuideRoomNumber ?? mapHoveredRoomNumber;
+  const hoveredRoom = mapHoveredRoomNumber === undefined
+    ? undefined
+    : dungeon.roomDetails.find((room) => room.number === mapHoveredRoomNumber);
+
+  updateHighlightsRef.current = () => {
+    const connectionGraphics = connectionGraphicsRef.current;
+    const roomHighlightFillGraphics = roomHighlightFillGraphicsRef.current;
+    const roomHighlightGraphics = roomHighlightGraphicsRef.current;
+    const hoverRoomHighlightGraphics = hoverRoomHighlightGraphicsRef.current;
+    const tileSize = renderedTileSizeRef.current;
+    if (
+      !connectionGraphics
+      || !roomHighlightFillGraphics
+      || !roomHighlightGraphics
+      || !hoverRoomHighlightGraphics
+      || connectionGraphics.destroyed
+      || roomHighlightFillGraphics.destroyed
+      || roomHighlightGraphics.destroyed
+      || hoverRoomHighlightGraphics.destroyed
+      || tileSize <= 0
+    ) return;
+
+    connectionGraphics.clear();
+    roomHighlightFillGraphics.clear();
+    roomHighlightGraphics.clear();
+    hoverRoomHighlightGraphics.clear();
+    if (selectedRoomNumber !== undefined && connectionTiles.size > 0) {
+      let hasConnectionSegments = false;
+      for (const index of connectionTiles) {
+        const x = index % dungeon.width;
+        const y = Math.floor(index / dungeon.width);
+        const centerX = (x + 0.5) * tileSize;
+        const centerY = (y + 0.5) * tileSize;
+        for (const [offsetX, offsetY] of [[1, 0], [0, 1]] as const) {
+          const nextX = x + offsetX;
+          const nextY = y + offsetY;
+          if (nextX >= dungeon.width || nextY >= dungeon.height) continue;
+          if (!connectionTiles.has(nextY * dungeon.width + nextX)) continue;
+          connectionGraphics
+            .moveTo(centerX, centerY)
+            .lineTo((nextX + 0.5) * tileSize, (nextY + 0.5) * tileSize);
+          hasConnectionSegments = true;
+        }
+      }
+      if (hasConnectionSegments) {
+        connectionGraphics.stroke({
+          color: DUNGEON_MAP_PALETTE.selected,
+          alpha: 0.62,
+          width: tileSize * 0.2,
+          cap: "round",
+          join: "round",
+        });
+      }
+    }
+
+    const drawRoomHighlight = (
+      fillGraphics: Graphics | null,
+      outlineGraphics: Graphics,
+      roomNumber: number,
+      color: string,
+      fillAlpha: number,
+      outlineWidth: number,
+    ) => {
+      const room = dungeon.roomDetails.find((candidate) => candidate.number === roomNumber);
+      if (!room) return;
+      const drawOutlinePath = () => {
+        for (let y = room.y; y < room.y + room.height; y += 1) {
+          for (let x = room.x; x < room.x + room.width; x += 1) {
+            const index = y * dungeon.width + x;
+            if (roomNumbers[index] !== roomNumber) continue;
+            const left = x * tileSize;
+            const top = y * tileSize;
+            const edges = [
+              { index: index - dungeon.width, boundary: y === 0, x1: left, y1: top, x2: left + tileSize, y2: top },
+              { index: index + 1, boundary: x === dungeon.width - 1, x1: left + tileSize, y1: top, x2: left + tileSize, y2: top + tileSize },
+              { index: index + dungeon.width, boundary: y === dungeon.height - 1, x1: left, y1: top + tileSize, x2: left + tileSize, y2: top + tileSize },
+              { index: index - 1, boundary: x === 0, x1: left, y1: top, x2: left, y2: top + tileSize },
+            ];
+            for (const edge of edges) {
+              if (edge.boundary || roomNumbers[edge.index] !== roomNumber) {
+                outlineGraphics.moveTo(edge.x1, edge.y1).lineTo(edge.x2, edge.y2);
+              }
+            }
+          }
+        }
+      };
+
+      for (let y = room.y; y < room.y + room.height; y += 1) {
+        for (let x = room.x; x < room.x + room.width; x += 1) {
+          const index = y * dungeon.width + x;
+          if (roomNumbers[index] !== roomNumber) continue;
+          const left = x * tileSize;
+          const top = y * tileSize;
+          if (fillGraphics && fillAlpha > 0) {
+            fillGraphics
+              .rect(left + tileSize * 0.04, top + tileSize * 0.04, tileSize * 0.92, tileSize * 0.92)
+              .fill({ color, alpha: fillAlpha });
+          }
+        }
+      }
+
+      const zoom = Math.max(zoomRef.current, 0.01);
+      drawOutlinePath();
+      outlineGraphics.stroke({
+        color: DUNGEON_MAP_PALETTE.background,
+        alpha: 0.96,
+        width: (outlineWidth + 3) / zoom,
+        cap: "round",
+        join: "round",
+      });
+      drawOutlinePath();
+      outlineGraphics.stroke({
+        color,
+        alpha: 1,
+        width: outlineWidth / zoom,
+        cap: "round",
+        join: "round",
+      });
+    };
+
+    if (selectedRoomNumber !== undefined) {
+      drawRoomHighlight(
+        roomHighlightFillGraphics,
+        roomHighlightGraphics,
+        selectedRoomNumber,
+        DUNGEON_MAP_PALETTE.selected,
+        0.46,
+        3.8,
+      );
+    }
+    if (hoveredRoomNumber !== undefined && hoveredRoomNumber !== selectedRoomNumber) {
+      drawRoomHighlight(
+        null,
+        hoverRoomHighlightGraphics,
+        hoveredRoomNumber,
+        DUNGEON_MAP_PALETTE.hover,
+        0,
+        3.4,
+      );
+    }
+
+    const displayedTileSize = tileSize * zoomRef.current;
+    for (const labelPosition of labelPositionsRef.current) {
+      labelPosition.container.visible = labelPosition.roomNumber === undefined
+        ? displayedTileSize >= 6
+        : displayedTileSize >= 3.5
+          || labelPosition.roomNumber === selectedRoomNumber
+          || labelPosition.roomNumber === hoveredRoomNumber;
+    }
+  };
 
   useEffect(() => {
+    zoomRef.current = 1;
+    pointerClientPositionRef.current = null;
+    setHoveredMapTarget(null);
+    setPointerCoordinates(null);
     updatePan({ x: 0, y: 0 });
     setZoom(1);
   }, [generationKey]);
 
   useEffect(() => {
-    if (!app) return;
-    if (!focusRequest) {
-      updatePan({ x: 0, y: 0 });
-      setZoom(1);
-      return;
-    }
-    if (!focusRequest.shouldFocus) {
-      updatePan({ x: 0, y: 0 });
-      setZoom(1);
-      return;
-    }
+    if (!app?.renderer || !focusRequest?.shouldFocus) return;
     const room = dungeon.roomDetails.find((candidate) => candidate.number === focusRequest.roomNumber);
     if (!room) return;
     const tileSize = Math.min(
@@ -704,6 +954,7 @@ function DungeonCanvas({
       app.screen.width / ((targetWidth + 2) * tileSize),
       app.screen.height / ((targetHeight + 2) * tileSize),
     ));
+    zoomRef.current = focusZoom;
     setZoom(focusZoom);
     updatePan({
       x: (dungeon.width * tileSize / 2 - targetX * tileSize) * focusZoom,
@@ -719,7 +970,7 @@ function DungeonCanvas({
 
     void application
       .init({
-        background: "#0b1017",
+        background: DUNGEON_MAP_PALETTE.background,
         antialias: false,
         resolution: Math.min(window.devicePixelRatio || 1, 2),
         autoDensity: true,
@@ -752,6 +1003,11 @@ function DungeonCanvas({
     const draw = () => {
       const stage = app.stage;
       if (!app.renderer || !stage) return;
+      connectionGraphicsRef.current = null;
+      roomHighlightFillGraphicsRef.current = null;
+      roomHighlightGraphicsRef.current = null;
+      hoverRoomHighlightGraphicsRef.current = null;
+      renderedTileSizeRef.current = 0;
       for (const child of stage.removeChildren()) {
         child.destroy({ children: true, texture: true, textureSource: true });
       }
@@ -770,11 +1026,23 @@ function DungeonCanvas({
       const mapHeight = tileSize * dungeon.height;
       const useRasterBase = tileSize < 2.5;
       const showFeatures = tileSize * zoom >= 2.5;
+      renderedTileSizeRef.current = tileSize;
 
       const walls = new Graphics();
       const floors = new Graphics();
       const corridors = new Graphics();
+      const corridorEdges = new Graphics();
+      const grid = new Graphics();
       const features = new Graphics();
+      const connectionHighlights = new Graphics();
+      const roomHighlightFill = new Graphics();
+      const roomHighlights = new Graphics();
+      const hoverRoomHighlights = new Graphics();
+      connectionGraphicsRef.current = connectionHighlights;
+      roomHighlightFillGraphicsRef.current = roomHighlightFill;
+      roomHighlightGraphicsRef.current = roomHighlights;
+      hoverRoomHighlightGraphicsRef.current = hoverRoomHighlights;
+      if (!useRasterBase) walls.rect(0, 0, mapWidth, mapHeight).fill(DUNGEON_MAP_PALETTE.wall);
       if (useRasterBase) {
         const sprite = Sprite.from(rasterizedMap, true);
         sprite.width = mapWidth;
@@ -788,31 +1056,45 @@ function DungeonCanvas({
             const tileX = x * tileSize;
             const tileY = y * tileSize;
             const category = getRoomCategory(roomCategories, dungeon.width, x, y);
-            const roomFloorColor = category ? ROOM_TYPE_CATEGORIES[category].color : "#d1b987";
-            const inset = Math.max(1, tileSize * 0.09);
+            const roomFloorColor = getRoomFloorColor(category);
+            const inset = showGrid && tileSize * zoom >= 3
+              ? 0.5 / (app.renderer.resolution * zoom)
+              : 0;
+            const floorX = tileX + inset;
+            const floorY = tileY + inset;
+            const floorTileSize = tileSize - inset * 2;
             if (tile === 0) {
-              walls.rect(tileX, tileY, tileSize - inset, tileSize - inset).fill("#202d39");
-              if (showFeatures) {
+              if (showFeatures && showWalls) {
                 drawTileFeature(features, tile, tileX, tileY, tileSize, getWallEdges(dungeon.tiles, x, y));
               }
-            } else if (tile === 2) {
+            } else if (tile === CORRIDOR_TILE) {
               corridors
-                .rect(tileX, tileY, tileSize - inset, tileSize - inset)
-                .fill("#a9824d");
+                .rect(tileX, tileY, tileSize, tileSize)
+                .fill(DUNGEON_MAP_PALETTE.corridor);
+              const corridorSides = [
+                { neighbor: dungeon.tiles[y - 1]?.[x], x1: tileX, y1: tileY, x2: tileX + tileSize, y2: tileY },
+                { neighbor: dungeon.tiles[y]?.[x + 1], x1: tileX + tileSize, y1: tileY, x2: tileX + tileSize, y2: tileY + tileSize },
+                { neighbor: dungeon.tiles[y + 1]?.[x], x1: tileX, y1: tileY + tileSize, x2: tileX + tileSize, y2: tileY + tileSize },
+                { neighbor: dungeon.tiles[y]?.[x - 1], x1: tileX, y1: tileY, x2: tileX, y2: tileY + tileSize },
+              ];
+              for (const side of corridorSides) {
+                if (side.neighbor === CORRIDOR_TILE) continue;
+                corridorEdges.moveTo(side.x1, side.y1).lineTo(side.x2, side.y2);
+              }
             } else if (tile === 1) {
-              floors.rect(tileX, tileY, tileSize - inset, tileSize - inset).fill(roomFloorColor);
+              floors.rect(floorX, floorY, floorTileSize, floorTileSize).fill(roomFloorColor);
             } else if (tile === ELEVATED_FLOOR_TILE) {
-              floors.rect(tileX, tileY, tileSize - inset, tileSize - inset).fill(category ? roomFloorColor : "#d5b882");
+              floors.rect(floorX, floorY, floorTileSize, floorTileSize).fill(category ? roomFloorColor : DUNGEON_MAP_PALETTE.floor);
               if (showFeatures) drawTileFeature(features, tile, tileX, tileY, tileSize);
             } else if (tile === ROOM_STAIRS_TILE) {
-              floors.rect(tileX, tileY, tileSize - inset, tileSize - inset).fill("#a9824d");
+              floors.rect(floorX, floorY, floorTileSize, floorTileSize).fill(DUNGEON_MAP_PALETTE.corridor);
               if (showFeatures) drawTileFeature(features, tile, tileX, tileY, tileSize);
             } else if (tile === CAVE_BREACH_TILE) {
-              floors.rect(tileX, tileY, tileSize - inset, tileSize - inset).fill("#998058");
+              floors.rect(floorX, floorY, floorTileSize, floorTileSize).fill("#998058");
               if (showFeatures) drawTileFeature(features, tile, tileX, tileY, tileSize);
             } else if (tile === CAVE_TILE) {
               floors
-                .rect(tileX, tileY, tileSize - inset, tileSize - inset)
+                .rect(floorX, floorY, floorTileSize, floorTileSize)
                 .fill(isOpenCaveConnection(dungeon, roomCategories, x, y) ? "#879a70" : "#4c6953");
               if (showFeatures && isOpenCaveConnection(dungeon, roomCategories, x, y)) {
                 drawTileFeature(features, tile, tileX, tileY, tileSize, [], true);
@@ -822,9 +1104,21 @@ function DungeonCanvas({
             }
           }
         }
+        corridorEdges.stroke({
+          color: DUNGEON_MAP_PALETTE.corridorEdge,
+          alpha: 0.68,
+          width: tileSize * 0.06,
+          cap: "round",
+          join: "round",
+        });
       }
-      if (!useRasterBase) map.addChild(walls, floors, corridors);
+      if (!useRasterBase) map.addChild(walls, floors, corridors, corridorEdges);
+      map.addChild(roomHighlightFill);
+      map.addChild(grid);
+      map.addChild(connectionHighlights);
       if (showFeatures) map.addChild(features);
+      map.addChild(roomHighlights);
+      map.addChild(hoverRoomHighlights);
 
       const updateRasterFeatures = (mapX: number, mapY: number) => {
         if (!useRasterBase || !showFeatures) return;
@@ -849,30 +1143,70 @@ function DungeonCanvas({
               x * tileSize,
               y * tileSize,
               tileSize,
-              tile === 0 ? getWallEdges(dungeon.tiles, x, y) : [],
+              tile === 0 && showWalls ? getWallEdges(dungeon.tiles, x, y) : [],
               tile === CAVE_TILE && isOpenCaveConnection(dungeon, roomCategories, x, y),
             );
           }
         }
       };
+      const updateGrid = (mapX: number, mapY: number) => {
+        grid.clear();
+        const displayedTileSize = tileSize * zoom;
+        if (!showGrid || displayedTileSize < 3) return;
+
+        const firstVisibleX = Math.max(0, Math.floor(-mapX / displayedTileSize) - 1);
+        const lastVisibleX = Math.min(
+          dungeon.width,
+          Math.ceil((app.screen.width - mapX) / displayedTileSize) + 1,
+        );
+        const firstVisibleY = Math.max(0, Math.floor(-mapY / displayedTileSize) - 1);
+        const lastVisibleY = Math.min(
+          dungeon.height,
+          Math.ceil((app.screen.height - mapY) / displayedTileSize) + 1,
+        );
+        const alpha = displayedTileSize < 6 ? 0.08 : displayedTileSize < 14 ? 0.12 : 0.18;
+        const pixelRatio = app.renderer.resolution;
+        const snapGridCoordinate = (coordinate: number) => (
+          (Math.round(coordinate * pixelRatio - 0.5) + 0.5) / pixelRatio
+        );
+        const firstGridY = snapGridCoordinate(mapY + firstVisibleY * displayedTileSize) - mapY;
+        const lastGridY = snapGridCoordinate(mapY + lastVisibleY * displayedTileSize) - mapY;
+        const firstGridX = snapGridCoordinate(mapX + firstVisibleX * displayedTileSize) - mapX;
+        const lastGridX = snapGridCoordinate(mapX + lastVisibleX * displayedTileSize) - mapX;
+
+        for (let x = firstVisibleX; x <= lastVisibleX; x += 1) {
+          const lineX = snapGridCoordinate(mapX + x * displayedTileSize) - mapX;
+          grid.moveTo(lineX, firstGridY).lineTo(lineX, lastGridY);
+        }
+        for (let y = firstVisibleY; y <= lastVisibleY; y += 1) {
+          const lineY = snapGridCoordinate(mapY + y * displayedTileSize) - mapY;
+          grid.moveTo(firstGridX, lineY).lineTo(lastGridX, lineY);
+        }
+        grid.stroke({
+          color: DUNGEON_MAP_PALETTE.grid,
+          alpha,
+          width: 1 / pixelRatio,
+        });
+      };
       const labelPositions: MapLabelPosition[] = [];
       for (const room of dungeon.roomDetails) {
         const displayedTileSize = tileSize * zoom;
-        const badgeWidth = Math.max(14, Math.min(20, displayedTileSize * 1.1));
-        const badgeHeight = Math.max(12, Math.min(16, displayedTileSize * 0.95));
+        const badgeWidth = Math.max(12, Math.min(20, displayedTileSize * 1.1));
+        const badgeHeight = Math.max(11, Math.min(16, displayedTileSize * 0.95));
         const category = ROOM_TYPE_CATEGORIES[room.roomType.category];
         const badge = new Graphics()
           .roundRect(-badgeWidth / 2, -badgeHeight / 2, badgeWidth, badgeHeight, badgeHeight / 2)
-          .fill(category.color);
+          .fill({ color: DUNGEON_MAP_PALETTE.wall, alpha: 0.94 })
+          .stroke({ color: category.color, alpha: 0.9, width: 0.9 });
 
         const label = new Text({
           text: room.number.toString().padStart(2, "0"),
           resolution: Math.max(2, window.devicePixelRatio || 1),
           style: {
             fontFamily: "DM Mono",
-            fontSize: Math.min(9, Math.max(7, displayedTileSize * 0.5)),
-            fontWeight: "500",
-            fill: "#10141b",
+            fontSize: Math.min(9, Math.max(6, displayedTileSize * 0.48)),
+            fontWeight: "600",
+            fill: "#f0e9dc",
             align: "center",
           },
         });
@@ -884,6 +1218,7 @@ function DungeonCanvas({
           container: labelContainer,
           tileX: room.x + room.width / 2,
           tileY: room.y + room.height / 2,
+          roomNumber: room.number,
         });
       }
       for (const trap of getNumberedCorridorTraps(dungeon)) {
@@ -919,22 +1254,26 @@ function DungeonCanvas({
       mapRef.current = map;
       labelPositionsRef.current = labelPositions;
       applyViewportRef.current = () => {
+        const renderer = app.renderer;
+        if (!renderer) return;
+        const screen = renderer.screen;
         const currentTileSize = Math.min(
           17,
-          (app.screen.width - 48) / dungeon.width,
-          (app.screen.height - 48) / dungeon.height,
+          (screen.width - 48) / dungeon.width,
+          (screen.height - 48) / dungeon.height,
         );
         if (currentTileSize <= 0) return;
 
         const mapWidth = currentTileSize * dungeon.width;
         const mapHeight = currentTileSize * dungeon.height;
-        const panLimitX = Math.max(0, (mapWidth * zoom - app.screen.width) / 2 + currentTileSize);
-        const panLimitY = Math.max(0, (mapHeight * zoom - app.screen.height) / 2 + currentTileSize);
+        const panLimitX = Math.max(0, (mapWidth * zoom - screen.width) / 2 + currentTileSize);
+        const panLimitY = Math.max(0, (mapHeight * zoom - screen.height) / 2 + currentTileSize);
         const panX = Math.max(-panLimitX, Math.min(panRef.current.x, panLimitX));
         const panY = Math.max(-panLimitY, Math.min(panRef.current.y, panLimitY));
-        const mapX = Math.floor((app.screen.width - mapWidth * zoom) / 2 + panX);
-        const mapY = Math.floor((app.screen.height - mapHeight * zoom) / 2 + panY);
+        const mapX = Math.floor((screen.width - mapWidth * zoom) / 2 + panX);
+        const mapY = Math.floor((screen.height - mapHeight * zoom) / 2 + panY);
         map.scale.set(zoom);
+        grid.scale.set(1 / zoom);
         map.position.set(mapX, mapY);
         for (const labelPosition of labelPositions) {
           labelPosition.container.position.set(
@@ -942,17 +1281,61 @@ function DungeonCanvas({
             mapY + labelPosition.tileY * currentTileSize * zoom,
           );
         }
+        updateGrid(mapX, mapY);
         updateRasterFeatures(mapX, mapY);
       };
       applyViewportRef.current();
       stage.addChild(map, roomLabels);
+      updateHighlightsRef.current();
     };
 
-    draw();
-    const resizeObserver = new ResizeObserver(draw);
+    const resizeAndDraw = () => {
+      const currentHost = hostRef.current;
+      const renderer = app.renderer;
+      if (currentHost && renderer && currentHost.clientWidth > 0 && currentHost.clientHeight > 0) {
+        renderer.resize(currentHost.clientWidth, currentHost.clientHeight);
+      }
+      draw();
+    };
+
+    resizeAndDraw();
+    const resizeObserver = new ResizeObserver(resizeAndDraw);
     if (hostRef.current) resizeObserver.observe(hostRef.current);
     return () => resizeObserver.disconnect();
-  }, [app, dungeon, rasterizedMap, roomCategories, showLava, showWater, zoom]);
+  }, [app, dungeon, rasterizedMap, roomCategories, showGrid, showLava, showWalls, showWater, zoom]);
+
+  useEffect(() => {
+    updateHighlightsRef.current();
+  }, [connectionTiles, dungeon, hoveredRoomNumber, selectedRoomNumber]);
+
+  useEffect(() => {
+    const graphics = hoverRoomHighlightGraphicsRef.current;
+    if (!graphics) return;
+    if (hoveredRoomNumber === undefined || hoveredRoomNumber === selectedRoomNumber) {
+      graphics.alpha = 1;
+      return;
+    }
+
+    graphics.alpha = 0;
+    const startTime = performance.now();
+    const animate = (time: number) => {
+      const currentGraphics = hoverRoomHighlightGraphicsRef.current;
+      if (!currentGraphics || currentGraphics.destroyed) return;
+      currentGraphics.alpha = Math.min(1, (time - startTime) / 180);
+      if (currentGraphics.alpha < 1) {
+        hoverAnimationFrameRef.current = window.requestAnimationFrame(animate);
+      } else {
+        hoverAnimationFrameRef.current = null;
+      }
+    };
+    hoverAnimationFrameRef.current = window.requestAnimationFrame(animate);
+    return () => {
+      if (hoverAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(hoverAnimationFrameRef.current);
+        hoverAnimationFrameRef.current = null;
+      }
+    };
+  }, [app, hoveredRoomNumber, selectedRoomNumber]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -960,19 +1343,19 @@ function DungeonCanvas({
     const handleWheel = (event: WheelEvent) => {
       if (event.target instanceof Element && event.target.closest(".map-controls")) return;
       event.preventDefault();
-      setZoom((current) => {
-        const nextZoom = clampZoom(current * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
-        if (nextZoom <= 1) onClearSelection();
-        return nextZoom;
-      });
+      changeZoomAtPointRef.current(
+        event.clientX,
+        event.clientY,
+        event.deltaY < 0 ? 1.1 : 1 / 1.1,
+      );
     };
     host.addEventListener("wheel", handleWheel, { passive: false });
     return () => host.removeEventListener("wheel", handleWheel);
-  }, [onClearSelection]);
+  }, []);
 
   const getMapPositionAtPointer = (clientX: number, clientY: number): { x: number; y: number } | null => {
     const host = hostRef.current;
-    if (!host || !app) return null;
+    if (!host || !app?.renderer) return null;
     const tileSize = Math.min(
       17,
       (app.screen.width - 48) / dungeon.width,
@@ -982,22 +1365,21 @@ function DungeonCanvas({
 
     const mapWidth = tileSize * dungeon.width;
     const mapHeight = tileSize * dungeon.height;
-    const panLimitX = Math.max(0, (mapWidth * zoom - app.screen.width) / 2 + tileSize);
-    const panLimitY = Math.max(0, (mapHeight * zoom - app.screen.height) / 2 + tileSize);
+    const currentZoom = zoomRef.current;
+    const panLimitX = Math.max(0, (mapWidth * currentZoom - app.screen.width) / 2 + tileSize);
+    const panLimitY = Math.max(0, (mapHeight * currentZoom - app.screen.height) / 2 + tileSize);
     const panX = Math.max(-panLimitX, Math.min(panRef.current.x, panLimitX));
     const panY = Math.max(-panLimitY, Math.min(panRef.current.y, panLimitY));
-    const mapX = Math.floor((app.screen.width - mapWidth * zoom) / 2 + panX);
-    const mapY = Math.floor((app.screen.height - mapHeight * zoom) / 2 + panY);
+    const mapX = Math.floor((app.screen.width - mapWidth * currentZoom) / 2 + panX);
+    const mapY = Math.floor((app.screen.height - mapHeight * currentZoom) / 2 + panY);
     const bounds = host.getBoundingClientRect();
     return {
-      x: (clientX - bounds.left - mapX) / (tileSize * zoom),
-      y: (clientY - bounds.top - mapY) / (tileSize * zoom),
+      x: (clientX - bounds.left - mapX) / (tileSize * currentZoom),
+      y: (clientY - bounds.top - mapY) / (tileSize * currentZoom),
     };
   };
 
-  const getTargetAtPointer = (clientX: number, clientY: number): MapTarget | null => {
-    const position = getMapPositionAtPointer(clientX, clientY);
-    if (!position) return null;
+  const getTargetAtPosition = (position: { x: number; y: number }): MapTarget | null => {
     const tileX = Math.floor(position.x);
     const tileY = Math.floor(position.y);
     const tile = dungeon.tiles[tileY]?.[tileX];
@@ -1010,6 +1392,39 @@ function DungeonCanvas({
     ));
     return room ? { type: "room", roomNumber: room.number } : null;
   };
+
+  const getTargetAtPointer = (clientX: number, clientY: number): MapTarget | null => {
+    const position = getMapPositionAtPointer(clientX, clientY);
+    return position ? getTargetAtPosition(position) : null;
+  };
+
+  const updatePointerReadout = (clientX: number, clientY: number): void => {
+    pointerClientPositionRef.current = { x: clientX, y: clientY };
+    const position = getMapPositionAtPointer(clientX, clientY);
+    if (!position) {
+      setHoveredMapTarget(null);
+      setPointerCoordinates(null);
+      return;
+    }
+
+    const x = Math.floor(position.x);
+    const y = Math.floor(position.y);
+    if (x < 0 || x >= dungeon.width || y < 0 || y >= dungeon.height
+      || dungeon.tiles[y]?.[x] === undefined) {
+      setHoveredMapTarget(null);
+      setPointerCoordinates(null);
+      return;
+    }
+
+    const target = getTargetAtPosition(position);
+    setHoveredMapTarget((current) => (
+      current?.roomNumber === target?.roomNumber ? current : target
+    ));
+    setPointerCoordinates((current) => (
+      current?.x === x && current.y === y ? current : { x, y }
+    ));
+  };
+  updatePointerReadoutRef.current = updatePointerReadout;
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.target instanceof Element && event.target.closest(".map-controls")) return;
@@ -1059,6 +1474,7 @@ function DungeonCanvas({
           x: drag.panX + event.clientX - drag.originX,
           y: drag.panY + event.clientY - drag.originY,
         });
+        updatePointerReadout(event.clientX, event.clientY);
       } else {
         const position = getMapPositionAtPointer(event.clientX, event.clientY);
         if (!position) return;
@@ -1075,10 +1491,12 @@ function DungeonCanvas({
       return;
     }
     if (event.target instanceof Element && event.target.closest(".map-controls")) {
+      pointerClientPositionRef.current = { x: event.clientX, y: event.clientY };
       setHoveredMapTarget(null);
+      setPointerCoordinates(null);
       return;
     }
-    setHoveredMapTarget(getTargetAtPointer(event.clientX, event.clientY));
+    updatePointerReadout(event.clientX, event.clientY);
   };
 
   const handlePointerUp = (event: PointerEvent<HTMLDivElement>) => {
@@ -1106,42 +1524,104 @@ function DungeonCanvas({
     if (target?.type === "room") onRoomSelect(target.roomNumber);
   };
 
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    const key = event.key.toLowerCase();
+    if (key === "+" || key === "=") {
+      event.preventDefault();
+      changeZoomAtCenter(1.25);
+    } else if (key === "-") {
+      event.preventDefault();
+      changeZoomAtCenter(1 / 1.25);
+    } else if (key === "0" || key === "home") {
+      event.preventDefault();
+      resetView();
+    } else if (key === "g") {
+      setShowGrid((visible) => !visible);
+    } else if (key === "w") {
+      setShowWalls((visible) => !visible);
+    } else if (zoom > 1 && key.startsWith("arrow")) {
+      event.preventDefault();
+      const step = 72;
+      updatePan({
+        x: panRef.current.x + (key === "arrowleft" ? -step : key === "arrowright" ? step : 0),
+        y: panRef.current.y + (key === "arrowup" ? -step : key === "arrowdown" ? step : 0),
+      });
+      const pointerPosition = pointerClientPositionRef.current;
+      if (pointerPosition) {
+        updatePointerReadoutRef.current(pointerPosition.x, pointerPosition.y);
+      }
+    }
+  };
+
   return (
     <div
       className={`canvas-host${zoom > 1 ? " canvas-zoomed" : ""}${moveMode ? " canvas-move-mode" : ""}${dragging ? " canvas-dragging" : ""}${hoveredMapTarget && !dragging ? " canvas-room-hover" : ""}`}
       ref={hostRef}
-      aria-label="Visualização da masmorra gerada"
+      role="region"
+      tabIndex={0}
+      aria-label="Mapa da masmorra. Use mais ou menos para zoom, 0 ou Home para ajustar, as setas para mover, G para alternar a grade e W para alternar contornos."
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
-      onMouseLeave={() => setHoveredMapTarget(null)}
+      onPointerLeave={() => {
+        pointerClientPositionRef.current = null;
+        setHoveredMapTarget(null);
+        setPointerCoordinates(null);
+      }}
       onClick={handleClick}
+      onKeyDown={handleKeyDown}
     >
       {!app && <div className="canvas-loading">Preparando mapa...</div>}
       <div className="map-controls">
-        <div className="map-layer-controls" role="group" aria-label="Camadas de líquidos">
-          <button
-            className="map-control-button liquid-toggle water-toggle"
-            type="button"
-            aria-label={`${showWater ? "Ocultar" : "Mostrar"} água no mapa`}
-            aria-pressed={showWater}
-            title={`${showWater ? "Ocultar" : "Mostrar"} água no mapa`}
-            onClick={onToggleWater}
-          >
-            <i aria-hidden="true" /> Água
-          </button>
-          <button
-            className="map-control-button liquid-toggle lava-toggle"
-            type="button"
-            aria-label={`${showLava ? "Ocultar" : "Mostrar"} lava no mapa`}
-            aria-pressed={showLava}
-            title={`${showLava ? "Ocultar" : "Mostrar"} lava no mapa`}
-            onClick={onToggleLava}
-          >
-            <i aria-hidden="true" /> Lava
-          </button>
-        </div>
+        <details className="map-layer-menu">
+          <summary className="map-control-button map-layer-menu-toggle" title="Configurar camadas visíveis">
+            Camadas <span aria-hidden="true">⌄</span>
+          </summary>
+          <div className="map-layer-menu-popover" role="group" aria-label="Camadas do mapa">
+            <button
+              className="map-control-button map-layer-toggle liquid-toggle water-toggle"
+              type="button"
+              aria-label={`${showWater ? "Ocultar" : "Mostrar"} água no mapa`}
+              aria-pressed={showWater}
+              title={`${showWater ? "Ocultar" : "Mostrar"} água no mapa`}
+              onClick={onToggleWater}
+            >
+              <i aria-hidden="true" /> Água
+            </button>
+            <button
+              className="map-control-button map-layer-toggle liquid-toggle lava-toggle"
+              type="button"
+              aria-label={`${showLava ? "Ocultar" : "Mostrar"} lava no mapa`}
+              aria-pressed={showLava}
+              title={`${showLava ? "Ocultar" : "Mostrar"} lava no mapa`}
+              onClick={onToggleLava}
+            >
+              <i aria-hidden="true" /> Lava
+            </button>
+            <button
+              className="map-control-button map-layer-toggle"
+              type="button"
+              aria-label={`${showGrid ? "Ocultar" : "Mostrar"} grade do mapa`}
+              aria-pressed={showGrid}
+              title={`${showGrid ? "Ocultar" : "Mostrar"} grade do mapa (G)`}
+              onClick={() => setShowGrid((visible) => !visible)}
+            >
+              <i className="map-layer-swatch map-grid-swatch" aria-hidden="true" /> Grade
+            </button>
+            <button
+              className="map-control-button map-layer-toggle"
+              type="button"
+              aria-label={`${showWalls ? "Ocultar" : "Mostrar"} contornos de parede`}
+              aria-pressed={showWalls}
+              title={`${showWalls ? "Ocultar" : "Mostrar"} contornos de parede (W)`}
+              onClick={() => setShowWalls((visible) => !visible)}
+            >
+              <i className="map-layer-swatch map-wall-swatch" aria-hidden="true" /> Contornos
+            </button>
+          </div>
+        </details>
         <div className="map-mode-controls" role="group" aria-label="Modo de interação com salas">
           <button
             className="map-control-button move-mode-toggle"
@@ -1160,11 +1640,7 @@ function DungeonCanvas({
             type="button"
             aria-label="Diminuir zoom"
             title="Diminuir zoom"
-            onClick={() => setZoom((current) => {
-              const nextZoom = clampZoom(current / 1.25);
-              if (nextZoom <= 1) onClearSelection();
-              return nextZoom;
-            })}
+            onClick={() => changeZoomAtCenter(1 / 1.25)}
           >
             −
           </button>
@@ -1174,7 +1650,7 @@ function DungeonCanvas({
             type="button"
             aria-label="Aumentar zoom"
             title="Aumentar zoom"
-            onClick={() => setZoom((current) => clampZoom(current * 1.25))}
+            onClick={() => changeZoomAtCenter(1.25)}
           >
             +
           </button>
@@ -1183,16 +1659,38 @@ function DungeonCanvas({
             type="button"
             aria-label="Ajustar mapa à tela"
             title="Ajustar mapa à tela"
-            onClick={() => {
-              onClearSelection();
-              setZoom(1);
-              updatePan({ x: 0, y: 0 });
-            }}
+            onClick={resetView}
           >
             Ajustar
           </button>
         </div>
       </div>
+      {pointerCoordinates && (
+        <div className="map-pointer-readout">
+          <span className="map-pointer-coordinate-label">COORDENADAS</span>
+          <strong>
+            X {String(pointerCoordinates.x + 1).padStart(2, "0")}
+            <span aria-hidden="true"> · </span>
+            Y {String(pointerCoordinates.y + 1).padStart(2, "0")}
+          </strong>
+          {hoveredRoom && (
+            <div className="map-pointer-room">
+              <span>
+                SALA {String(hoveredRoom.number).padStart(2, "0")}
+                <span aria-hidden="true"> · </span>
+                {ROOM_TYPE_CATEGORIES[hoveredRoom.roomType.category].shortLabel}
+              </span>
+              <small>
+                {hoveredRoom.width} × {hoveredRoom.height} tiles
+                <span aria-hidden="true"> · </span>
+                {hoveredRoom.traps.length} arm.
+                <span aria-hidden="true"> · </span>
+                {hoveredRoom.treasures.length} tes.
+              </small>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
