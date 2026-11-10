@@ -1,5 +1,8 @@
 import {
+  CAVE_BREACH_TILE,
+  CAVE_LAVA_TILE,
   CAVE_TILE,
+  CAVE_WATER_TILE,
   CORRIDOR_TILE,
   DOOR_TILE,
   FLOOR_TILE,
@@ -9,6 +12,7 @@ import {
   TRAP_DEFINITIONS,
   TRAP_TYPES,
   WATER_TILE,
+  WALL_TILE,
 } from "../dungeon";
 import type { Dungeon, Tile } from "../dungeon";
 import { blurField, createScaledFloorMask, isFloorTile } from "./cartographicField";
@@ -28,13 +32,19 @@ import { getProceduralCartographicTextureAtlas } from "./cartographicTextures";
 export interface CartographicOptions {
   showWater: boolean;
   showLava: boolean;
-  /** Ink outline and rock hatching around the explorable space. */
+  /** Ink outline and wall relief around the explorable space. */
   showWalls: boolean;
   showGrid: boolean;
   roomCategories?: RoomCategoryGrid;
   /** Preferred pixels per tile; reduced automatically to respect `maxPixels`. */
   targetScale?: number;
   maxPixels?: number;
+}
+
+export interface CartographicTextureSheet {
+  image: HTMLImageElement;
+  width: number;
+  height: number;
 }
 
 export interface CartographicImage {
@@ -44,12 +54,35 @@ export interface CartographicImage {
   data: Uint8ClampedArray;
 }
 
+export interface CartographicSpritePlacement {
+  layer: "floor" | "wall";
+  sourceX: number;
+  sourceY: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: 0 | 90;
+}
+
+export interface CartographicLiquidSpritePlacement {
+  layer: "water" | "lava";
+  sourceX: number;
+  sourceY: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 const PARCHMENT: readonly [number, number, number] = [38, 32, 25];
 const PARCHMENT_SHADE: readonly [number, number, number] = [11, 12, 14];
-const HATCH: readonly [number, number, number] = [99, 82, 57];
 const OUTLINE: readonly [number, number, number] = [138, 154, 166];
 const OUTLINE_SHADOW: readonly [number, number, number] = [4, 6, 10];
-const SEAM: readonly [number, number, number] = [60, 50, 40];
 
 const TRAP_TILES: ReadonlySet<Tile> = new Set(TRAP_TYPES.map((type) => TRAP_DEFINITIONS[type].tile));
 
@@ -57,6 +90,44 @@ const KIND_FLOOR = 0;
 const KIND_WATER = 1;
 const KIND_LAVA = 2;
 const KIND_CAVE = 3;
+const FLOOR_TEXTURE_REPEAT_TILES = 2;
+const FLOOR_COLOR_OVERLAY_OPACITY = 0.18;
+const FLOOR_TEXTURE_FRAME = { x: 448, y: 208, width: 32, height: 32 } as const;
+const WALL_TEXTURE_FRAME = { x: 560, y: 128, width: 32, height: 32 } as const;
+const WATER_TEXTURE_FRAME = { x: 64, y: 64, width: 96, height: 96 } as const;
+const LAVA_TEXTURE_FRAME = { x: 64, y: 432, width: 96, height: 96 } as const;
+const TEXTURE_SHEET_MIN_WIDTH = Math.max(
+  FLOOR_TEXTURE_FRAME.x + FLOOR_TEXTURE_FRAME.width,
+  WALL_TEXTURE_FRAME.x + WALL_TEXTURE_FRAME.width,
+);
+const TEXTURE_SHEET_MIN_HEIGHT = Math.max(
+  FLOOR_TEXTURE_FRAME.y + FLOOR_TEXTURE_FRAME.height,
+  WALL_TEXTURE_FRAME.y + WALL_TEXTURE_FRAME.height,
+);
+
+export function isCartographicTextureSheetCompatible(width: number, height: number): boolean {
+  return width >= TEXTURE_SHEET_MIN_WIDTH && height >= TEXTURE_SHEET_MIN_HEIGHT;
+}
+
+const LIQUID_TEXTURE_SHEET_MIN_WIDTH = Math.max(
+  WATER_TEXTURE_FRAME.x + WATER_TEXTURE_FRAME.width,
+  LAVA_TEXTURE_FRAME.x + LAVA_TEXTURE_FRAME.width,
+);
+const LIQUID_TEXTURE_SHEET_MIN_HEIGHT = Math.max(
+  WATER_TEXTURE_FRAME.y + WATER_TEXTURE_FRAME.height,
+  LAVA_TEXTURE_FRAME.y + LAVA_TEXTURE_FRAME.height,
+);
+
+export function isCartographicLiquidTextureSheetCompatible(width: number, height: number): boolean {
+  return width >= LIQUID_TEXTURE_SHEET_MIN_WIDTH && height >= LIQUID_TEXTURE_SHEET_MIN_HEIGHT;
+}
+
+export function isCartographicTexturedLiquidTile(tile: Tile): boolean {
+  return tile === WATER_TILE
+    || tile === LAVA_TILE
+    || tile === CAVE_WATER_TILE
+    || tile === CAVE_LAVA_TILE;
+}
 
 export function getCartographicScale(
   width: number,
@@ -87,7 +158,7 @@ interface TileSurface {
   kind: Uint8Array;
 }
 
-/** Floor colour, grouping (for seams between rooms and corridors) and material of every tile. */
+/** Floor colour, grouping and material of every tile. */
 function createTileSurface(
   dungeon: Dungeon,
   roomCategories: RoomCategoryGrid,
@@ -149,7 +220,7 @@ function createTileSurface(
 
 /**
  * Software "shader" that paints the dungeon like a hand-inked map: rounded, softly shaded floors,
- * a thin luminous outline, and cross-hatched rock fading out from every wall.
+ * a thin luminous outline, and textured rock fading out from every wall.
  */
 export function renderCartographicImage(
   dungeon: Dungeon,
@@ -174,16 +245,8 @@ export function renderCartographicImage(
     : near;
   const data = new Uint8ClampedArray(width * height * 4);
 
-  const hatchPeriod = Math.max(4, scale * 0.2);
   const gridWidth = Math.max(1, scale * 0.035);
-  const seamWidth = Math.max(1, scale * 0.05);
   const edgeInk = options.showWalls;
-
-  const isSeam = (neighbourX: number, neighbourY: number, group: number): boolean => {
-    if (neighbourX < 0 || neighbourY < 0 || neighbourX >= dungeon.width || neighbourY >= dungeon.height) return false;
-    const neighbourGroup = surface.group[neighbourY * dungeon.width + neighbourX];
-    return neighbourGroup >= 0 && neighbourGroup !== group;
-  };
 
   const nearestFloorTile = (tileX: number, tileY: number, fx: number, fy: number): number => {
     let best = -1;
@@ -217,7 +280,7 @@ export function renderCartographicImage(
       const nearValue = near[pixel];
       const cover = smoothstep(0.44, 0.56, nearValue);
 
-      // Rock: darker near the floor, with hatching that fades with distance.
+      // Rock: darker near the floor, with its relief fading with distance.
       const haloValue = halo[pixel];
       const rockMix = smoothstep(0.02, 0.45, haloValue);
       let red = PARCHMENT[0] + (PARCHMENT_SHADE[0] - PARCHMENT[0]) * rockMix;
@@ -236,18 +299,6 @@ export function renderCartographicImage(
         red += wallRelief * wallBand;
         green += wallRelief * wallBand * 0.92;
         blue += wallRelief * wallBand * 0.78;
-      }
-
-      if (edgeInk && cover < 1) {
-        const zone = smoothstep(0.03, 0.22, haloValue) * (1 - smoothstep(0.5, 0.75, haloValue));
-        const diagonal = ((px + py) / hatchPeriod) % 1;
-        const crossing = ((px - py) / hatchPeriod + 8) % 1;
-        const line1 = diagonal < 0.16 ? 1 : 0;
-        const line2 = haloValue > 0.3 && crossing < 0.12 ? 1 : 0;
-        const strength = zone * Math.max(line1, line2 * 0.8) * 0.85;
-        red += (HATCH[0] - red) * strength;
-        green += (HATCH[1] - green) * strength;
-        blue += (HATCH[2] - blue) * strength;
       }
 
       if (cover > 0) {
@@ -279,22 +330,9 @@ export function renderCartographicImage(
             light += (hash(px >> 2, py >> 2) - 0.5) * 0.12;
           }
 
-          const here = surface.group[tileIndex];
-          let seam = 0;
-          if (fx * scale < seamWidth && isSeam(tileX - 1, tileY, here)) seam = 1;
-          else if ((1 - fx) * scale < seamWidth && isSeam(tileX + 1, tileY, here)) seam = 1;
-          if (fy * scale < seamWidth && isSeam(tileX, tileY - 1, here)) seam = 1;
-          else if ((1 - fy) * scale < seamWidth && isSeam(tileX, tileY + 1, here)) seam = 1;
-
           floorRed = Math.min(255, floorRed * light + stoneRelief);
           floorGreen = Math.min(255, floorGreen * light + stoneRelief * 0.94);
           floorBlue = Math.min(255, floorBlue * light + stoneRelief * 0.82);
-
-          if (seam) {
-            floorRed += (SEAM[0] - floorRed) * 0.45;
-            floorGreen += (SEAM[1] - floorGreen) * 0.45;
-            floorBlue += (SEAM[2] - floorBlue) * 0.45;
-          }
           if (options.showGrid && (fx * scale < gridWidth || fy * scale < gridWidth)) {
             floorRed *= 0.93;
             floorGreen *= 0.93;
@@ -329,9 +367,286 @@ export function renderCartographicImage(
   return { width, height, scale, data };
 }
 
+function isArchitecturalFloor(tile: Tile): boolean {
+  return isFloorTile(tile)
+    && tile !== CAVE_TILE
+    && tile !== CAVE_BREACH_TILE
+    && !CAVE_WATER_TILES.has(tile)
+    && !CAVE_LAVA_TILES.has(tile);
+}
+
+function isVisibleSheetFloor(tile: Tile): boolean {
+  return isFloorTile(tile)
+    && tile !== DOOR_TILE
+    && tile !== SECRET_DOOR_TILE
+    && tile !== CAVE_TILE
+    && tile !== CAVE_BREACH_TILE
+    && tile !== WATER_TILE
+    && tile !== LAVA_TILE
+    && !CAVE_WATER_TILES.has(tile)
+    && !CAVE_LAVA_TILES.has(tile);
+}
+
+function createPlacement(
+  layer: CartographicSpritePlacement["layer"],
+  frame: { x: number; y: number; width: number; height: number },
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  rotation: 0 | 90 = 0,
+): CartographicSpritePlacement {
+  return {
+    layer,
+    sourceX: frame.x,
+    sourceY: frame.y,
+    sourceWidth: frame.width,
+    sourceHeight: frame.height,
+    x,
+    y,
+    width,
+    height,
+    rotation,
+  };
+}
+
+export function getCartographicSpritePlacements(
+  dungeon: Dungeon,
+  options: Pick<CartographicOptions, "showWater" | "showLava" | "showWalls">,
+  scale: number,
+): CartographicSpritePlacement[] {
+  const placements: CartographicSpritePlacement[] = [];
+  const visibleTiles = dungeon.tiles.map((row) => row.map(
+    (tile) => getVisibleTile(tile, options.showWater, options.showLava),
+  ));
+  const isArchitecturalNeighbor = (x: number, y: number): boolean => {
+    const tile = visibleTiles[y]?.[x];
+    return tile !== undefined && isArchitecturalFloor(tile);
+  };
+  const diagonalCorners = [
+    { x: -1, y: -1, rotation: 90 as const },
+    { x: 1, y: -1, rotation: 0 as const },
+    { x: 1, y: 1, rotation: 90 as const },
+    { x: -1, y: 1, rotation: 0 as const },
+  ];
+
+  if (options.showWalls) {
+    for (let y = 0; y < dungeon.height; y += 1) {
+      for (let x = 0; x < dungeon.width; x += 1) {
+        if (visibleTiles[y][x] !== WALL_TILE) continue;
+        const north = isArchitecturalNeighbor(x, y - 1);
+        const east = isArchitecturalNeighbor(x + 1, y);
+        const south = isArchitecturalNeighbor(x, y + 1);
+        const west = isArchitecturalNeighbor(x - 1, y);
+        const hasCardinalFloor = north || east || south || west;
+        const corner = hasCardinalFloor ? undefined : diagonalCorners.find(({ x: dx, y: dy }) => (
+          isArchitecturalNeighbor(x + dx, y + dy)
+          && visibleTiles[y]?.[x + dx] === WALL_TILE
+          && visibleTiles[y + dy]?.[x] === WALL_TILE
+        ));
+        if (!hasCardinalFloor && !corner) continue;
+        const rotation = corner?.rotation ?? ((north || south) && !(east || west) ? 90 : 0);
+        placements.push(createPlacement(
+          "wall",
+          WALL_TEXTURE_FRAME,
+          x * scale,
+          y * scale,
+          scale,
+          scale,
+          rotation,
+        ));
+      }
+    }
+  }
+
+  for (let y = 0; y < dungeon.height; y += 1) {
+    for (let x = 0; x < dungeon.width; x += 1) {
+      const tile = visibleTiles[y][x];
+      if (!isVisibleSheetFloor(tile)) continue;
+      placements.push(createPlacement(
+        "floor",
+        FLOOR_TEXTURE_FRAME,
+        x * scale,
+        y * scale,
+        scale,
+        scale,
+      ));
+    }
+  }
+
+  return placements;
+}
+
+export function getCartographicLiquidSpritePlacements(
+  dungeon: Dungeon,
+  options: Pick<CartographicOptions, "showWater" | "showLava">,
+  scale: number,
+): CartographicLiquidSpritePlacement[] {
+  const placements: CartographicLiquidSpritePlacement[] = [];
+  for (let y = 0; y < dungeon.height; y += 1) {
+    for (let x = 0; x < dungeon.width; x += 1) {
+      const tile = getVisibleTile(dungeon.tiles[y][x], options.showWater, options.showLava);
+      let layer: CartographicLiquidSpritePlacement["layer"] | null = null;
+      let frame: typeof WATER_TEXTURE_FRAME | typeof LAVA_TEXTURE_FRAME | null = null;
+      if (tile === WATER_TILE || tile === CAVE_WATER_TILE) {
+        layer = "water";
+        frame = WATER_TEXTURE_FRAME;
+      } else if (tile === LAVA_TILE || tile === CAVE_LAVA_TILE) {
+        layer = "lava";
+        frame = LAVA_TEXTURE_FRAME;
+      }
+      if (!frame || !layer) continue;
+      placements.push({
+        layer,
+        sourceX: frame.x,
+        sourceY: frame.y,
+        sourceWidth: frame.width,
+        sourceHeight: frame.height,
+        x: x * scale,
+        y: y * scale,
+        width: scale,
+        height: scale,
+      });
+    }
+  }
+  return placements;
+}
+
+function drawCartographicSpriteSheet(
+  context: CanvasRenderingContext2D,
+  dungeon: Dungeon,
+  options: CartographicOptions,
+  textureSheet: CartographicTextureSheet,
+  scale: number,
+): void {
+  if (!isCartographicTextureSheetCompatible(textureSheet.width, textureSheet.height)) {
+    throw new Error("A folha de texturas cartográficas tem dimensões incompatíveis.");
+  }
+  context.save();
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  const floorSurface = createTileSurface(
+    dungeon,
+    options.roomCategories ?? createRoomCategoryGrid(dungeon),
+    options.showWater,
+    options.showLava,
+  );
+  for (const placement of getCartographicSpritePlacements(dungeon, options, scale)) {
+    context.save();
+    if (placement.layer === "floor") {
+      const repeatSize = scale * FLOOR_TEXTURE_REPEAT_TILES;
+      const patternX = Math.floor(placement.x / repeatSize) * repeatSize;
+      const patternY = Math.floor(placement.y / repeatSize) * repeatSize;
+      context.beginPath();
+      context.rect(placement.x, placement.y, placement.width, placement.height);
+      context.clip();
+      context.drawImage(
+        textureSheet.image,
+        placement.sourceX,
+        placement.sourceY,
+        placement.sourceWidth,
+        placement.sourceHeight,
+        patternX,
+        patternY,
+        repeatSize,
+        repeatSize,
+      );
+      const tileIndex = Math.floor(placement.y / scale) * dungeon.width
+        + Math.floor(placement.x / scale);
+      context.globalAlpha = FLOOR_COLOR_OVERLAY_OPACITY;
+      context.fillStyle = `rgb(${floorSurface.red[tileIndex]}, ${floorSurface.green[tileIndex]}, ${floorSurface.blue[tileIndex]})`;
+      context.fillRect(placement.x, placement.y, placement.width, placement.height);
+    } else if (placement.rotation === 90) {
+      context.translate(
+        placement.x + placement.width / 2,
+        placement.y + placement.height / 2,
+      );
+      context.rotate(Math.PI / 2);
+      context.drawImage(
+        textureSheet.image,
+        placement.sourceX,
+        placement.sourceY,
+        placement.sourceWidth,
+        placement.sourceHeight,
+        -placement.height / 2,
+        -placement.width / 2,
+        placement.height,
+        placement.width,
+      );
+    } else {
+      context.drawImage(
+        textureSheet.image,
+        placement.sourceX,
+        placement.sourceY,
+        placement.sourceWidth,
+        placement.sourceHeight,
+        placement.x,
+        placement.y,
+        placement.width,
+        placement.height,
+      );
+    }
+    context.restore();
+  }
+  context.restore();
+}
+
+function drawCartographicLiquidTextureSheet(
+  context: CanvasRenderingContext2D,
+  dungeon: Dungeon,
+  options: CartographicOptions,
+  textureSheet: CartographicTextureSheet,
+  scale: number,
+): void {
+  if (!isCartographicLiquidTextureSheetCompatible(textureSheet.width, textureSheet.height)) {
+    throw new Error("A folha de texturas de água e lava tem dimensões incompatíveis.");
+  }
+  context.save();
+  context.imageSmoothingEnabled = false;
+  const placements = getCartographicLiquidSpritePlacements(dungeon, options, scale);
+  for (const layer of ["water", "lava"] as const) {
+    const layerPlacements = placements.filter((placement) => placement.layer === layer);
+    if (layerPlacements.length === 0) continue;
+
+    const frame = layerPlacements[0];
+    const patternCanvas = document.createElement("canvas");
+    patternCanvas.width = frame.sourceWidth;
+    patternCanvas.height = frame.sourceHeight;
+    const patternContext = patternCanvas.getContext("2d");
+    if (!patternContext) throw new Error("Não foi possível preparar a textura de líquido.");
+    patternContext.imageSmoothingEnabled = false;
+    patternContext.drawImage(
+      textureSheet.image,
+      frame.sourceX,
+      frame.sourceY,
+      frame.sourceWidth,
+      frame.sourceHeight,
+      0,
+      0,
+      frame.sourceWidth,
+      frame.sourceHeight,
+    );
+    const pattern = context.createPattern(patternCanvas, "repeat");
+    if (!pattern) throw new Error("Não foi possível criar o padrão de textura de líquido.");
+
+    context.save();
+    context.beginPath();
+    for (const placement of layerPlacements) {
+      context.rect(placement.x, placement.y, placement.width, placement.height);
+    }
+    context.clip();
+    context.fillStyle = pattern;
+    context.fillRect(0, 0, dungeon.width * scale, dungeon.height * scale);
+    context.restore();
+  }
+  context.restore();
+}
+
 export function createCartographicCanvas(
   dungeon: Dungeon,
   options: CartographicOptions,
+  textureSheet?: CartographicTextureSheet,
+  liquidTextureSheet?: CartographicTextureSheet,
 ): HTMLCanvasElement {
   const image = renderCartographicImage(dungeon, options);
   const canvas = document.createElement("canvas");
@@ -340,5 +655,9 @@ export function createCartographicCanvas(
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Não foi possível renderizar o mapa cartográfico.");
   context.putImageData(new ImageData(image.data, image.width, image.height), 0, 0);
+  if (textureSheet) drawCartographicSpriteSheet(context, dungeon, options, textureSheet, image.scale);
+  if (liquidTextureSheet) {
+    drawCartographicLiquidTextureSheet(context, dungeon, options, liquidTextureSheet, image.scale);
+  }
   return canvas;
 }

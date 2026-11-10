@@ -36,7 +36,13 @@ import {
   isOpenCaveConnection,
 } from "./dungeonTileSemantics";
 import type { WallEdge, WallSide } from "./dungeonTileSemantics";
-import { createCartographicCanvas } from "./cartographicMap";
+import {
+  createCartographicCanvas,
+  isCartographicLiquidTextureSheetCompatible,
+  isCartographicTexturedLiquidTile,
+  isCartographicTextureSheetCompatible,
+} from "./cartographicMap";
+import type { CartographicTextureSheet } from "./cartographicMap";
 import { getDoorwayDrawing, getDoorwayFootprint, getDoorwayGroups } from "./doorwayLayout";
 import type { DoorwayGroup } from "./doorwayLayout";
 import type { MapFocusRequest } from "./types";
@@ -44,6 +50,9 @@ import type { MapFocusRequest } from "./types";
 export { getTileColor } from "./dungeonTileSemantics";
 export { createDungeonSvg } from "./dungeonSvg";
 export type { MapFocusRequest } from "./types";
+
+const CARTOGRAPHIC_TEXTURE_SHEET_URL = new URL("./assets/dungeon-texture-sheet.jpg", import.meta.url).href;
+const LIQUID_TEXTURE_ATLAS_URL = new URL("./assets/water-lava-texture-atlas.png", import.meta.url).href;
 
 type MapTarget = { type: "room"; roomNumber: number };
 
@@ -671,7 +680,13 @@ function DungeonCanvas({
 }: DungeonCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [app, setApp] = useState<Application | null>(null);
+  const [textureSheet, setTextureSheet] = useState<CartographicTextureSheet | null>(null);
+  const [liquidTextureSheet, setLiquidTextureSheet] = useState<CartographicTextureSheet | null>(null);
   const roomCategories = useMemo(() => createRoomCategoryGrid(dungeon), [dungeon]);
+  const hasTexturedLiquid = useMemo(
+    () => dungeon.tiles.some((row) => row.some(isCartographicTexturedLiquidTile)),
+    [dungeon],
+  );
   const doorwayGroups = useMemo(() => getDoorwayGroups(dungeon.tiles, dungeon.doorVariants), [dungeon]);
   const roomNumbers = useMemo(
     () => createRoomNumberGrid(dungeon.tiles, dungeon.width, dungeon.roomDetails),
@@ -691,6 +706,58 @@ function DungeonCanvas({
   );
   const [showGrid, setShowGrid] = useState(true);
   const [showWalls, setShowWalls] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      if (!isCartographicTextureSheetCompatible(image.naturalWidth, image.naturalHeight)) {
+        console.error(
+          `A folha de texturas do mapa tem dimensões incompatíveis: ${image.naturalWidth}×${image.naturalHeight}.`,
+        );
+        return;
+      }
+      setTextureSheet({ image, width: image.naturalWidth, height: image.naturalHeight });
+    };
+    image.onerror = (error) => {
+      if (!cancelled) console.error("Não foi possível carregar a folha de texturas do mapa.", error);
+    };
+    image.src = CARTOGRAPHIC_TEXTURE_SHEET_URL;
+    return () => {
+      cancelled = true;
+      image.onload = null;
+      image.onerror = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasTexturedLiquid) {
+      setLiquidTextureSheet(null);
+      return;
+    }
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      if (!isCartographicLiquidTextureSheetCompatible(image.naturalWidth, image.naturalHeight)) {
+        console.error(
+          `O atlas de água e lava tem dimensões incompatíveis: ${image.naturalWidth}×${image.naturalHeight}.`,
+        );
+        return;
+      }
+      setLiquidTextureSheet({ image, width: image.naturalWidth, height: image.naturalHeight });
+    };
+    image.onerror = (error) => {
+      if (!cancelled) console.error("Não foi possível carregar o atlas de texturas de água e lava.", error);
+    };
+    image.src = LIQUID_TEXTURE_ATLAS_URL;
+    return () => {
+      cancelled = true;
+      image.onload = null;
+      image.onerror = null;
+    };
+  }, [hasTexturedLiquid]);
+
   const rasterizedMap = useMemo(
     () => createCartographicCanvas(dungeon, {
       showWater,
@@ -698,8 +765,8 @@ function DungeonCanvas({
       showWalls,
       showGrid: false,
       roomCategories,
-    }),
-    [dungeon, roomCategories, showLava, showWalls, showWater],
+    }, textureSheet ?? undefined, liquidTextureSheet ?? undefined),
+    [dungeon, liquidTextureSheet, roomCategories, showLava, showWalls, showWater, textureSheet],
   );
   const [zoom, setZoom] = useState(1);
   const [moveMode, setMoveMode] = useState(false);
@@ -1055,7 +1122,7 @@ function DungeonCanvas({
       sprite.width = mapWidth;
       sprite.height = mapHeight;
       map.addChild(sprite);
-      if (showFeatures) drawDoorwayFeatures(features, doorwayGroups, tileSize);
+      drawDoorwayFeatures(features, doorwayGroups, tileSize);
       map.addChild(roomHighlightFill);
       map.addChild(grid);
       map.addChild(connectionHighlights);
@@ -1064,8 +1131,9 @@ function DungeonCanvas({
       map.addChild(hoverRoomHighlights);
 
       const updateRasterFeatures = (mapX: number, mapY: number) => {
-        if (!showFeatures) return;
         features.clear();
+        drawDoorwayFeatures(features, doorwayGroups, tileSize);
+        if (!showFeatures) return;
         const displayedTileSize = tileSize * zoom;
         const firstVisibleX = Math.max(0, Math.floor(-mapX / displayedTileSize) - 1);
         const lastVisibleX = Math.min(
@@ -1080,6 +1148,7 @@ function DungeonCanvas({
         for (let y = firstVisibleY; y < lastVisibleY; y += 1) {
           for (let x = firstVisibleX; x < lastVisibleX; x += 1) {
             const tile = getVisibleTile(dungeon.tiles[y][x], showWater, showLava);
+            if (liquidTextureSheet && isCartographicTexturedLiquidTile(tile)) continue;
             drawTileFeature(
               features,
               tile,
@@ -1091,7 +1160,6 @@ function DungeonCanvas({
             );
           }
         }
-        drawDoorwayFeatures(features, doorwayGroups, tileSize);
       };
       const updateGrid = (mapX: number, mapY: number) => {
         grid.clear();
@@ -1246,7 +1314,18 @@ function DungeonCanvas({
     const resizeObserver = new ResizeObserver(resizeAndDraw);
     if (hostRef.current) resizeObserver.observe(hostRef.current);
     return () => resizeObserver.disconnect();
-  }, [app, dungeon, rasterizedMap, roomCategories, showGrid, showLava, showWalls, showWater, zoom]);
+  }, [
+    app,
+    dungeon,
+    liquidTextureSheet,
+    rasterizedMap,
+    roomCategories,
+    showGrid,
+    showLava,
+    showWalls,
+    showWater,
+    zoom,
+  ]);
 
   useEffect(() => {
     updateHighlightsRef.current();
